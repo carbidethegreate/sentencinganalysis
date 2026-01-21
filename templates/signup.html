@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}Sign up | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Create your account</h1>
+    <p class="small">Fields marked required are needed to create an account. You can update your profile later.</p>
+
+    <form method="post" action="{{ url_for('signup') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="grid two" style="margin-top: 14px;">
+        <div>
+          <label for="first_name">First name</label>
+          <input id="first_name" name="first_name" value="{{ form.get('first_name','') }}" required>
+        </div>
+        <div>
+          <label for="last_name">Last name</label>
+          <input id="last_name" name="last_name" value="{{ form.get('last_name','') }}" required>
+        </div>
+      </div>
+
+      <div class="grid two" style="margin-top: 14px;">
+        <div>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="email" value="{{ form.get('email','') }}" required>
+        </div>
+        <div>
+          <label for="password">Password (minimum 8 characters)</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" required>
+        </div>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <label for="user_type">User type</label>
+        <select id="user_type" name="user_type" required>
+          <option value="">Select one</option>
+          {% for t in user_types %}
+            <option value="{{ t }}" {% if form.get('user_type') == t %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div id="firm_fields" class="grid two" style="margin-top: 14px; display: none;">
+        <div>
+          <label for="firm_name">Firm name (required for law firm)</label>
+          <input id="firm_name" name="firm_name" value="{{ form.get('firm_name','') }}">
+        </div>
+        <div>
+          <label for="title">Title (required for law firm)</label>
+          <input id="title" name="title" value="{{ form.get('title','') }}">
+        </div>
+      </div>
+
+      <h2 style="margin-top: 22px;">Contact and location</h2>
+
+      <div class="grid two" style="margin-top: 14px;">
+        <div>
+          <label for="phone">Phone</label>
+          <input id="phone" name="phone" value="{{ form.get('phone','') }}">
+        </div>
+        <div>
+          <label for="address">Address</label>
+          <input id="address" name="address" value="{{ form.get('address','') }}">
+        </div>
+      </div>
+
+      <div class="grid two" style="margin-top: 14px;">
+        <div>
+          <label for="city">City</label>
+          <input id="city" name="city" value="{{ form.get('city','') }}">
+        </div>
+        <div>
+          <label for="state">State</label>
+          <input id="state" name="state" value="{{ form.get('state','') }}">
+        </div>
+      </div>
+
+      <div class="grid two" style="margin-top: 14px;">
+        <div>
+          <label for="zip">Zip</label>
+          <input id="zip" name="zip" value="{{ form.get('zip','') }}">
+        </div>
+        <div>
+          <label for="county">County</label>
+          <input id="county" name="county" value="{{ form.get('county','') }}">
+        </div>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <label for="country">Country</label>
+        <input id="country" name="country" value="{{ form.get('country','') }}">
+      </div>
+
+      <h2 style="margin-top: 22px;">Other details</h2>
+
+      <div style="margin-top: 14px;">
+        <label>
+          <input type="checkbox" name="has_pacer_account" {% if form.get('has_pacer_account') %}checked{% endif %}>
+          Do you have a PACER account?
+        </label>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <label for="heard_about_us">How did you hear about us?</label>
+        <textarea id="heard_about_us" name="heard_about_us">{{ form.get('heard_about_us','') }}</textarea>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <label for="referral_code">Referral code</label>
+        <input id="referral_code" name="referral_code" value="{{ form.get('referral_code','') }}">
+      </div>
+
+      <div class="actions" style="margin-top: 16px;">
+        <button class="primary" type="submit">Create account</button>
+        <a class="pill" href="{{ url_for('login') }}">Already have an account?</a>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    (function () {
+      const userType = document.getElementById('user_type');
+      const firmFields = document.getElementById('firm_fields');
+      const firmName = document.getElementById('firm_name');
+      const title = document.getElementById('title');
+
+      function toggleFirmFields() {
+        const isLawFirm = userType.value === 'Attorney, Law Firm';
+        firmFields.style.display = isLawFirm ? 'grid' : 'none';
+        firmName.required = isLawFirm;
+        title.required = isLawFirm;
+      }
+
+      userType.addEventListener('change', toggleFirmFields);
+      toggleFirmFields();
+    })();
+  </script>
+{% endblock %}

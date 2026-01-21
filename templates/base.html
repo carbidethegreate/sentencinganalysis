@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}CourtDataPro{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <header>
+      <div class="nav">
+        <a class="brand" href="{{ url_for('home') }}">CourtDataPro</a>
+
+        <nav class="nav-links">
+          <a href="{{ url_for('home') }}" class="{% if active_page == 'home' %}active{% endif %}">Home</a>
+
+          {% if current_user %}
+            <a href="{{ url_for('dashboard') }}" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
+          {% else %}
+            <a href="{{ url_for('login') }}" class="{% if active_page == 'login' %}active{% endif %}">Login / Sign Up</a>
+          {% endif %}
+
+          <a href="{{ url_for('pricing') }}" class="{% if active_page == 'pricing' %}active{% endif %}">Pricing</a>
+          <a href="{{ url_for('news') }}" class="{% if active_page == 'news' %}active{% endif %}">News</a>
+          <a href="{{ url_for('about') }}" class="{% if active_page == 'about' %}active{% endif %}">About</a>
+          <a href="{{ url_for('contact') }}" class="{% if active_page == 'contact' %}active{% endif %}">Contact</a>
+        </nav>
+
+        <div class="right">
+          {% if current_user %}
+            <span class="pill">{{ current_user.first_name }} {{ current_user.last_name }}</span>
+
+            <div class="dropdown">
+              <button type="button" aria-label="Settings">⚙</button>
+              <div class="dropdown-content">
+                <a href="{{ url_for('profile') }}">Profile</a>
+
+                {% if is_admin %}
+                  <a href="{{ url_for('admin_home') }}">Admin</a>
+                  <form method="post" action="{{ url_for('admin_logout') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit">Admin Logout</button>
+                  </form>
+                {% else %}
+                  <a href="{{ url_for('admin_login') }}">Admin Login</a>
+                {% endif %}
+
+                <form method="post" action="{{ url_for('logout') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button type="submit">Logout</button>
+                </form>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

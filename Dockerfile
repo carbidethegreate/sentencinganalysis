@@ -12,4 +12,5 @@ COPY . /app
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:${PORT:-5000}", "app:create_app()"]
+# Use a shell so $PORT is expanded at runtime.
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} 'app:create_app()'"]

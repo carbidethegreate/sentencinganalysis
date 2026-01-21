@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Admin | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Admin</h1>
+    <p class="small">This is the initial admin home. Next we can add moderation, feature flags, and analytics.</p>
+
+    <div class="actions" style="margin-top: 16px;">
+      <a class="pill" href="{{ url_for('admin_users') }}">View users</a>
+    </div>
+  </div>
+{% endblock %}

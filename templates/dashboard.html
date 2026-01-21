@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Dashboard</h1>
+    <p class="small">
+      This is the initial dashboard placeholder. Next we can add your analytics, saved searches, and report tools.
+    </p>
+
+    <div class="actions" style="margin-top: 16px;">
+      <a class="pill" href="{{ url_for('profile') }}">Go to profile</a>
+    </div>
+  </div>
+{% endblock %}

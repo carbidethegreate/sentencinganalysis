@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Admin users | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Users</h1>
+    <p class="small">Read only list. Password hashes are never displayed.</p>
+
+    <table class="table" style="margin-top: 12px;">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Created</th>
+          <th>Name</th>
+          <th>Email</th>
+          <th>User type</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+          <tr>
+            <td>{{ u.id }}</td>
+            <td>{{ u.created_at }}</td>
+            <td>{{ u.first_name }} {{ u.last_name }}</td>
+            <td>{{ u.email }}</td>
+            <td>{{ u.user_type }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="actions" style="margin-top: 16px;">
+      <a class="pill" href="{{ url_for('admin_home') }}">Back to admin</a>
+    </div>
+  </div>
+{% endblock %}

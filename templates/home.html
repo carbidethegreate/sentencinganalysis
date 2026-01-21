@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Home | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>CourtDataPro</h1>
+    <p class="small">
+      This site is now served dynamically from Flask. The home page is intentionally simple so we can expand the dashboard features next.
+    </p>
+
+    {% if not current_user %}
+      <div class="actions" style="margin-top: 16px;">
+        <a class="pill" href="{{ url_for('signup') }}">Create an account</a>
+        <a class="pill" href="{{ url_for('login') }}">Log in</a>
+      </div>
+    {% else %}
+      <p style="margin-top: 16px;">
+        Go to your <a href="{{ url_for('dashboard') }}">Dashboard</a>.
+      </p>
+    {% endif %}
+  </div>
+{% endblock %}
