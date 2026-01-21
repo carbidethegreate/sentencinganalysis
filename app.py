@@ -215,8 +215,18 @@ def create_app() -> Flask:
 
     def require_csrf() -> None:
         form_token = request.form.get("csrf_token")
+        header_token = request.headers.get("X-CSRF-Token")
+        json_token = None
+        if not form_token and not header_token:
+            json_payload = request.get_json(silent=True) or {}
+            json_token = json_payload.get("csrf_token")
+        request_token = form_token or header_token or json_token
         session_token = session.get("csrf_token")
-        if not form_token or not session_token or not hmac.compare_digest(form_token, session_token):
+        if (
+            not request_token
+            or not session_token
+            or not hmac.compare_digest(str(request_token), session_token)
+        ):
             abort(400)
 
     def normalize_email(email: str) -> str:
@@ -770,6 +780,32 @@ def create_app() -> Flask:
             user=user,
             newsletter_opt_in=newsletter_opt_in,
         )
+
+    @app.post("/profile/newsletter")
+    @login_required
+    def profile_newsletter():
+        require_csrf()
+        user = g.current_user
+        assert user is not None
+
+        payload = request.get_json(silent=True) or {}
+        raw_opt_in = payload.get("opt_in")
+        if raw_opt_in is None:
+            raw_opt_in = request.form.get("opt_in")
+
+        if isinstance(raw_opt_in, bool):
+            opt_in = raw_opt_in
+        elif raw_opt_in is None:
+            opt_in = False
+        elif isinstance(raw_opt_in, (int, float)):
+            opt_in = bool(raw_opt_in)
+        else:
+            opt_in = str(raw_opt_in).strip().lower() in {"1", "true", "yes", "on"}
+
+        with engine.begin() as conn:
+            set_subscription(user["email"], opt_in, user_id=user["id"], conn=conn)
+
+        return jsonify({"ok": True})
 
     @app.post("/newsletter/subscribe")
     def newsletter_subscribe():

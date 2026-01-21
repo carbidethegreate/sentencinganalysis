@@ -135,6 +135,9 @@
       const title = document.getElementById('title');
       const newsletterCheckbox = document.querySelector('input[name="newsletter_opt_in"]');
       const newsletterLabel = document.querySelector('[data-newsletter-label]');
+      const csrfToken = document.querySelector('input[name="csrf_token"]')?.value;
+      const newsletterEndpoint = "{{ url_for('profile_newsletter') }}";
+      let lastNewsletterValue = newsletterCheckbox ? newsletterCheckbox.checked : false;
 
       function toggleFirmFields() {
         const isLawFirm = userType.value === 'Attorney, Law Firm';
@@ -153,9 +156,45 @@
           : 'Not subscribed';
       }
 
+      async function syncNewsletterPreference() {
+        if (!newsletterCheckbox) {
+          return;
+        }
+
+        const desiredValue = newsletterCheckbox.checked;
+        const body = new FormData();
+        body.append('csrf_token', csrfToken || '');
+        body.append('opt_in', desiredValue ? '1' : '0');
+
+        try {
+          const response = await fetch(newsletterEndpoint, {
+            method: 'POST',
+            body,
+            headers: {
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+          });
+
+          if (!response.ok) {
+            throw new Error('Newsletter update failed');
+          }
+
+          const payload = await response.json();
+          if (!payload || !payload.ok) {
+            throw new Error('Newsletter update failed');
+          }
+
+          lastNewsletterValue = desiredValue;
+          updateNewsletterLabel();
+        } catch (error) {
+          newsletterCheckbox.checked = lastNewsletterValue;
+          updateNewsletterLabel();
+        }
+      }
+
       userType.addEventListener('change', toggleFirmFields);
       if (newsletterCheckbox) {
-        newsletterCheckbox.addEventListener('change', updateNewsletterLabel);
+        newsletterCheckbox.addEventListener('change', syncNewsletterPreference);
       }
       toggleFirmFields();
       updateNewsletterLabel();
