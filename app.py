@@ -1,10 +1,13 @@
+import csv
 import hmac
+import io
 import os
 import re
 import secrets
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import quote_plus
 
 from flask import (
@@ -21,6 +24,7 @@ from flask import (
 )
 from sqlalchemy import (
     Boolean,
+    Date,
     Column,
     DateTime,
     ForeignKey,
@@ -29,10 +33,12 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    bindparam,
     create_engine,
     delete,
     func,
     insert,
+    or_,
     select,
     update,
 )
@@ -41,6 +47,8 @@ from sqlalchemy.exc import IntegrityError, NoSuchTableError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
+CASE_STAGE1_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+CASE_STAGE1_CHUNK_SIZE = 1000
 
 USER_TYPES = [
     "Attorney, Solo Practitioner",
@@ -193,8 +201,22 @@ def create_app() -> Flask:
         Column("unsubscribed_at", DateTime(timezone=True), nullable=True),
     )
 
-    # Create the users/newsletter tables if they don't exist.
-    metadata.create_all(engine, tables=[users, newsletter_subscriptions])
+    case_stage1 = Table(
+        "case_stage1",
+        metadata,
+        Column("cs_caseid", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+    )
+
+    # Create the users/newsletter/case_stage1 tables if they don't exist.
+    metadata.create_all(engine, tables=[users, newsletter_subscriptions, case_stage1])
 
     # -----------------
     # Helpers
@@ -228,6 +250,144 @@ def create_app() -> Flask:
             or not hmac.compare_digest(str(request_token), session_token)
         ):
             abort(400)
+
+    def _is_postgres() -> bool:
+        return engine.dialect.name == "postgresql"
+
+    def _parse_stage1_date(value: Optional[str]) -> Optional[Any]:
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value.strip(), "%m/%d/%Y").date()
+        except ValueError:
+            return None
+
+    def _normalize_case_stage1_headers(raw_headers: Sequence[str]) -> List[str]:
+        normalized: List[str] = []
+        counts: Dict[str, int] = {}
+        for header in raw_headers:
+            name = re.sub(r"[^a-zA-Z0-9_]", "_", header.strip())
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            if name == "cs_short_title" and counts[name] == 2:
+                normalized.append("lead_short_title")
+            elif counts[name] == 1:
+                normalized.append(name)
+            else:
+                normalized.append(f"{name}_{counts[name]}")
+        return normalized
+
+    def _infer_case_stage1_type(column_name: str) -> Any:
+        if column_name == "cs_caseid":
+            return Integer
+        if "date" in column_name:
+            return Date
+        return Text
+
+    def _ensure_case_stage1_columns(conn: Any, headers: Sequence[str]) -> Table:
+        current = Table("case_stage1", MetaData(), autoload_with=engine)
+        existing = set(current.c.keys())
+        for header in headers:
+            if header in existing:
+                continue
+            column_type = _infer_case_stage1_type(header)
+            if column_type is Date:
+                sql_type = "DATE"
+            elif column_type is Integer:
+                sql_type = "INTEGER"
+            else:
+                sql_type = "TEXT"
+            conn.execute(sa_text(f"ALTER TABLE case_stage1 ADD COLUMN {header} {sql_type}"))
+            existing.add(header)
+        return Table("case_stage1", MetaData(), autoload_with=engine)
+
+    def _ensure_case_stage1_search_vector(conn: Any) -> None:
+        if not _is_postgres():
+            return
+        try:
+            reflected = Table("case_stage1", MetaData(), autoload_with=engine)
+            if "search_vector" in reflected.c:
+                return
+            text_columns = [
+                col.name
+                for col in reflected.c
+                if isinstance(col.type, (Text, String))
+                and col.name not in {"created_at", "updated_at"}
+            ]
+            if not text_columns:
+                return
+            concatenated = " || ' ' || ".join(
+                f"coalesce({name}, '')" for name in text_columns
+            )
+            conn.execute(
+                sa_text(
+                    "ALTER TABLE case_stage1 "
+                    "ADD COLUMN IF NOT EXISTS search_vector tsvector "
+                    f"GENERATED ALWAYS AS (to_tsvector('english', {concatenated})) STORED"
+                )
+            )
+            conn.execute(
+                sa_text(
+                    "CREATE INDEX IF NOT EXISTS case_stage1_search_vector_idx "
+                    "ON case_stage1 USING GIN(search_vector)"
+                )
+            )
+        except Exception:
+            app.logger.exception("Unable to create case_stage1 search vector/index.")
+
+    def _get_case_stage1_table() -> Table:
+        return Table("case_stage1", MetaData(), autoload_with=engine)
+
+    def _upsert_case_stage1_batch(
+        conn: Any, table: Table, rows: List[Dict[str, Any]]
+    ) -> Tuple[int, int]:
+        if not rows:
+            return 0, 0
+        ids = [row["cs_caseid"] for row in rows]
+        existing_ids = set(
+            conn.execute(select(table.c.cs_caseid).where(table.c.cs_caseid.in_(ids))).scalars()
+        )
+        inserted_count = len(rows) - len(existing_ids)
+        updated_count = len(existing_ids)
+        if _is_postgres():
+            stmt = insert(table).values(rows)
+            update_values = {
+                col.name: stmt.excluded[col.name]
+                for col in table.c
+                if col.name
+                not in {"cs_caseid", "created_at", "updated_at", "search_vector"}
+            }
+            update_values["updated_at"] = func.now()
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[table.c.cs_caseid], set_=update_values
+            )
+            conn.execute(stmt)
+            return inserted_count, updated_count
+
+        insert_rows = [row for row in rows if row["cs_caseid"] not in existing_ids]
+        update_rows = [
+            {**row, "b_cs_caseid": row["cs_caseid"]}
+            for row in rows
+            if row["cs_caseid"] in existing_ids
+        ]
+        if insert_rows:
+            conn.execute(insert(table), insert_rows)
+        if update_rows:
+            update_columns = {
+                col.name: bindparam(col.name)
+                for col in table.c
+                if col.name
+                not in {"cs_caseid", "created_at", "updated_at", "search_vector"}
+            }
+            update_stmt = (
+                update(table)
+                .where(table.c.cs_caseid == bindparam("b_cs_caseid"))
+                .values(**update_columns)
+                .values(updated_at=func.now())
+            )
+            conn.execute(update_stmt, update_rows)
+        return inserted_count, updated_count
 
     def normalize_email(email: str) -> str:
         return email.strip().lower()
@@ -909,6 +1069,191 @@ def create_app() -> Flask:
             )
         return render_template("admin_newsletter.html", subscriptions=rows)
 
+    @app.get("/admin/case-stage1/upload")
+    @admin_required
+    def admin_case_stage1_upload():
+        return render_template("admin_case_stage1_upload.html")
+
+    @app.post("/admin/case-stage1/upload")
+    @admin_required
+    def admin_case_stage1_upload_post():
+        require_csrf()
+
+        if request.content_length and request.content_length > CASE_STAGE1_MAX_UPLOAD_BYTES:
+            flash("File too large. Maximum size is 25MB.", "error")
+            return redirect(url_for("admin_case_stage1_upload"))
+
+        uploaded = request.files.get("case_stage1_file")
+        if not uploaded or not uploaded.filename:
+            flash("Please select a file to upload.", "error")
+            return redirect(url_for("admin_case_stage1_upload"))
+        if not uploaded.filename.lower().endswith((".txt", ".csv")):
+            flash("Only .txt or .csv files are supported.", "error")
+            return redirect(url_for("admin_case_stage1_upload"))
+
+        total_rows = 0
+        inserted_rows = 0
+        updated_rows = 0
+        skipped_rows = 0
+        error_rows = 0
+
+        try:
+            stream = io.TextIOWrapper(uploaded.stream, encoding="utf-8", errors="replace")
+            reader = csv.reader(stream, delimiter="|")
+            raw_headers = next(reader, None)
+            if not raw_headers:
+                flash("Uploaded file is missing a header row.", "error")
+                return redirect(url_for("admin_case_stage1_upload"))
+
+            headers = _normalize_case_stage1_headers(raw_headers)
+            if "cs_caseid" not in headers:
+                flash("Uploaded file must include cs_caseid header.", "error")
+                return redirect(url_for("admin_case_stage1_upload"))
+
+            with engine.begin() as conn:
+                case_stage1_table = _ensure_case_stage1_columns(conn, headers)
+                _ensure_case_stage1_search_vector(conn)
+                date_columns = {
+                    col.name for col in case_stage1_table.c if isinstance(col.type, Date)
+                }
+                data_columns = [
+                    col.name
+                    for col in case_stage1_table.c
+                    if col.name not in {"created_at", "updated_at", "search_vector"}
+                ]
+
+                batch: List[Dict[str, Any]] = []
+                for row in reader:
+                    total_rows += 1
+                    row_data: Dict[str, Any] = {}
+                    for header, value in zip(headers, row):
+                        clean_value = value.strip()
+                        row_data[header] = clean_value if clean_value else None
+                    for column in data_columns:
+                        row_data.setdefault(column, None)
+
+                    case_id_raw = row_data.get("cs_caseid")
+                    try:
+                        row_data["cs_caseid"] = int(case_id_raw) if case_id_raw is not None else None
+                    except (TypeError, ValueError):
+                        skipped_rows += 1
+                        continue
+                    if row_data["cs_caseid"] is None:
+                        skipped_rows += 1
+                        continue
+
+                    for header in date_columns:
+                        row_data[header] = _parse_stage1_date(row_data.get(header))
+
+                    batch.append(row_data)
+                    if len(batch) >= CASE_STAGE1_CHUNK_SIZE:
+                        inserted, updated = _upsert_case_stage1_batch(
+                            conn, case_stage1_table, batch
+                        )
+                        inserted_rows += inserted
+                        updated_rows += updated
+                        batch = []
+
+                if batch:
+                    inserted, updated = _upsert_case_stage1_batch(
+                        conn, case_stage1_table, batch
+                    )
+                    inserted_rows += inserted
+                    updated_rows += updated
+
+        except Exception:
+            app.logger.exception("Case stage 1 upload failed.")
+            error_rows += 1
+            flash("Upload failed. Please check the server logs for details.", "error")
+            return redirect(url_for("admin_case_stage1_upload"))
+
+        flash(
+            (
+                "Upload complete. "
+                f"Total rows: {total_rows}. "
+                f"Inserted: {inserted_rows}. "
+                f"Updated: {updated_rows}. "
+                f"Skipped: {skipped_rows}. "
+                f"Errors: {error_rows}."
+            ),
+            "success",
+        )
+        return redirect(url_for("admin_case_stage1_list"))
+
+    @app.get("/admin/case-stage1")
+    @admin_required
+    def admin_case_stage1_list():
+        case_stage1_table = _get_case_stage1_table()
+        columns = [col.name for col in case_stage1_table.c if col.name != "search_vector"]
+        return render_template("admin_case_stage1_list.html", columns=columns)
+
+    @app.get("/admin/case-stage1/data")
+    @admin_required
+    def admin_case_stage1_data():
+        case_stage1_table = _get_case_stage1_table()
+        columns = [col.name for col in case_stage1_table.c if col.name != "search_vector"]
+        draw = int(request.args.get("draw", 1))
+        start = max(int(request.args.get("start", 0)), 0)
+        length = min(int(request.args.get("length", 25)), 200)
+        search_value = request.args.get("search[value]", "").strip()
+
+        order_col_index = request.args.get("order[0][column]", "0")
+        order_dir = request.args.get("order[0][dir]", "asc")
+        try:
+            order_index = int(order_col_index)
+        except ValueError:
+            order_index = 0
+        order_column_name = columns[order_index] if order_index < len(columns) else "cs_caseid"
+        order_column = case_stage1_table.c.get(order_column_name, case_stage1_table.c.cs_caseid)
+
+        base_query = select(case_stage1_table)
+        count_query = select(func.count()).select_from(case_stage1_table)
+
+        if search_value:
+            if _is_postgres() and "search_vector" in case_stage1_table.c:
+                search_filter = case_stage1_table.c.search_vector.op("@@")(
+                    func.plainto_tsquery("english", search_value)
+                )
+            else:
+                like_term = f"%{search_value}%"
+                searchable = [
+                    col
+                    for col in case_stage1_table.c
+                    if isinstance(col.type, (Text, String))
+                    and col.name not in {"search_vector"}
+                ]
+                if not searchable:
+                    search_filter = case_stage1_table.c.cs_caseid == -1
+                elif _is_postgres():
+                    search_filter = or_(*[col.ilike(like_term) for col in searchable])
+                else:
+                    search_filter = or_(*[col.like(like_term) for col in searchable])
+            base_query = base_query.where(search_filter)
+            count_query = count_query.where(search_filter)
+
+        if order_dir == "desc":
+            base_query = base_query.order_by(order_column.desc())
+        else:
+            base_query = base_query.order_by(order_column.asc())
+
+        base_query = base_query.limit(length).offset(start)
+
+        with engine.connect() as conn:
+            records_total = conn.execute(
+                select(func.count()).select_from(case_stage1_table)
+            ).scalar_one()
+            records_filtered = conn.execute(count_query).scalar_one()
+            rows = conn.execute(base_query).mappings().all()
+
+        return jsonify(
+            {
+                "draw": draw,
+                "recordsTotal": records_total,
+                "recordsFiltered": records_filtered,
+                "data": [dict(row) for row in rows],
+            }
+        )
+
     @app.post("/admin/logout")
     def admin_logout():
         require_csrf()
@@ -931,13 +1276,13 @@ def create_app() -> Flask:
         tables = [
             t
             for t in metadata.tables.keys()
-            if t.lower() not in {"users", "newsletter_subscriptions"}
+            if t.lower() not in {"users", "newsletter_subscriptions", "case_stage1"}
         ]
         return jsonify(sorted(tables))
 
     @app.route("/api/<table_name>", methods=["GET", "POST"])
     def table_records(table_name: str):
-        if table_name.lower() in {"users", "newsletter_subscriptions"}:
+        if table_name.lower() in {"users", "newsletter_subscriptions", "case_stage1"}:
             return jsonify({"error": "Forbidden"}), 403
 
         try:
