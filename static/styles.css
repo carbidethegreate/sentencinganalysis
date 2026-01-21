@@ -58,10 +58,33 @@ header {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-weight: 600;
   font-size: 1.1rem;
   letter-spacing: 0.4px;
   color: var(--primary-dark);
+}
+
+.brand-logo {
+  width: auto;
+  height: 32px;
+}
+
+.brand-text {
+  display: inline-flex;
+  align-items: center;
+  font-family: "Georgia", "Times New Roman", serif;
+  line-height: 1;
+}
+
+.brand-text-primary {
+  color: #b59a7b;
+}
+
+.brand-text-secondary {
+  color: #4f4a46;
 }
 
 .nav-links {
