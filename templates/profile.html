@@ -33,8 +33,8 @@
                 {% if newsletter_opt_in %}checked{% endif %}
               >
               <span class="toggle-slider" aria-hidden="true"></span>
-              <span class="toggle-label">
-                Newsletter: <strong>{{ "Subscribed" if newsletter_opt_in else "Not subscribed" }}</strong>
+              <span class="toggle-label" aria-live="polite">
+                Newsletter: <strong data-newsletter-label>{{ "Subscribed" if newsletter_opt_in else "Not subscribed" }}</strong>
               </span>
             </label>
           </div>
@@ -133,6 +133,8 @@
       const firmFields = document.getElementById('firm_fields');
       const firmName = document.getElementById('firm_name');
       const title = document.getElementById('title');
+      const newsletterCheckbox = document.querySelector('input[name="newsletter_opt_in"]');
+      const newsletterLabel = document.querySelector('[data-newsletter-label]');
 
       function toggleFirmFields() {
         const isLawFirm = userType.value === 'Attorney, Law Firm';
@@ -141,8 +143,22 @@
         title.required = isLawFirm;
       }
 
+      function updateNewsletterLabel() {
+        if (!newsletterCheckbox || !newsletterLabel) {
+          return;
+        }
+
+        newsletterLabel.textContent = newsletterCheckbox.checked
+          ? 'Subscribed'
+          : 'Not subscribed';
+      }
+
       userType.addEventListener('change', toggleFirmFields);
+      if (newsletterCheckbox) {
+        newsletterCheckbox.addEventListener('change', updateNewsletterLabel);
+      }
       toggleFirmFields();
+      updateNewsletterLabel();
     })();
   </script>
 {% endblock %}
