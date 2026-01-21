@@ -33,7 +33,7 @@ projects:
       dockerfilePath: ./Dockerfile
       autoDeployTrigger: commit
     - type: pserv
-      name: sentencinganalysis
+      name: sentencinganalysis_pserv
       runtime: docker
       repo: https://github.com/carbidethegreate/sentencinganalysis
       plan: starter
