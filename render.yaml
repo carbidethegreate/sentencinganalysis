@@ -1,4 +1,4 @@
-# Exported from Render on 2026-01-21T17:22:19Z
+# Exported from Render on 2026-01-21T18:03:18Z
 version: "1"
 projects:
 - name: SentencingAnalysis
@@ -30,7 +30,9 @@ projects:
       - key: PGADMIN_DATABASE_NAME
         sync: false
       - key: PGADMIN_DATABASE_HOST
-        sync: false
+        fromDatabase:
+          name: FSD
+          property: host
       - key: GUNICORN_THREADS
         sync: false
       - fromGroup: sentencinganalysis-env
@@ -45,3 +47,93 @@ projects:
         mountPath: /var/lib/pgadmin
         sizeGB: 1
       autoDeployTrigger: commit
+    - type: pserv
+      name: sentencinganalysis
+      runtime: docker
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: starter
+      envVars:
+      - key: Username
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: Port
+        sync: false
+      - key: Password
+        fromDatabase:
+          name: FSD
+          property: password
+      - key: PSQLCommand
+        sync: false
+      - key: OpenAPIKey
+        sync: false
+      - key: InternalDatabaseURL
+        fromDatabase:
+          name: FSD
+          property: connectionString
+      - key: Hostname
+        fromDatabase:
+          name: FSD
+          property: host
+      - key: GoogleSheetsAPIKey
+        sync: false
+      - key: GithubAPIKey
+        sync: false
+      - key: ExternalDatabaseURL
+        sync: false
+      - key: Database
+        sync: false
+      - key: CPD_ADMIN_KEY
+        sync: false
+      region: oregon
+      dockerContext: .
+      dockerfilePath: ./Dockerfile
+      autoDeployTrigger: commit
+    - type: worker
+      name: sentencinganalysis
+      runtime: docker
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: starter
+      region: oregon
+      dockerContext: .
+      dockerfilePath: ./Dockerfile
+      autoDeployTrigger: commit
+    - type: web
+      name: sentencinganalysis_python_3
+      runtime: python
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: standard
+      region: oregon
+      buildCommand: pip install -r requirements.txt
+      startCommand: gunicorn app:app
+      autoDeployTrigger: commit
+    - type: web
+      name: sentencinganalysis_node
+      runtime: node
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: starter
+      region: oregon
+      buildCommand: yarn
+      startCommand: yarn start
+      autoDeployTrigger: commit
+    - type: cron
+      name: sentencinganalysis_dockerfile_cron_job
+      runtime: docker
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: starter
+      region: oregon
+      schedule: '*/5 * * * *'
+      dockerContext: .
+      dockerfilePath: ./Dockerfile
+      autoDeployTrigger: commit
+    databases:
+    - name: FSD
+      databaseName: fsd_oe4w
+      user: fsd_oe4w_user
+      plan: pro-4gb
+      region: oregon
+      ipAllowList:
+      - source: 0.0.0.0/0
+        description: everywhere
+      postgresMajorVersion: "18"
+      diskSizeGB: 100
