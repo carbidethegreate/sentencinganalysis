@@ -151,16 +151,38 @@ def build_database_url() -> str:
     return f"sqlite:///{db_path}"
 
 
+def _load_or_create_secret_key() -> Tuple[str, str]:
+    secret_key = _first_env("SECRET_KEY", "Secrets", "SECRETS")
+    if secret_key:
+        return secret_key, "env"
+
+    key_path = os.environ.get("SECRET_KEY_PATH")
+    if not key_path:
+        key_path = str(Path(__file__).with_name(".secret_key"))
+    key_file = Path(key_path)
+    if key_file.exists():
+        existing = key_file.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing, "file"
+
+    generated = secrets.token_hex(32)
+    try:
+        key_file.write_text(generated, encoding="utf-8")
+        os.chmod(key_file, 0o600)
+        return generated, "generated"
+    except OSError:
+        return generated, "ephemeral"
+
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
 
     # Session signing key
-    secret_key = _first_env("SECRET_KEY", "Secrets", "SECRETS")
-    if not secret_key:
-        # Local fallback: Render should set SECRET_KEY (or Secrets) for stable sessions.
-        secret_key = secrets.token_hex(32)
+    secret_key, secret_source = _load_or_create_secret_key()
+    if secret_source in {"generated", "ephemeral"}:
         app.logger.warning(
-            "SECRET_KEY not set; using an ephemeral key (sessions reset on restart)."
+            "SECRET_KEY not set; using %s key (sessions reset on restart).",
+            "a persisted" if secret_source == "generated" else "an ephemeral",
         )
     app.secret_key = secret_key
 
