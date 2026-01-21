@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Admin newsletter | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Newsletter subscriptions</h1>
+    <p class="small">Latest 200 newsletter records.</p>
+
+    <table class="table" style="margin-top: 12px;">
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Opt in</th>
+          <th>Subscribed at</th>
+          <th>Unsubscribed at</th>
+          <th>Created</th>
+          <th>Updated</th>
+          <th>User ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sub in subscriptions %}
+          <tr>
+            <td>{{ sub.email }}</td>
+            <td>{{ "Yes" if sub.opt_in else "No" }}</td>
+            <td>{{ sub.subscribed_at }}</td>
+            <td>{{ sub.unsubscribed_at }}</td>
+            <td>{{ sub.created_at }}</td>
+            <td>{{ sub.updated_at }}</td>
+            <td>{{ sub.user_id or "" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="actions" style="margin-top: 16px;">
+      <a class="pill" href="{{ url_for('admin_home') }}">Back to admin</a>
+    </div>
+  </div>
+{% endblock %}

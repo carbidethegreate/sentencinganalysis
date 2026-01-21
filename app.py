@@ -23,12 +23,14 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    ForeignKey,
     Integer,
     MetaData,
     String,
     Table,
     Text,
     create_engine,
+    delete,
     func,
     insert,
     select,
@@ -172,8 +174,27 @@ def create_app() -> Flask:
         Column("referral_code", String(100), nullable=True),
     )
 
-    # Create the users table if it doesn't exist.
-    metadata.create_all(engine, tables=[users])
+    newsletter_subscriptions = Table(
+        "newsletter_subscriptions",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("email", String(255), nullable=False, unique=True, index=True),
+        Column("user_id", Integer, ForeignKey("users.id"), nullable=True),
+        Column("opt_in", Boolean, nullable=False, server_default=sa_text("true")),
+        Column("subscribed_at", DateTime(timezone=True), nullable=True),
+        Column("unsubscribed_at", DateTime(timezone=True), nullable=True),
+    )
+
+    # Create the users/newsletter tables if they don't exist.
+    metadata.create_all(engine, tables=[users, newsletter_subscriptions])
 
     # -----------------
     # Helpers
@@ -198,12 +219,202 @@ def create_app() -> Flask:
         if not form_token or not session_token or not hmac.compare_digest(form_token, session_token):
             abort(400)
 
-    def _normalize_email(email: str) -> str:
+    def normalize_email(email: str) -> str:
         return email.strip().lower()
 
-    def _valid_email(email: str) -> bool:
+    def valid_email(email: str) -> bool:
         # Simple sanity check.
         return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email))
+
+    def _earliest_date(*values: Optional[Any]) -> Optional[Any]:
+        candidates = [value for value in values if value is not None]
+        return min(candidates) if candidates else None
+
+    def _latest_date(*values: Optional[Any]) -> Optional[Any]:
+        candidates = [value for value in values if value is not None]
+        return max(candidates) if candidates else None
+
+    def upsert_subscribe(
+        email: str, user_id: Optional[int] = None, conn: Optional[Any] = None
+    ) -> None:
+        normalized_email = normalize_email(email)
+
+        def _execute(connection: Any) -> None:
+            row = (
+                connection.execute(
+                    select(newsletter_subscriptions)
+                    .where(newsletter_subscriptions.c.email == normalized_email)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if row:
+                update_values: Dict[str, Any] = {
+                    "opt_in": True,
+                    "unsubscribed_at": None,
+                    "updated_at": func.now(),
+                }
+                if row.get("subscribed_at") is None:
+                    update_values["subscribed_at"] = func.now()
+                if user_id is not None and (row.get("user_id") in {None, user_id}):
+                    update_values["user_id"] = user_id
+                connection.execute(
+                    update(newsletter_subscriptions)
+                    .where(newsletter_subscriptions.c.id == row["id"])
+                    .values(**update_values)
+                )
+                return
+
+            connection.execute(
+                insert(newsletter_subscriptions).values(
+                    email=normalized_email,
+                    user_id=user_id,
+                    opt_in=True,
+                    subscribed_at=func.now(),
+                )
+            )
+
+        if conn is None:
+            with engine.begin() as connection:
+                _execute(connection)
+            return
+        _execute(conn)
+
+    def set_subscription(
+        email: str, opt_in: bool, user_id: Optional[int] = None, conn: Optional[Any] = None
+    ) -> None:
+        normalized_email = normalize_email(email)
+
+        def _execute(connection: Any) -> None:
+            row = (
+                connection.execute(
+                    select(newsletter_subscriptions)
+                    .where(newsletter_subscriptions.c.email == normalized_email)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if opt_in:
+                upsert_subscribe(normalized_email, user_id=user_id, conn=connection)
+                return
+
+            update_values: Dict[str, Any] = {
+                "opt_in": False,
+                "unsubscribed_at": func.now(),
+                "updated_at": func.now(),
+            }
+            if row:
+                if user_id is not None and (row.get("user_id") in {None, user_id}):
+                    update_values["user_id"] = user_id
+                connection.execute(
+                    update(newsletter_subscriptions)
+                    .where(newsletter_subscriptions.c.id == row["id"])
+                    .values(**update_values)
+                )
+                return
+
+            connection.execute(
+                insert(newsletter_subscriptions).values(
+                    email=normalized_email,
+                    user_id=user_id,
+                    opt_in=False,
+                    unsubscribed_at=func.now(),
+                )
+            )
+
+        if conn is None:
+            with engine.begin() as connection:
+                _execute(connection)
+            return
+        _execute(conn)
+
+    def merge_newsletter_subscriptions(
+        conn: Any, old_email: str, new_email: str, user_id: int
+    ) -> None:
+        normalized_old = normalize_email(old_email)
+        normalized_new = normalize_email(new_email)
+        if normalized_old == normalized_new:
+            row = (
+                conn.execute(
+                    select(newsletter_subscriptions)
+                    .where(newsletter_subscriptions.c.email == normalized_new)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if row and row.get("user_id") in {None, user_id}:
+                conn.execute(
+                    update(newsletter_subscriptions)
+                    .where(newsletter_subscriptions.c.id == row["id"])
+                    .values(user_id=user_id, updated_at=func.now())
+                )
+            return
+
+        old_row = (
+            conn.execute(
+                select(newsletter_subscriptions)
+                .where(newsletter_subscriptions.c.email == normalized_old)
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        new_row = (
+            conn.execute(
+                select(newsletter_subscriptions)
+                .where(newsletter_subscriptions.c.email == normalized_new)
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+
+        if not old_row and not new_row:
+            return
+
+        if not new_row and old_row:
+            conn.execute(
+                update(newsletter_subscriptions)
+                .where(newsletter_subscriptions.c.id == old_row["id"])
+                .values(email=normalized_new, user_id=user_id, updated_at=func.now())
+            )
+            return
+
+        if not new_row:
+            return
+
+        opt_in = bool(new_row.get("opt_in")) or bool(old_row.get("opt_in") if old_row else False)
+        subscribed_at = _earliest_date(
+            new_row.get("subscribed_at"),
+            old_row.get("subscribed_at") if old_row else None,
+        )
+        if opt_in:
+            unsubscribed_at = None
+        else:
+            unsubscribed_at = _latest_date(
+                new_row.get("unsubscribed_at"),
+                old_row.get("unsubscribed_at") if old_row else None,
+            )
+
+        conn.execute(
+            update(newsletter_subscriptions)
+            .where(newsletter_subscriptions.c.id == new_row["id"])
+            .values(
+                user_id=user_id,
+                opt_in=opt_in,
+                subscribed_at=subscribed_at,
+                unsubscribed_at=unsubscribed_at,
+                updated_at=func.now(),
+            )
+        )
+
+        if old_row:
+            conn.execute(
+                delete(newsletter_subscriptions).where(newsletter_subscriptions.c.id == old_row["id"])
+            )
 
     def current_user() -> Optional[Dict[str, Any]]:
         user_id = session.get("user_id")
@@ -252,7 +463,13 @@ def create_app() -> Flask:
 
     @app.route("/")
     def home():
-        return render_template("home.html", active_page="home")
+        return render_template(
+            "home.html",
+            active_page="home",
+            newsletter_success=request.args.get("newsletter") == "success",
+            newsletter_error=request.args.get("newsletter_error"),
+            newsletter_email=request.args.get("newsletter_email", ""),
+        )
 
     @app.route("/pricing")
     def pricing():
@@ -288,7 +505,7 @@ def create_app() -> Flask:
             user_type = request.form.get("user_type", "").strip()
             firm_name = request.form.get("firm_name", "").strip() or None
             title = request.form.get("title", "").strip() or None
-            email = _normalize_email(request.form.get("email", ""))
+            email = normalize_email(request.form.get("email", ""))
             password = request.form.get("password", "")
 
             phone = request.form.get("phone", "").strip() or None
@@ -310,7 +527,7 @@ def create_app() -> Flask:
                 errors.append("Last name is required.")
             if user_type not in USER_TYPES:
                 errors.append("User type is required.")
-            if not email or not _valid_email(email):
+            if not email or not valid_email(email):
                 errors.append("A valid email is required.")
             if not password or len(password) < 8:
                 errors.append("Password must be at least 8 characters.")
@@ -356,6 +573,21 @@ def create_app() -> Flask:
                 with engine.begin() as conn:
                     result = conn.execute(insert(users).values(**payload))
                     user_id = result.inserted_primary_key[0]
+                    newsletter_row = (
+                        conn.execute(
+                            select(newsletter_subscriptions)
+                            .where(newsletter_subscriptions.c.email == email)
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if newsletter_row and newsletter_row.get("user_id") in {None, user_id}:
+                        conn.execute(
+                            update(newsletter_subscriptions)
+                            .where(newsletter_subscriptions.c.id == newsletter_row["id"])
+                            .values(user_id=user_id, updated_at=func.now())
+                        )
             except IntegrityError:
                 flash("An account with that email already exists.", "error")
                 return render_template(
@@ -381,7 +613,7 @@ def create_app() -> Flask:
         if request.method == "POST":
             require_csrf()
 
-            email = _normalize_email(request.form.get("email", ""))
+            email = normalize_email(request.form.get("email", ""))
             password = request.form.get("password", "")
 
             if not email or not password:
@@ -436,7 +668,9 @@ def create_app() -> Flask:
             user_type = request.form.get("user_type", "").strip()
             firm_name = request.form.get("firm_name", "").strip() or None
             title = request.form.get("title", "").strip() or None
-            email = _normalize_email(request.form.get("email", ""))
+            email = normalize_email(request.form.get("email", ""))
+            old_email = normalize_email(user.get("email", ""))
+            newsletter_opt_in = bool(request.form.get("newsletter_opt_in"))
 
             phone = request.form.get("phone", "").strip() or None
             address = request.form.get("address", "").strip() or None
@@ -457,7 +691,7 @@ def create_app() -> Flask:
                 errors.append("Last name is required.")
             if user_type not in USER_TYPES:
                 errors.append("User type is required.")
-            if not email or not _valid_email(email):
+            if not email or not valid_email(email):
                 errors.append("A valid email is required.")
             if user_type == "Attorney, Law Firm":
                 if not firm_name:
@@ -473,6 +707,7 @@ def create_app() -> Flask:
                     active_page="profile",
                     user_types=USER_TYPES,
                     user=request.form,
+                    newsletter_opt_in=newsletter_opt_in,
                 )
 
             payload = {
@@ -497,6 +732,10 @@ def create_app() -> Flask:
             try:
                 with engine.begin() as conn:
                     conn.execute(update(users).where(users.c.id == user["id"]).values(**payload))
+                    merge_newsletter_subscriptions(conn, old_email, email, user["id"])
+                    set_subscription(
+                        email, newsletter_opt_in, user_id=user["id"], conn=conn
+                    )
             except IntegrityError:
                 flash("That email is already in use.", "error")
                 return render_template(
@@ -504,18 +743,62 @@ def create_app() -> Flask:
                     active_page="profile",
                     user_types=USER_TYPES,
                     user=request.form,
+                    newsletter_opt_in=newsletter_opt_in,
                 )
 
             flash("Profile updated.", "success")
             return redirect(url_for("profile"))
 
         # GET
+        newsletter_row = None
+        with engine.connect() as conn:
+            newsletter_row = (
+                conn.execute(
+                    select(newsletter_subscriptions)
+                    .where(newsletter_subscriptions.c.email == normalize_email(user["email"]))
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        newsletter_opt_in = bool(newsletter_row.get("opt_in")) if newsletter_row else False
+
         return render_template(
             "profile.html",
             active_page="profile",
             user_types=USER_TYPES,
             user=user,
+            newsletter_opt_in=newsletter_opt_in,
         )
+
+    @app.post("/newsletter/subscribe")
+    def newsletter_subscribe():
+        require_csrf()
+        raw_email = request.form.get("email", "").strip()
+        normalized_email = normalize_email(raw_email)
+        wants_json = (
+            request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or request.accept_mimetypes.best == "application/json"
+        )
+
+        if not normalized_email or not valid_email(normalized_email):
+            error_message = "Please enter a valid email address."
+            if wants_json:
+                return jsonify({"ok": False, "error": error_message}), 400
+            return redirect(
+                url_for(
+                    "home",
+                    newsletter="error",
+                    newsletter_error=error_message,
+                    newsletter_email=raw_email,
+                )
+            )
+
+        upsert_subscribe(normalized_email)
+
+        if wants_json:
+            return jsonify({"ok": True})
+        return redirect(url_for("home", newsletter="success"))
 
     # -----------------
     # Admin
@@ -575,6 +858,21 @@ def create_app() -> Flask:
             )
         return render_template("admin_users.html", users=rows)
 
+    @app.get("/admin/newsletter")
+    @admin_required
+    def admin_newsletter():
+        with engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    select(newsletter_subscriptions)
+                    .order_by(newsletter_subscriptions.c.created_at.desc())
+                    .limit(200)
+                )
+                .mappings()
+                .all()
+            )
+        return render_template("admin_newsletter.html", subscriptions=rows)
+
     @app.post("/admin/logout")
     def admin_logout():
         require_csrf()
@@ -594,12 +892,16 @@ def create_app() -> Flask:
     def list_tables():
         metadata.reflect(bind=engine)
         # Do not reveal protected tables.
-        tables = [t for t in metadata.tables.keys() if t.lower() not in {"users"}]
+        tables = [
+            t
+            for t in metadata.tables.keys()
+            if t.lower() not in {"users", "newsletter_subscriptions"}
+        ]
         return jsonify(sorted(tables))
 
     @app.route("/api/<table_name>", methods=["GET", "POST"])
     def table_records(table_name: str):
-        if table_name.lower() in {"users"}:
+        if table_name.lower() in {"users", "newsletter_subscriptions"}:
             return jsonify({"error": "Forbidden"}), 403
 
         try:

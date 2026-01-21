@@ -183,6 +183,25 @@ header {
 .flash.error { border-color: #fecaca; background: #fef2f2; }
 .flash.success { border-color: #bbf7d0; background: #f0fdf4; }
 
+.newsletter-panel {
+  margin-top: 24px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.95rem;
+}
+
+.newsletter-error {
+  margin-top: 10px;
+  color: #b91c1c;
+  font-weight: 600;
+}
+
 .card {
   border: 1px solid rgba(140, 132, 128, 0.3);
   border-radius: 22px;
@@ -352,6 +371,60 @@ button.danger {
   margin-top: 36px;
   font-size: 0.9rem;
   color: var(--muted);
+}
+
+.newsletter-toggle {
+  margin-top: 10px;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(140, 132, 128, 0.4);
+  position: relative;
+  transition: background 0.2s ease;
+}
+
+.toggle-slider::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  top: 3px;
+  left: 3px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.toggle input:checked + .toggle-slider {
+  background: #16a34a;
+}
+
+.toggle input:checked + .toggle-slider::after {
+  transform: translateX(18px);
+}
+
+.toggle-label {
+  font-size: 0.9rem;
+  color: var(--text);
 }
 
 @media (max-width: 640px) {

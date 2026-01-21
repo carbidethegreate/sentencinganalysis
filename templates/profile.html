@@ -25,6 +25,19 @@
         <div>
           <label for="email">Email</label>
           <input id="email" name="email" type="email" value="{{ user.get('email','') }}" required>
+          <div class="newsletter-toggle">
+            <label class="toggle">
+              <input
+                type="checkbox"
+                name="newsletter_opt_in"
+                {% if newsletter_opt_in %}checked{% endif %}
+              >
+              <span class="toggle-slider" aria-hidden="true"></span>
+              <span class="toggle-label">
+                Newsletter: <strong>{{ "Subscribed" if newsletter_opt_in else "Not subscribed" }}</strong>
+              </span>
+            </label>
+          </div>
         </div>
         <div>
           <label for="user_type">User type</label>

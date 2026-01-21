@@ -23,10 +23,29 @@
       <div class="coming-soon-detail">Court data you can trust</div>
     </div>
 
-    <form class="coming-soon-form">
-      <input type="email" placeholder="Enter your email to stay informed" aria-label="Email address" />
+    {% if newsletter_success %}
+      <div class="newsletter-panel success">
+        <strong>Thank you for joining our newsletter.</strong>
+        <span>We will share launch updates and early access opportunities soon.</span>
+      </div>
+    {% endif %}
+
+    <form class="coming-soon-form" method="post" action="{{ url_for('newsletter_subscribe') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input
+        type="email"
+        name="email"
+        placeholder="Enter your email to stay informed"
+        aria-label="Email address"
+        value="{{ newsletter_email }}"
+        required
+      />
       <button type="submit">Notify me</button>
     </form>
+
+    {% if newsletter_error %}
+      <p class="newsletter-error">{{ newsletter_error }}</p>
+    {% endif %}
 
     <p class="coming-soon-footer">
       Get updates on our upcoming launch, product announcements, and early access opportunities.
