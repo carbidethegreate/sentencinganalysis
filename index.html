@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Coming Soon</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --sand: #d9cbba;
+        --charcoal: #59514d;
+        --taupe: #8c8480;
+        --cloud: #f2f2f2;
+        --ink: #0d0d0d;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        min-height: 100vh;
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        background: linear-gradient(145deg, rgba(216, 203, 186, 0.65), rgba(242, 242, 242, 0.92)),
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Crect width='160' height='160' fill='%23f2f2f2'/%3E%3Cpath d='M0 120Q40 80 80 110T160 120V160H0Z' fill='%23d9cbba' opacity='0.55'/%3E%3Ccircle cx='120' cy='40' r='22' fill='%238c8480' opacity='0.35'/%3E%3C/svg%3E");
+        background-size: cover;
+        color: var(--ink);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 48px 24px;
+      }
+
+      .card {
+        width: min(960px, 100%);
+        background: rgba(242, 242, 242, 0.9);
+        border-radius: 28px;
+        padding: 56px clamp(24px, 6vw, 72px);
+        box-shadow: 0 28px 60px rgba(13, 13, 13, 0.18);
+        border: 1px solid rgba(140, 132, 127, 0.2);
+        backdrop-filter: blur(12px);
+      }
+
+      .eyebrow {
+        text-transform: uppercase;
+        letter-spacing: 0.35em;
+        font-size: 0.75rem;
+        color: var(--taupe);
+        font-weight: 600;
+      }
+
+      h1 {
+        font-size: clamp(2.6rem, 6vw, 4.4rem);
+        margin: 16px 0 16px;
+        color: var(--charcoal);
+      }
+
+      p {
+        font-size: clamp(1rem, 2.4vw, 1.25rem);
+        line-height: 1.6;
+        color: var(--charcoal);
+        max-width: 48ch;
+      }
+
+      .accent {
+        color: var(--taupe);
+        font-weight: 600;
+      }
+
+      .details {
+        margin: 32px 0 40px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 16px;
+      }
+
+      .detail {
+        padding: 18px 20px;
+        border-radius: 18px;
+        background: var(--sand);
+        color: var(--ink);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        box-shadow: inset 0 0 0 1px rgba(89, 81, 76, 0.2);
+      }
+
+      form {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      input[type="email"] {
+        flex: 1 1 240px;
+        padding: 14px 18px;
+        border-radius: 999px;
+        border: 1px solid rgba(89, 81, 76, 0.4);
+        background: #fff;
+        font-size: 1rem;
+      }
+
+      button {
+        padding: 14px 26px;
+        border-radius: 999px;
+        border: none;
+        background: var(--ink);
+        color: var(--cloud);
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 20px rgba(13, 13, 13, 0.3);
+      }
+
+      footer {
+        margin-top: 36px;
+        font-size: 0.9rem;
+        color: var(--taupe);
+      }
+
+      @media (max-width: 640px) {
+        .card {
+          padding: 40px 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <span class="eyebrow">HAQQ Studio</span>
+      <h1>We’re crafting something soulful.</h1>
+      <p>
+        A warm, intentional digital experience is on the horizon. We’re currently polishing every detail
+        so you can explore the next chapter of our brand story soon.
+      </p>
+
+      <section class="details">
+        <div class="detail">Launching Summer 2024</div>
+        <div class="detail">Design-first experience</div>
+        <div class="detail">Community updates</div>
+      </section>
+
+      <form>
+        <input type="email" placeholder="Enter your email" aria-label="Email address" />
+        <button type="submit">Notify me</button>
+      </form>
+
+      <footer>Follow along for updates on our upcoming launch.</footer>
+    </main>
+  </body>
+</html>
