@@ -2,6 +2,7 @@ import io
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -69,6 +70,15 @@ def main():
             "/admin/case-stage1/upload", data=data, content_type="multipart/form-data"
         )
         assert response.status_code == 302, "Expected upload to redirect on success."
+        for _ in range(50):
+            status_response = client.get("/admin/case-stage1/import-status")
+            status_payload = status_response.get_json()
+            if status_payload.get("status") in {"completed", "failed"}:
+                break
+            time.sleep(0.1)
+        assert (
+            status_payload.get("status") == "completed"
+        ), f"Expected upload to complete, got {status_payload.get('status')}."
 
         query = urlencode({"draw": 1, "start": 0, "length": 1})
         response = client.get(f"/admin/case-stage1/data?{query}")
@@ -79,6 +89,15 @@ def main():
         # Upload again to verify upsert (no duplicate cs_caseid).
         data = build_payload()
         client.post("/admin/case-stage1/upload", data=data, content_type="multipart/form-data")
+        for _ in range(50):
+            status_response = client.get("/admin/case-stage1/import-status")
+            status_payload = status_response.get_json()
+            if status_payload.get("status") in {"completed", "failed"}:
+                break
+            time.sleep(0.1)
+        assert (
+            status_payload.get("status") == "completed"
+        ), f"Expected upload to complete, got {status_payload.get('status')}."
 
         engine = create_engine(build_database_url(), future=True)
         metadata = MetaData()
