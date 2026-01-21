@@ -1,4 +1,4 @@
-# Exported from Render on 2026-01-21T18:03:18Z
+# Exported from Render on 2026-01-21T18:06:42Z
 version: "1"
 projects:
 - name: SentencingAnalysis
@@ -6,46 +6,31 @@ projects:
   - name: Production
     services:
     - type: web
-      name: Sent
+      name: sentencinganalysis_node
+      runtime: node
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: starter
+      region: oregon
+      buildCommand: yarn
+      startCommand: yarn start
+      autoDeployTrigger: commit
+    - type: web
+      name: sentencinganalysis_python_3
+      runtime: python
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: standard
+      region: oregon
+      buildCommand: pip install -r requirements.txt
+      startCommand: gunicorn app:app
+      autoDeployTrigger: commit
+    - type: worker
+      name: sentencinganalysis
       runtime: docker
       repo: https://github.com/carbidethegreate/sentencinganalysis
-      plan: pro
-      envVars:
-      - key: servers.json
-        sync: false
-      - key: pgpassfile
-        sync: false
-      - key: PORT
-        sync: false
-      - key: PGADMIN_SERVER_JSON_FILE
-        sync: false
-      - key: PGADMIN_LISTEN_PORT
-        sync: false
-      - key: PGADMIN_DEFAULT_PASSWORD
-        sync: false
-      - key: PGADMIN_DEFAULT_EMAIL
-        sync: false
-      - key: PGADMIN_DATABASE_USER
-        sync: false
-      - key: PGADMIN_DATABASE_NAME
-        sync: false
-      - key: PGADMIN_DATABASE_HOST
-        fromDatabase:
-          name: FSD
-          property: host
-      - key: GUNICORN_THREADS
-        sync: false
-      - fromGroup: sentencinganalysis-env
+      plan: starter
       region: oregon
       dockerContext: .
       dockerfilePath: ./Dockerfile
-      domains:
-      - www.courtdatapro.com
-      - courtdatapro.com
-      disk:
-        name: pgadmin
-        mountPath: /var/lib/pgadmin
-        sizeGB: 1
       autoDeployTrigger: commit
     - type: pserv
       name: sentencinganalysis
@@ -89,32 +74,47 @@ projects:
       dockerContext: .
       dockerfilePath: ./Dockerfile
       autoDeployTrigger: commit
-    - type: worker
-      name: sentencinganalysis
+    - type: web
+      name: Sent
       runtime: docker
       repo: https://github.com/carbidethegreate/sentencinganalysis
-      plan: starter
+      plan: pro
+      envVars:
+      - key: servers.json
+        sync: false
+      - key: pgpassfile
+        sync: false
+      - key: PORT
+        sync: false
+      - key: PGADMIN_SERVER_JSON_FILE
+        sync: false
+      - key: PGADMIN_LISTEN_PORT
+        sync: false
+      - key: PGADMIN_DEFAULT_PASSWORD
+        sync: false
+      - key: PGADMIN_DEFAULT_EMAIL
+        sync: false
+      - key: PGADMIN_DATABASE_USER
+        sync: false
+      - key: PGADMIN_DATABASE_NAME
+        sync: false
+      - key: PGADMIN_DATABASE_HOST
+        fromDatabase:
+          name: FSD
+          property: host
+      - key: GUNICORN_THREADS
+        sync: false
+      - fromGroup: sentencinganalysis-env
       region: oregon
       dockerContext: .
       dockerfilePath: ./Dockerfile
-      autoDeployTrigger: commit
-    - type: web
-      name: sentencinganalysis_python_3
-      runtime: python
-      repo: https://github.com/carbidethegreate/sentencinganalysis
-      plan: standard
-      region: oregon
-      buildCommand: pip install -r requirements.txt
-      startCommand: gunicorn app:app
-      autoDeployTrigger: commit
-    - type: web
-      name: sentencinganalysis_node
-      runtime: node
-      repo: https://github.com/carbidethegreate/sentencinganalysis
-      plan: starter
-      region: oregon
-      buildCommand: yarn
-      startCommand: yarn start
+      domains:
+      - www.courtdatapro.com
+      - courtdatapro.com
+      disk:
+        name: pgadmin
+        mountPath: /var/lib/pgadmin
+        sizeGB: 1
       autoDeployTrigger: commit
     - type: cron
       name: sentencinganalysis_dockerfile_cron_job
