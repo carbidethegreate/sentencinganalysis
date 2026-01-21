@@ -6,6 +6,7 @@
   <div class="card">
     <h1>Case Stage 1 Data</h1>
     <p class="small">Search, filter, and sort case stage 1 records.</p>
+    <div id="case-stage1-import-status" class="small" style="margin-top: 8px;"></div>
 
     <table id="case-stage1-table" class="display" style="width: 100%; margin-top: 16px;">
       <thead>
@@ -55,6 +56,46 @@
           {% endfor %}
         ]
       });
+
+      const statusEl = document.getElementById('case-stage1-import-status');
+      const statusUrl = '{{ url_for("admin_case_stage1_import_status") }}';
+
+      function renderStatus(payload) {
+        if (!statusEl) {
+          return;
+        }
+        if (!payload || payload.status === 'idle') {
+          statusEl.textContent = '';
+          return;
+        }
+        if (payload.status === 'processing') {
+          statusEl.textContent = 'Import status: processing...';
+          return;
+        }
+        if (payload.status === 'completed') {
+          statusEl.textContent = payload.message || 'Import completed.';
+          return;
+        }
+        if (payload.status === 'failed') {
+          statusEl.textContent = payload.message || 'Import failed.';
+          return;
+        }
+        statusEl.textContent = 'Import status: ' + payload.status;
+      }
+
+      function pollStatus() {
+        fetch(statusUrl, { credentials: 'same-origin' })
+          .then((response) => response.json())
+          .then((payload) => {
+            renderStatus(payload);
+            if (payload && payload.status === 'processing') {
+              setTimeout(pollStatus, 3000);
+            }
+          })
+          .catch(() => {});
+      }
+
+      pollStatus();
     });
   </script>
 {% endblock %}

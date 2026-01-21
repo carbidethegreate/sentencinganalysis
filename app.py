@@ -1,9 +1,10 @@
 import csv
 import hmac
-import io
 import os
 import re
 import secrets
+import tempfile
+import threading
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -219,6 +220,8 @@ def create_app() -> Flask:
     # Create the users/newsletter/case_stage1 tables if they don't exist.
     metadata.create_all(engine, tables=[users, newsletter_subscriptions, case_stage1])
 
+    case_stage1_imports: Dict[str, Dict[str, Any]] = {}
+
     # -----------------
     # Helpers
     # -----------------
@@ -341,7 +344,11 @@ def create_app() -> Flask:
         return Table("case_stage1", MetaData(), autoload_with=engine)
 
     def _upsert_case_stage1_batch(
-        conn: Any, table: Table, rows: List[Dict[str, Any]]
+        conn: Any,
+        table: Table,
+        rows: List[Dict[str, Any]],
+        *,
+        track_counts: bool = True,
     ) -> Tuple[int, int]:
         if not rows:
             return 0, 0
@@ -357,11 +364,14 @@ def create_app() -> Flask:
             stmt = stmt.on_conflict_do_update(
                 index_elements=[table.c.cs_caseid], set_=update_values
             )
-            stmt = stmt.returning(literal_column("xmax = 0").label("inserted"))
-            inserted_flags = conn.execute(stmt).scalars().all()
-            inserted_count = sum(1 for flag in inserted_flags if flag)
-            updated_count = len(inserted_flags) - inserted_count
-            return inserted_count, updated_count
+            if track_counts:
+                stmt = stmt.returning(literal_column("xmax = 0").label("inserted"))
+                inserted_flags = conn.execute(stmt).scalars().all()
+                inserted_count = sum(1 for flag in inserted_flags if flag)
+                updated_count = len(inserted_flags) - inserted_count
+                return inserted_count, updated_count
+            conn.execute(stmt)
+            return 0, 0
 
         ids = [row["cs_caseid"] for row in rows]
         existing_ids = set(
@@ -392,6 +402,147 @@ def create_app() -> Flask:
             )
             conn.execute(update_stmt, update_rows)
         return inserted_count, updated_count
+
+    def _set_case_stage1_import(job_id: str, **fields: Any) -> None:
+        case_stage1_imports.setdefault(job_id, {}).update(fields)
+
+    def _latest_case_stage1_import() -> Optional[Dict[str, Any]]:
+        latest_id = case_stage1_imports.get("latest")
+        if not latest_id:
+            return None
+        return case_stage1_imports.get(latest_id)
+
+    def _process_case_stage1_upload(job_id: str, file_path: str) -> None:
+        total_rows = 0
+        inserted_rows = 0
+        updated_rows = 0
+        skipped_rows = 0
+        error_rows = 0
+        processed_rows = 0
+
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+                reader = csv.reader(handle, delimiter="|")
+                raw_headers = next(reader, None)
+                if not raw_headers:
+                    raise ValueError("Uploaded file is missing a header row.")
+
+                headers = _normalize_case_stage1_headers(raw_headers)
+                if "cs_caseid" not in headers:
+                    raise ValueError("Uploaded file must include cs_caseid header.")
+
+                records_total_before = 0
+                if _is_postgres():
+                    with engine.connect() as conn:
+                        records_total_before = conn.execute(
+                            select(func.count()).select_from(case_stage1)
+                        ).scalar_one()
+
+                with engine.begin() as conn:
+                    case_stage1_table = _ensure_case_stage1_columns(conn, headers)
+                    _ensure_case_stage1_search_vector(conn)
+                    date_columns = {
+                        col.name for col in case_stage1_table.c if isinstance(col.type, Date)
+                    }
+                    data_columns = [
+                        col.name
+                        for col in case_stage1_table.c
+                        if col.name not in {"created_at", "updated_at", "search_vector"}
+                    ]
+
+                    batch: List[Dict[str, Any]] = []
+                    for row in reader:
+                        total_rows += 1
+                        row_data: Dict[str, Any] = {}
+                        for header, value in zip(headers, row):
+                            clean_value = value.strip()
+                            row_data[header] = clean_value if clean_value else None
+                        for column in data_columns:
+                            row_data.setdefault(column, None)
+
+                        case_id_raw = row_data.get("cs_caseid")
+                        try:
+                            row_data["cs_caseid"] = (
+                                int(case_id_raw) if case_id_raw is not None else None
+                            )
+                        except (TypeError, ValueError):
+                            skipped_rows += 1
+                            continue
+                        if row_data["cs_caseid"] is None:
+                            skipped_rows += 1
+                            continue
+
+                        for header in date_columns:
+                            row_data[header] = _parse_stage1_date(row_data.get(header))
+
+                        processed_rows += 1
+                        batch.append(row_data)
+                        if len(batch) >= CASE_STAGE1_CHUNK_SIZE:
+                            inserted, updated = _upsert_case_stage1_batch(
+                                conn,
+                                case_stage1_table,
+                                batch,
+                                track_counts=not _is_postgres(),
+                            )
+                            inserted_rows += inserted
+                            updated_rows += updated
+                            batch = []
+
+                    if batch:
+                        inserted, updated = _upsert_case_stage1_batch(
+                            conn,
+                            case_stage1_table,
+                            batch,
+                            track_counts=not _is_postgres(),
+                        )
+                        inserted_rows += inserted
+                        updated_rows += updated
+
+                if _is_postgres():
+                    with engine.connect() as conn:
+                        records_total_after = conn.execute(
+                            select(func.count()).select_from(case_stage1)
+                        ).scalar_one()
+                    inserted_rows = max(0, records_total_after - records_total_before)
+                    updated_rows = max(0, processed_rows - inserted_rows)
+
+            _set_case_stage1_import(
+                job_id,
+                status="completed",
+                completed_at=datetime.utcnow().isoformat(),
+                total_rows=total_rows,
+                inserted_rows=inserted_rows,
+                updated_rows=updated_rows,
+                skipped_rows=skipped_rows,
+                error_rows=error_rows,
+                message=(
+                    "Upload complete. "
+                    f"Total rows: {total_rows}. "
+                    f"Inserted: {inserted_rows}. "
+                    f"Updated: {updated_rows}. "
+                    f"Skipped: {skipped_rows}. "
+                    f"Errors: {error_rows}."
+                ),
+            )
+        except Exception:
+            app.logger.exception("Case stage 1 upload failed.")
+            error_rows += 1
+            _set_case_stage1_import(
+                job_id,
+                status="failed",
+                completed_at=datetime.utcnow().isoformat(),
+                total_rows=total_rows,
+                inserted_rows=inserted_rows,
+                updated_rows=updated_rows,
+                skipped_rows=skipped_rows,
+                error_rows=error_rows,
+                message="Upload failed. Please check the server logs for details.",
+            )
+        finally:
+            try:
+                os.remove(file_path)
+            except OSError:
+                app.logger.warning("Unable to remove uploaded file %s", file_path)
 
     def normalize_email(email: str) -> str:
         return email.strip().lower()
@@ -1095,93 +1246,27 @@ def create_app() -> Flask:
             flash("Only .txt or .csv files are supported.", "error")
             return redirect(url_for("admin_case_stage1_upload"))
 
-        total_rows = 0
-        inserted_rows = 0
-        updated_rows = 0
-        skipped_rows = 0
-        error_rows = 0
+        suffix = Path(uploaded.filename).suffix or ".txt"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            uploaded.save(temp_file.name)
+            temp_path = temp_file.name
 
-        try:
-            stream = io.TextIOWrapper(uploaded.stream, encoding="utf-8", errors="replace")
-            reader = csv.reader(stream, delimiter="|")
-            raw_headers = next(reader, None)
-            if not raw_headers:
-                flash("Uploaded file is missing a header row.", "error")
-                return redirect(url_for("admin_case_stage1_upload"))
-
-            headers = _normalize_case_stage1_headers(raw_headers)
-            if "cs_caseid" not in headers:
-                flash("Uploaded file must include cs_caseid header.", "error")
-                return redirect(url_for("admin_case_stage1_upload"))
-
-            with engine.begin() as conn:
-                case_stage1_table = _ensure_case_stage1_columns(conn, headers)
-                _ensure_case_stage1_search_vector(conn)
-                date_columns = {
-                    col.name for col in case_stage1_table.c if isinstance(col.type, Date)
-                }
-                data_columns = [
-                    col.name
-                    for col in case_stage1_table.c
-                    if col.name not in {"created_at", "updated_at", "search_vector"}
-                ]
-
-                batch: List[Dict[str, Any]] = []
-                for row in reader:
-                    total_rows += 1
-                    row_data: Dict[str, Any] = {}
-                    for header, value in zip(headers, row):
-                        clean_value = value.strip()
-                        row_data[header] = clean_value if clean_value else None
-                    for column in data_columns:
-                        row_data.setdefault(column, None)
-
-                    case_id_raw = row_data.get("cs_caseid")
-                    try:
-                        row_data["cs_caseid"] = int(case_id_raw) if case_id_raw is not None else None
-                    except (TypeError, ValueError):
-                        skipped_rows += 1
-                        continue
-                    if row_data["cs_caseid"] is None:
-                        skipped_rows += 1
-                        continue
-
-                    for header in date_columns:
-                        row_data[header] = _parse_stage1_date(row_data.get(header))
-
-                    batch.append(row_data)
-                    if len(batch) >= CASE_STAGE1_CHUNK_SIZE:
-                        inserted, updated = _upsert_case_stage1_batch(
-                            conn, case_stage1_table, batch
-                        )
-                        inserted_rows += inserted
-                        updated_rows += updated
-                        batch = []
-
-                if batch:
-                    inserted, updated = _upsert_case_stage1_batch(
-                        conn, case_stage1_table, batch
-                    )
-                    inserted_rows += inserted
-                    updated_rows += updated
-
-        except Exception:
-            app.logger.exception("Case stage 1 upload failed.")
-            error_rows += 1
-            flash("Upload failed. Please check the server logs for details.", "error")
-            return redirect(url_for("admin_case_stage1_upload"))
-
-        flash(
-            (
-                "Upload complete. "
-                f"Total rows: {total_rows}. "
-                f"Inserted: {inserted_rows}. "
-                f"Updated: {updated_rows}. "
-                f"Skipped: {skipped_rows}. "
-                f"Errors: {error_rows}."
-            ),
-            "success",
+        job_id = secrets.token_urlsafe(8)
+        case_stage1_imports["latest"] = job_id
+        _set_case_stage1_import(
+            job_id,
+            status="processing",
+            started_at=datetime.utcnow().isoformat(),
+            original_filename=uploaded.filename,
+            message="Upload started. Processing in the background.",
         )
+
+        thread = threading.Thread(
+            target=_process_case_stage1_upload, args=(job_id, temp_path), daemon=True
+        )
+        thread.start()
+
+        flash("Upload started. Processing in the background.", "success")
         return redirect(url_for("admin_case_stage1_list"))
 
     @app.get("/admin/case-stage1")
@@ -1257,6 +1342,14 @@ def create_app() -> Flask:
                 "data": [dict(row) for row in rows],
             }
         )
+
+    @app.get("/admin/case-stage1/import-status")
+    @admin_required
+    def admin_case_stage1_import_status():
+        latest = _latest_case_stage1_import()
+        if not latest:
+            return jsonify({"status": "idle"})
+        return jsonify(latest)
 
     @app.post("/admin/logout")
     def admin_logout():
