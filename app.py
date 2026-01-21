@@ -44,7 +44,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy import text as sa_text
-from sqlalchemy.exc import IntegrityError, NoSuchTableError
+from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
@@ -269,7 +269,13 @@ def create_app() -> Flask:
     )
 
     # Create the users/newsletter/case_stage1 tables if they don't exist.
-    metadata.create_all(engine, tables=[users, newsletter_subscriptions, case_stage1])
+    try:
+        metadata.create_all(engine, tables=[users, newsletter_subscriptions, case_stage1])
+    except OperationalError as exc:
+        if "already exists" in str(exc).lower():
+            app.logger.warning("Database tables already exist; skipping create_all.")
+        else:
+            raise
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
 
