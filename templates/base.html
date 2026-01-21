@@ -9,7 +9,17 @@
   <body>
     <header>
       <div class="nav">
-        <a class="brand" href="{{ url_for('home') }}">CourtDataPro</a>
+        <a class="brand" href="{{ url_for('home') }}">
+          <img
+            class="brand-logo"
+            src="https://imagedelivery.net/MqlML99ManDWvfuYMb9PmQ/0d80a4a7-e702-4867-2e41-9356c5db7b00/public"
+            alt="CourtDataPro.com"
+          />
+          <span class="brand-text">
+            <span class="brand-text-primary">Court</span>
+            <span class="brand-text-secondary">DataPro</span>
+          </span>
+        </a>
 
         <nav class="nav-links">
           <a href="{{ url_for('home') }}" class="{% if active_page == 'home' %}active{% endif %}">Home</a>
