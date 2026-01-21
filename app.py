@@ -40,7 +40,6 @@ from sqlalchemy import (
     func,
     insert,
     literal_column,
-    or_,
     select,
     update,
 )
@@ -51,6 +50,28 @@ from werkzeug.security import check_password_hash, generate_password_hash
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
 CASE_STAGE1_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 CASE_STAGE1_CHUNK_SIZE = 1000
+CASE_STAGE1_DISPLAY_COLUMNS = [
+    "cs_caseid",
+    "cs_case_number",
+    "cs_case_type",
+    "cs_file_date",
+    "cs_short_title",
+    "cs_party_last_name",
+    "cs_court_location",
+    "updated_at",
+]
+CASE_STAGE1_IMPORT_COLUMNS = [
+    "cs_caseid",
+    "cs_case_number",
+    "cs_case_type",
+    "cs_file_date",
+    "cs_short_title",
+    "lead_short_title",
+    "cs_party_last_name",
+    "cs_court_location",
+]
+CASE_STAGE1_DATE_COLUMNS = {"cs_file_date"}
+CASE_STAGE1_HEADER_ALIASES = {"cs_date_filed": "cs_file_date"}
 
 USER_TYPES = [
     "Attorney, Solo Practitioner",
@@ -207,6 +228,9 @@ def create_app() -> Flask:
         "case_stage1",
         metadata,
         Column("cs_caseid", Integer, primary_key=True),
+        Column("cs_case_number", Text, nullable=True),
+        Column("cs_case_type", Text, nullable=True),
+        Column("cs_file_date", Date, nullable=True),
         Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
         Column(
             "updated_at",
@@ -215,6 +239,11 @@ def create_app() -> Flask:
             onupdate=func.now(),
             nullable=False,
         ),
+        Column("cs_short_title", Text, nullable=True),
+        Column("lead_short_title", Text, nullable=True),
+        Column("cs_party_last_name", Text, nullable=True),
+        Column("cs_court_location", Text, nullable=True),
+        Column("search_text", Text, nullable=True),
     )
 
     # Create the users/newsletter/case_stage1 tables if they don't exist.
@@ -275,73 +304,39 @@ def create_app() -> Flask:
                 continue
             counts[name] = counts.get(name, 0) + 1
             if name == "cs_short_title" and counts[name] == 2:
-                normalized.append("lead_short_title")
-            elif counts[name] == 1:
-                normalized.append(name)
-            else:
-                normalized.append(f"{name}_{counts[name]}")
+                name = "lead_short_title"
+            elif counts[name] > 1:
+                name = f"{name}_{counts[name]}"
+            name = CASE_STAGE1_HEADER_ALIASES.get(name, name)
+            normalized.append(name)
         return normalized
 
-    def _infer_case_stage1_type(column_name: str) -> Any:
-        if column_name == "cs_caseid":
-            return Integer
-        if "date" in column_name:
-            return Date
-        return Text
-
-    def _ensure_case_stage1_columns(conn: Any, headers: Sequence[str]) -> Table:
-        current = Table("case_stage1", MetaData(), autoload_with=engine)
-        existing = set(current.c.keys())
-        for header in headers:
-            if header in existing:
-                continue
-            column_type = _infer_case_stage1_type(header)
-            if column_type is Date:
-                sql_type = "DATE"
-            elif column_type is Integer:
-                sql_type = "INTEGER"
-            else:
-                sql_type = "TEXT"
-            conn.execute(sa_text(f"ALTER TABLE case_stage1 ADD COLUMN {header} {sql_type}"))
-            existing.add(header)
-        return Table("case_stage1", MetaData(), autoload_with=engine)
-
-    def _ensure_case_stage1_search_vector(conn: Any) -> None:
+    def _ensure_case_stage1_search_index() -> None:
         if not _is_postgres():
             return
         try:
-            reflected = Table("case_stage1", MetaData(), autoload_with=engine)
-            if "search_vector" in reflected.c:
-                return
-            text_columns = [
-                col.name
-                for col in reflected.c
-                if isinstance(col.type, (Text, String))
-                and col.name not in {"created_at", "updated_at"}
-            ]
-            if not text_columns:
-                return
-            concatenated = " || ' ' || ".join(
-                f"coalesce({name}, '')" for name in text_columns
-            )
-            conn.execute(
-                sa_text(
-                    "ALTER TABLE case_stage1 "
-                    "ADD COLUMN IF NOT EXISTS search_vector tsvector "
-                    f"GENERATED ALWAYS AS (to_tsvector('english', {concatenated})) STORED"
+            with engine.begin() as conn:
+                conn.execute(
+                    sa_text(
+                        "CREATE INDEX IF NOT EXISTS case_stage1_search_idx "
+                        "ON case_stage1 USING GIN "
+                        "(to_tsvector('english', coalesce(search_text, '')))"
+                    )
                 )
-            )
-            conn.execute(
-                sa_text(
-                    "CREATE INDEX IF NOT EXISTS case_stage1_search_vector_idx "
-                    "ON case_stage1 USING GIN(search_vector)"
-                )
-            )
         except Exception:
-            app.logger.exception("Unable to create case_stage1 search vector/index.")
+            app.logger.exception("Unable to create case_stage1 search index.")
 
-    def _get_case_stage1_table() -> Table:
-        return Table("case_stage1", MetaData(), autoload_with=engine)
+    def _build_case_stage1_search_text(row_data: Dict[str, Any]) -> Optional[str]:
+        parts: List[str] = []
+        for column in CASE_STAGE1_IMPORT_COLUMNS:
+            value = row_data.get(column)
+            if value is None:
+                continue
+            text_value = str(value).strip()
+            if not text_value:
+                continue
+            parts.append(text_value.lower())
+        return " ".join(parts) if parts else None
 
     def _upsert_case_stage1_batch(
         conn: Any,
@@ -358,7 +353,7 @@ def create_app() -> Flask:
                 col.name: stmt.excluded[col.name]
                 for col in table.c
                 if col.name
-                not in {"cs_caseid", "created_at", "updated_at", "search_vector"}
+                not in {"cs_caseid", "created_at", "updated_at"}
             }
             update_values["updated_at"] = func.now()
             stmt = stmt.on_conflict_do_update(
@@ -392,7 +387,7 @@ def create_app() -> Flask:
                 col.name: bindparam(col.name)
                 for col in table.c
                 if col.name
-                not in {"cs_caseid", "created_at", "updated_at", "search_vector"}
+                not in {"cs_caseid", "created_at", "updated_at"}
             }
             update_stmt = (
                 update(table)
@@ -412,6 +407,8 @@ def create_app() -> Flask:
             return None
         return case_stage1_imports.get(latest_id)
 
+    _ensure_case_stage1_search_index()
+
     def _process_case_stage1_upload(job_id: str, file_path: str) -> None:
         total_rows = 0
         inserted_rows = 0
@@ -430,31 +427,31 @@ def create_app() -> Flask:
                 headers = _normalize_case_stage1_headers(raw_headers)
                 if "cs_caseid" not in headers:
                     raise ValueError("Uploaded file must include cs_caseid header.")
-
-                records_total_before = 0
                 if _is_postgres():
                     with engine.connect() as conn:
                         records_total_before = conn.execute(
                             select(func.count()).select_from(case_stage1)
                         ).scalar_one()
+                else:
+                    records_total_before = 0
+
+                header_columns = [
+                    header if header in CASE_STAGE1_IMPORT_COLUMNS else None
+                    for header in headers
+                ]
 
                 with engine.begin() as conn:
-                    case_stage1_table = _ensure_case_stage1_columns(conn, headers)
-                    _ensure_case_stage1_search_vector(conn)
-                    date_columns = {
-                        col.name for col in case_stage1_table.c if isinstance(col.type, Date)
-                    }
-                    data_columns = [
-                        col.name
-                        for col in case_stage1_table.c
-                        if col.name not in {"created_at", "updated_at", "search_vector"}
-                    ]
+                    case_stage1_table = case_stage1
+                    date_columns = CASE_STAGE1_DATE_COLUMNS
+                    data_columns = CASE_STAGE1_IMPORT_COLUMNS
 
                     batch: List[Dict[str, Any]] = []
                     for row in reader:
                         total_rows += 1
-                        row_data: Dict[str, Any] = {}
-                        for header, value in zip(headers, row):
+                        row_data: Dict[str, Any] = {column: None for column in data_columns}
+                        for header, value in zip(header_columns, row):
+                            if not header:
+                                continue
                             clean_value = value.strip()
                             row_data[header] = clean_value if clean_value else None
                         for column in data_columns:
@@ -474,6 +471,7 @@ def create_app() -> Flask:
 
                         for header in date_columns:
                             row_data[header] = _parse_stage1_date(row_data.get(header))
+                        row_data["search_text"] = _build_case_stage1_search_text(row_data)
 
                         processed_rows += 1
                         batch.append(row_data)
@@ -1272,15 +1270,15 @@ def create_app() -> Flask:
     @app.get("/admin/case-stage1")
     @admin_required
     def admin_case_stage1_list():
-        case_stage1_table = _get_case_stage1_table()
-        columns = [col.name for col in case_stage1_table.c if col.name != "search_vector"]
-        return render_template("admin_case_stage1_list.html", columns=columns)
+        return render_template(
+            "admin_case_stage1_list.html", columns=CASE_STAGE1_DISPLAY_COLUMNS
+        )
 
     @app.get("/admin/case-stage1/data")
     @admin_required
     def admin_case_stage1_data():
-        case_stage1_table = _get_case_stage1_table()
-        columns = [col.name for col in case_stage1_table.c if col.name != "search_vector"]
+        case_stage1_table = case_stage1
+        columns = CASE_STAGE1_DISPLAY_COLUMNS
         draw = int(request.args.get("draw", 1))
         start = max(int(request.args.get("start", 0)), 0)
         length = min(int(request.args.get("length", 25)), 200)
@@ -1295,35 +1293,31 @@ def create_app() -> Flask:
         order_column_name = columns[order_index] if order_index < len(columns) else "cs_caseid"
         order_column = case_stage1_table.c.get(order_column_name, case_stage1_table.c.cs_caseid)
 
-        base_query = select(case_stage1_table)
-        count_query = select(func.count()).select_from(case_stage1_table)
+        selected_columns = [case_stage1_table.c[name] for name in columns]
+        base_query = select(*selected_columns)
 
         if search_value:
-            if _is_postgres() and "search_vector" in case_stage1_table.c:
-                search_filter = case_stage1_table.c.search_vector.op("@@")(
-                    func.plainto_tsquery("english", search_value)
-                )
+            if _is_postgres():
+                search_filter = func.to_tsvector(
+                    "english", func.coalesce(case_stage1_table.c.search_text, "")
+                ).op("@@")(func.plainto_tsquery("english", search_value))
             else:
-                like_term = f"%{search_value}%"
-                searchable = [
-                    col
-                    for col in case_stage1_table.c
-                    if isinstance(col.type, (Text, String))
-                    and col.name not in {"search_vector"}
-                ]
-                if not searchable:
-                    search_filter = case_stage1_table.c.cs_caseid == -1
-                elif _is_postgres():
-                    search_filter = or_(*[col.ilike(like_term) for col in searchable])
-                else:
-                    search_filter = or_(*[col.like(like_term) for col in searchable])
+                like_term = f"%{search_value.lower()}%"
+                search_filter = func.lower(
+                    func.coalesce(case_stage1_table.c.search_text, "")
+                ).like(like_term)
             base_query = base_query.where(search_filter)
-            count_query = count_query.where(search_filter)
-
-        if order_dir == "desc":
-            base_query = base_query.order_by(order_column.desc())
+            count_query = select(func.count()).select_from(case_stage1_table).where(search_filter)
         else:
-            base_query = base_query.order_by(order_column.asc())
+            count_query = select(func.count()).select_from(case_stage1_table)
+
+        if search_value:
+            if order_dir == "desc":
+                base_query = base_query.order_by(order_column.desc())
+            else:
+                base_query = base_query.order_by(order_column.asc())
+        else:
+            base_query = base_query.order_by(case_stage1_table.c.cs_caseid.desc())
 
         base_query = base_query.limit(length).offset(start)
 
@@ -1331,7 +1325,10 @@ def create_app() -> Flask:
             records_total = conn.execute(
                 select(func.count()).select_from(case_stage1_table)
             ).scalar_one()
-            records_filtered = conn.execute(count_query).scalar_one()
+            if search_value:
+                records_filtered = conn.execute(count_query).scalar_one()
+            else:
+                records_filtered = records_total
             rows = conn.execute(base_query).mappings().all()
 
         return jsonify(
