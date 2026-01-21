@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Admin | Case Stage 1 Data{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <h1>Case Stage 1 Data</h1>
+    <p class="small">Search, filter, and sort case stage 1 records.</p>
+
+    <table id="case-stage1-table" class="display" style="width: 100%; margin-top: 16px;">
+      <thead>
+        <tr>
+          {% for column in columns %}
+            <th>{{ column }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+    </table>
+  </div>
+
+  <style>
+    .dataTables_wrapper .dataTables_filter input {
+      border-radius: 999px;
+      border: 1px solid #d6d6d6;
+      padding: 6px 10px;
+    }
+
+    table.dataTable {
+      border-collapse: collapse;
+    }
+
+    table.dataTable thead th {
+      background: #f5f5f5;
+    }
+  </style>
+
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+  <script>
+    $(document).ready(function () {
+      $('#case-stage1-table').DataTable({
+        serverSide: true,
+        processing: true,
+        searchDelay: 250,
+        pageLength: 25,
+        lengthMenu: [25, 50, 100],
+        ajax: {
+          url: '{{ url_for("admin_case_stage1_data") }}',
+          dataSrc: 'data'
+        },
+        columns: [
+          {% for column in columns %}
+            { data: '{{ column }}' }{% if not loop.last %},{% endif %}
+          {% endfor %}
+        ]
+      });
+    });
+  </script>
+{% endblock %}
