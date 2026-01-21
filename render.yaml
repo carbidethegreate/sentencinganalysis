@@ -1,0 +1,47 @@
+# Exported from Render on 2026-01-21T17:22:19Z
+version: "1"
+projects:
+- name: SentencingAnalysis
+  environments:
+  - name: Production
+    services:
+    - type: web
+      name: Sent
+      runtime: docker
+      repo: https://github.com/carbidethegreate/sentencinganalysis
+      plan: pro
+      envVars:
+      - key: servers.json
+        sync: false
+      - key: pgpassfile
+        sync: false
+      - key: PORT
+        sync: false
+      - key: PGADMIN_SERVER_JSON_FILE
+        sync: false
+      - key: PGADMIN_LISTEN_PORT
+        sync: false
+      - key: PGADMIN_DEFAULT_PASSWORD
+        sync: false
+      - key: PGADMIN_DEFAULT_EMAIL
+        sync: false
+      - key: PGADMIN_DATABASE_USER
+        sync: false
+      - key: PGADMIN_DATABASE_NAME
+        sync: false
+      - key: PGADMIN_DATABASE_HOST
+        sync: false
+      - key: GUNICORN_THREADS
+        sync: false
+      - fromGroup: sentencinganalysis-env
+      region: oregon
+      dockerContext: .
+      dockerfilePath: ./Dockerfile
+      domains:
+      - www.courtdatapro.com
+      - courtdatapro.com
+      disk:
+        name: pgadmin
+        mountPath: /var/lib/pgadmin
+        sizeGB: 1
+      autoDeployTrigger: commit
