@@ -51,7 +51,7 @@ def main():
 
         sample = "".join(
             [
-                "cs_caseid|cs_case_number|cs_short_title|cs_short_title|cs_date_filed\n",
+                "cs_caseid|cs_case_number|cs_short_title|cs_short_title|cs_file_date\n",
                 "1|2024-001|Alpha|Lead Alpha|01/02/2024\n",
                 "2|2024-002|Beta|Lead Beta|02/03/2024\n",
             ]
