@@ -38,6 +38,7 @@ from sqlalchemy import (
     delete,
     func,
     insert,
+    literal_column,
     or_,
     select,
     update,
@@ -344,12 +345,6 @@ def create_app() -> Flask:
     ) -> Tuple[int, int]:
         if not rows:
             return 0, 0
-        ids = [row["cs_caseid"] for row in rows]
-        existing_ids = set(
-            conn.execute(select(table.c.cs_caseid).where(table.c.cs_caseid.in_(ids))).scalars()
-        )
-        inserted_count = len(rows) - len(existing_ids)
-        updated_count = len(existing_ids)
         if _is_postgres():
             stmt = insert(table).values(rows)
             update_values = {
@@ -362,9 +357,18 @@ def create_app() -> Flask:
             stmt = stmt.on_conflict_do_update(
                 index_elements=[table.c.cs_caseid], set_=update_values
             )
-            conn.execute(stmt)
+            stmt = stmt.returning(literal_column("xmax = 0").label("inserted"))
+            inserted_flags = conn.execute(stmt).scalars().all()
+            inserted_count = sum(1 for flag in inserted_flags if flag)
+            updated_count = len(inserted_flags) - inserted_count
             return inserted_count, updated_count
 
+        ids = [row["cs_caseid"] for row in rows]
+        existing_ids = set(
+            conn.execute(select(table.c.cs_caseid).where(table.c.cs_caseid.in_(ids))).scalars()
+        )
+        inserted_count = len(rows) - len(existing_ids)
+        updated_count = len(existing_ids)
         insert_rows = [row for row in rows if row["cs_caseid"] not in existing_ids]
         update_rows = [
             {**row, "b_cs_caseid": row["cs_caseid"]}
