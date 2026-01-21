@@ -1,23 +1,35 @@
 {% extends "base.html" %}
 
 {% block title %}Home | CourtDataPro{% endblock %}
+{% block main_class %}coming-soon{% endblock %}
 
 {% block content %}
-  <div class="card">
-    <h1>CourtDataPro</h1>
-    <p class="small">
-      This site is now served dynamically from Flask. The home page is intentionally simple so we can expand the dashboard features next.
+  <section class="coming-soon-card">
+    <img
+      class="coming-soon-logo"
+      src="https://imagedelivery.net/MqlML99ManDWvfuYMb9PmQ/0d80a4a7-e702-4867-2e41-9356c5db7b00/public"
+      alt="CourtDataPro logo"
+    />
+    <h1 class="coming-soon-heading">We’re crafting the practice of law, one tool at a time.</h1>
+    <p class="coming-soon-text">
+      A modern legal platform is taking shape. We are carefully building practical, reliable tools designed to
+      simplify workflows, surface critical court data, and support smarter legal decisions. Every detail is
+      intentional, and we look forward to sharing what is coming next.
     </p>
 
-    {% if not current_user %}
-      <div class="actions" style="margin-top: 16px;">
-        <a class="pill" href="{{ url_for('signup') }}">Create an account</a>
-        <a class="pill" href="{{ url_for('login') }}">Log in</a>
-      </div>
-    {% else %}
-      <p style="margin-top: 16px;">
-        Go to your <a href="{{ url_for('dashboard') }}">Dashboard</a>.
-      </p>
-    {% endif %}
-  </div>
+    <div class="coming-soon-details">
+      <div class="coming-soon-detail">Launching soon</div>
+      <div class="coming-soon-detail">Built for legal professionals</div>
+      <div class="coming-soon-detail">Court data you can trust</div>
+    </div>
+
+    <form class="coming-soon-form">
+      <input type="email" placeholder="Enter your email to stay informed" aria-label="Email address" />
+      <button type="submit">Notify me</button>
+    </form>
+
+    <p class="coming-soon-footer">
+      Get updates on our upcoming launch, product announcements, and early access opportunities.
+    </p>
+  </section>
 {% endblock %}
