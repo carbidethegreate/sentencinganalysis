@@ -38,6 +38,7 @@ from sqlalchemy import (
     create_engine,
     delete,
     func,
+    inspect,
     insert,
     literal_column,
     select,
@@ -95,6 +96,7 @@ CASE_DATA_ONE_IMPORT_COLUMNS = [
     "cs_date_term",
     "cs_date_reopen",
     "cs_type",
+    "cs_type_normalized",
     "cs_case_restriction",
     "lead_caseid",
     "lead_case_number",
@@ -105,13 +107,23 @@ CASE_DATA_ONE_IMPORT_COLUMNS = [
     "office_trans",
     "pre_judge_name",
     "ref_judge_name",
+    "cs_case_office",
+    "cs_case_year",
+    "cs_case_type_code",
+    "cs_case_number_seq",
     "cs_sort_case_numb",
     "cs_def_num",
     "cs_term_digit",
     "party",
+    "party_normalized",
+    "party_type",
+    "party_type_normalized",
+    "party_role",
+    "party_role_normalized",
     "party_start_date",
     "party_end_date",
     "party_def_num",
+    "party_def_num_normalized",
     "loc_date_start",
     "loc_date_end",
 ]
@@ -132,7 +144,11 @@ CASE_DATA_ONE_ERROR_DETAIL_LIMIT = 200
 CASE_DATA_ONE_SEARCH_COLUMNS = [
     "cs_case_number",
     "cs_short_title",
+    "cs_type",
+    "cs_type_normalized",
     "party",
+    "party_type",
+    "party_role",
     "pre_judge_name",
     "ref_judge_name",
 ]
@@ -143,7 +159,16 @@ CASE_DATA_ONE_CARD_FIELDS = [
     "cs_date_filed",
     "cs_date_term",
     "cs_type",
+    "cs_type_normalized",
+    "cs_case_year",
+    "cs_case_type_code",
+    "cs_case_number_seq",
+    "cs_case_office",
+    "cs_term_digit",
     "party",
+    "party_type",
+    "party_role",
+    "party_def_num",
     "pre_judge_name",
     "ref_judge_name",
 ]
@@ -176,6 +201,8 @@ USER_TYPES = [
     "Software Vendor, Integration Partner",
     "Other",
 ]
+
+VALID_JURISDICTION_TYPES = {"cr"}
 
 
 def _first_env(*names: str) -> Optional[str]:
@@ -382,6 +409,7 @@ def create_app() -> Flask:
         Column("cs_date_term", Date, nullable=True),
         Column("cs_date_reopen", Date, nullable=True),
         Column("cs_type", Text, nullable=True),
+        Column("cs_type_normalized", Text, nullable=True),
         Column("cs_case_restriction", Text, nullable=True),
         Column("lead_caseid", Text, nullable=True),
         Column("lead_case_number", Text, nullable=True),
@@ -392,13 +420,23 @@ def create_app() -> Flask:
         Column("office_trans", Text, nullable=True),
         Column("pre_judge_name", Text, nullable=True),
         Column("ref_judge_name", Text, nullable=True),
+        Column("cs_case_office", Text, nullable=True),
+        Column("cs_case_year", Text, nullable=True),
+        Column("cs_case_type_code", Text, nullable=True),
+        Column("cs_case_number_seq", Text, nullable=True),
         Column("cs_sort_case_numb", Text, nullable=True),
         Column("cs_def_num", Text, nullable=True),
         Column("cs_term_digit", Text, nullable=True),
         Column("party", Text, nullable=True),
+        Column("party_normalized", Text, nullable=True),
+        Column("party_type", Text, nullable=True),
+        Column("party_type_normalized", Text, nullable=True),
+        Column("party_role", Text, nullable=True),
+        Column("party_role_normalized", Text, nullable=True),
         Column("party_start_date", Date, nullable=True),
         Column("party_end_date", Date, nullable=True),
         Column("party_def_num", Text, nullable=True),
+        Column("party_def_num_normalized", Text, nullable=True),
         Column("loc_date_start", Date, nullable=True),
         Column("loc_date_end", Date, nullable=True),
     )
@@ -413,6 +451,46 @@ def create_app() -> Flask:
             app.logger.warning("Database tables already exist; skipping create_all.")
         else:
             raise
+
+    def _ensure_case_data_one_columns() -> None:
+        column_specs = {
+            "cs_type_normalized": "TEXT",
+            "cs_case_office": "TEXT",
+            "cs_case_year": "TEXT",
+            "cs_case_type_code": "TEXT",
+            "cs_case_number_seq": "TEXT",
+            "party_normalized": "TEXT",
+            "party_type": "TEXT",
+            "party_type_normalized": "TEXT",
+            "party_role": "TEXT",
+            "party_role_normalized": "TEXT",
+            "party_def_num_normalized": "TEXT",
+        }
+        try:
+            inspector = inspect(engine)
+            existing_columns = {
+                column["name"] for column in inspector.get_columns("case_data_one")
+            }
+        except Exception:
+            app.logger.exception("Unable to inspect case_data_one columns.")
+            return
+
+        missing = [name for name in column_specs if name not in existing_columns]
+        if not missing:
+            return
+
+        try:
+            with engine.begin() as conn:
+                for name in missing:
+                    conn.execute(
+                        sa_text(
+                            f"ALTER TABLE case_data_one ADD COLUMN {name} {column_specs[name]}"
+                        )
+                    )
+        except Exception:
+            app.logger.exception("Unable to add missing case_data_one columns.")
+
+    _ensure_case_data_one_columns()
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
@@ -468,6 +546,66 @@ def create_app() -> Flask:
             return datetime.strptime(value.strip(), "%m/%d/%Y").date()
         except ValueError:
             return None
+
+    def _normalize_text(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned.lower() if cleaned else None
+
+    def _normalize_party_def_num(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = re.sub(r"[^0-9]", "", value)
+        if not cleaned:
+            return None
+        try:
+            return str(int(cleaned))
+        except ValueError:
+            return None
+
+    def _normalize_case_type(value: Optional[str]) -> Optional[str]:
+        normalized = _normalize_text(value)
+        if not normalized:
+            return None
+        if normalized in VALID_JURISDICTION_TYPES:
+            return normalized
+        return None
+
+    def _parse_case_number_components(value: Optional[str]) -> Dict[str, Optional[str]]:
+        if not value:
+            return {}
+        raw = value.strip().lower()
+        if not raw:
+            return {}
+        office = None
+        office_match = re.match(r"^(?P<office>\d)\s*:\s*(?P<rest>.+)$", raw)
+        if office_match:
+            office = office_match.group("office")
+            raw = office_match.group("rest")
+        compact = re.sub(r"[\s\-]", "", raw)
+        match = re.match(
+            r"^(?P<year>\d{2,4})(?P<case_type>[a-z0-9]{1,2})?(?P<number>\d{1,5})$",
+            compact,
+        )
+        if not match:
+            return {}
+        year = match.group("year")
+        case_type = match.group("case_type") or None
+        number = match.group("number")
+        normalized_year = year
+        if len(year) == 2:
+            normalized_year = f"20{year}"
+        term_digit = normalized_year[-1] if normalized_year else None
+        sort_key = f"{office or '0'}:{normalized_year}-{case_type or ''}-{number.zfill(5)}"
+        return {
+            "cs_case_office": office,
+            "cs_case_year": normalized_year,
+            "cs_case_type_code": case_type,
+            "cs_case_number_seq": number,
+            "cs_term_digit": term_digit,
+            "cs_sort_case_numb": sort_key,
+        }
 
     def _normalize_case_stage1_headers(raw_headers: Sequence[str]) -> List[str]:
         normalized: List[str] = []
@@ -541,7 +679,11 @@ def create_app() -> Flask:
             search_expression = (
                 "coalesce(cs_case_number, '') || ' ' || "
                 "coalesce(cs_short_title, '') || ' ' || "
+                "coalesce(cs_type, '') || ' ' || "
+                "coalesce(cs_type_normalized, '') || ' ' || "
                 "coalesce(party, '') || ' ' || "
+                "coalesce(party_type, '') || ' ' || "
+                "coalesce(party_role, '') || ' ' || "
                 "coalesce(pre_judge_name, '') || ' ' || "
                 "coalesce(ref_judge_name, '')"
             )
@@ -702,6 +844,42 @@ def create_app() -> Flask:
         if len(error_details) >= CASE_DATA_ONE_ERROR_DETAIL_LIMIT:
             return
         error_details.append({"row_number": row_number, "message": message})
+
+    def _apply_case_data_one_classifications(
+        row_data: Dict[str, Any],
+        *,
+        row_number: int,
+        error_details: List[Dict[str, Any]],
+    ) -> int:
+        error_count = 0
+        parsed_case = _parse_case_number_components(row_data.get("cs_case_number"))
+        if parsed_case:
+            row_data.update(parsed_case)
+        elif row_data.get("cs_case_number"):
+            _record_case_data_one_error(
+                error_details,
+                row_number=row_number,
+                message="Unable to parse cs_case_number components.",
+            )
+            error_count += 1
+
+        normalized_case_type = _normalize_case_type(row_data.get("cs_type"))
+        row_data["cs_type_normalized"] = normalized_case_type
+        if row_data.get("cs_type") and normalized_case_type is None:
+            _record_case_data_one_error(
+                error_details,
+                row_number=row_number,
+                message="Invalid cs_type value; expected cr.",
+            )
+            error_count += 1
+
+        row_data["party_normalized"] = _normalize_text(row_data.get("party"))
+        row_data["party_type_normalized"] = _normalize_text(row_data.get("party_type"))
+        row_data["party_role_normalized"] = _normalize_text(row_data.get("party_role"))
+        row_data["party_def_num_normalized"] = _normalize_party_def_num(
+            row_data.get("party_def_num")
+        )
+        return error_count
 
     def _process_case_stage1_upload(job_id: str, file_path: str) -> None:
         total_rows = 0
@@ -928,6 +1106,13 @@ def create_app() -> Flask:
                                 row_data[header] = _parse_case_data_one_date(
                                     row_data.get(header)
                                 )
+                            validation_errors = _apply_case_data_one_classifications(
+                                row_data,
+                                row_number=row_index,
+                                error_details=error_details,
+                            )
+                            if validation_errors:
+                                error_rows += validation_errors
 
                             processed_rows += 1
                             batch.append(row_data)
@@ -1926,11 +2111,25 @@ def create_app() -> Flask:
         page = max(int(request.args.get("page", 1)), 1)
         per_page = min(max(int(request.args.get("per_page", 12)), 1), 100)
         search_value = request.args.get("search", "").strip()
+        case_type = request.args.get("case_type", "").strip().lower()
+        party_role = request.args.get("party_role", "").strip().lower()
+        party_type = request.args.get("party_type", "").strip().lower()
+        case_year = request.args.get("case_year", "").strip()
         offset = (page - 1) * per_page
 
         selected_columns = [case_data_one_table.c[name] for name in columns]
         base_query = select(*selected_columns)
         search_expression = _case_data_one_search_text_expression(case_data_one_table)
+        filters = []
+
+        if case_type:
+            filters.append(case_data_one_table.c.cs_type_normalized == case_type)
+        if party_role:
+            filters.append(case_data_one_table.c.party_role_normalized == party_role)
+        if party_type:
+            filters.append(case_data_one_table.c.party_type_normalized == party_type)
+        if case_year:
+            filters.append(case_data_one_table.c.cs_case_year == case_year)
 
         if search_value:
             if _is_postgres():
@@ -1940,9 +2139,12 @@ def create_app() -> Flask:
             else:
                 like_term = f"%{search_value.lower()}%"
                 search_filter = func.lower(search_expression).like(like_term)
-            base_query = base_query.where(search_filter)
-            count_query = select(func.count()).select_from(case_data_one_table).where(
-                search_filter
+            filters.append(search_filter)
+
+        if filters:
+            base_query = base_query.where(*filters)
+            count_query = (
+                select(func.count()).select_from(case_data_one_table).where(*filters)
             )
         else:
             count_query = select(func.count()).select_from(case_data_one_table)

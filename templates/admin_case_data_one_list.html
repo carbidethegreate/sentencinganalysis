@@ -11,14 +11,37 @@
         <div id="case-data-one-import-status" class="small" style="margin-top: 8px;"></div>
       </div>
       <form id="case-data-one-search" class="case-data-one-search">
-        <input
-          type="search"
-          name="search"
-          id="case-data-one-search-input"
-          placeholder="Search case number, short title, party, or judge names..."
-          aria-label="Search Case Data One"
-        />
-        <button type="submit">Search</button>
+        <div class="case-data-one-search__row">
+          <input
+            type="search"
+            name="search"
+            id="case-data-one-search-input"
+            placeholder="Search case number, short title, party, or judge names..."
+            aria-label="Search Case Data One"
+          />
+          <button type="submit">Search</button>
+        </div>
+        <div class="case-data-one-search__filters">
+          <label>
+            <span class="small">Case Type</span>
+            <select id="case-data-one-filter-type" name="case_type">
+              <option value="">All</option>
+              <option value="cr">Criminal (cr)</option>
+            </select>
+          </label>
+          <label>
+            <span class="small">Party Role</span>
+            <input type="text" id="case-data-one-filter-role" name="party_role" placeholder="e.g., def" />
+          </label>
+          <label>
+            <span class="small">Party Type</span>
+            <input type="text" id="case-data-one-filter-party-type" name="party_type" placeholder="e.g., defendant" />
+          </label>
+          <label>
+            <span class="small">Case Year</span>
+            <input type="text" id="case-data-one-filter-year" name="case_year" placeholder="YYYY" />
+          </label>
+        </div>
       </form>
     </div>
 
@@ -41,21 +64,28 @@
 
     .case-data-one-search {
       display: flex;
-      align-items: center;
+      flex-direction: column;
+      align-items: stretch;
       gap: 12px;
       padding: 12px;
-      border-radius: 999px;
+      border-radius: 16px;
       background: #f7f7f7;
     }
 
-    .case-data-one-search input {
+    .case-data-one-search__row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .case-data-one-search__row input {
       border: none;
       background: transparent;
       min-width: 280px;
       font-size: 1rem;
     }
 
-    .case-data-one-search input:focus {
+    .case-data-one-search__row input:focus {
       outline: none;
     }
 
@@ -67,6 +97,29 @@
       border-radius: 999px;
       font-weight: 600;
       cursor: pointer;
+    }
+
+    .case-data-one-search__filters {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .case-data-one-search__filters label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.9rem;
+      color: #333;
+    }
+
+    .case-data-one-search__filters input,
+    .case-data-one-search__filters select {
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.9rem;
+      background: #fff;
     }
 
     .case-data-one-results {
@@ -134,6 +187,10 @@
       const nextButton = document.getElementById('case-data-one-next');
       const searchForm = document.getElementById('case-data-one-search');
       const searchInput = document.getElementById('case-data-one-search-input');
+      const caseTypeInput = document.getElementById('case-data-one-filter-type');
+      const partyRoleInput = document.getElementById('case-data-one-filter-role');
+      const partyTypeInput = document.getElementById('case-data-one-filter-party-type');
+      const caseYearInput = document.getElementById('case-data-one-filter-year');
       const statusEl = document.getElementById('case-data-one-import-status');
       const statusUrl = '{{ url_for("admin_case_data_one_import_status") }}';
       const dataUrl = '{{ url_for("admin_case_data_one_data") }}';
@@ -142,6 +199,10 @@
         page: 1,
         perPage: 12,
         search: '',
+        caseType: '',
+        partyRole: '',
+        partyType: '',
+        caseYear: '',
         totalPages: 1
       };
 
@@ -181,7 +242,16 @@
             { label: 'Filed', value: record.cs_date_filed },
             { label: 'Terminated', value: record.cs_date_term },
             { label: 'Case Type', value: record.cs_type },
+            { label: 'Case Type (normalized)', value: record.cs_type_normalized },
+            { label: 'Case Year', value: record.cs_case_year },
+            { label: 'Case Type Code', value: record.cs_case_type_code },
+            { label: 'Case Number Seq', value: record.cs_case_number_seq },
+            { label: 'Office', value: record.cs_case_office },
+            { label: 'Term Digit', value: record.cs_term_digit },
             { label: 'Party', value: record.party },
+            { label: 'Party Type', value: record.party_type },
+            { label: 'Party Role', value: record.party_role },
+            { label: 'Party Def #', value: record.party_def_num },
             { label: 'Presiding Judge', value: record.pre_judge_name },
             { label: 'Referred Judge', value: record.ref_judge_name }
           ];
@@ -212,6 +282,18 @@
         if (state.search) {
           url.searchParams.set('search', state.search);
         }
+        if (state.caseType) {
+          url.searchParams.set('case_type', state.caseType);
+        }
+        if (state.partyRole) {
+          url.searchParams.set('party_role', state.partyRole);
+        }
+        if (state.partyType) {
+          url.searchParams.set('party_type', state.partyType);
+        }
+        if (state.caseYear) {
+          url.searchParams.set('case_year', state.caseYear);
+        }
 
         fetch(url, { credentials: 'same-origin' })
           .then((response) => response.json())
@@ -228,6 +310,10 @@
       searchForm.addEventListener('submit', (event) => {
         event.preventDefault();
         state.search = searchInput.value.trim();
+        state.caseType = caseTypeInput.value.trim().toLowerCase();
+        state.partyRole = partyRoleInput.value.trim().toLowerCase();
+        state.partyType = partyTypeInput.value.trim().toLowerCase();
+        state.caseYear = caseYearInput.value.trim();
         state.page = 1;
         fetchData();
       });
