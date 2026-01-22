@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Ask LouLou">
+  <defs>
+    <linearGradient id="loulouGradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#b59a7b" />
+      <stop offset="100%" stop-color="#4f4a46" />
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="30" fill="url(#loulouGradient)" opacity="0.9" />
+  <circle cx="32" cy="32" r="22" fill="#f2f2f2" opacity="0.95" />
+  <path d="M22 36c4 6 16 6 20 0" fill="none" stroke="#59514d" stroke-width="3" stroke-linecap="round" />
+  <circle cx="24" cy="26" r="3" fill="#59514d" />
+  <circle cx="40" cy="26" r="3" fill="#59514d" />
+</svg>

@@ -2182,6 +2182,14 @@ def create_app() -> Flask:
     def admin_home():
         return render_template("admin_home.html")
 
+    @app.get("/admin/federal-data-dashboard")
+    @admin_required
+    def admin_federal_data_dashboard():
+        return render_template(
+            "admin_federal_data_dashboard.html",
+            active_page="federal_data_dashboard",
+        )
+
     @app.get("/admin/users")
     @admin_required
     def admin_users():
