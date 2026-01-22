@@ -202,7 +202,7 @@ USER_TYPES = [
     "Other",
 ]
 
-VALID_JURISDICTION_TYPES = {"ap", "bk", "cr", "cv", "mdl"}
+VALID_JURISDICTION_TYPES = {"ap", "bk", "cr", "cv", "mdl", "mj"}
 
 
 def _first_env(*names: str) -> Optional[str]:
@@ -581,6 +581,8 @@ def create_app() -> Flask:
             "criminal": "cr",
             "crim": "cr",
             "mdl": "mdl",
+            "mag": "mj",
+            "magistrate": "mj",
         }
         return aliases.get(normalized)
 
@@ -886,7 +888,7 @@ def create_app() -> Flask:
             _record_case_data_one_error(
                 error_details,
                 row_number=row_number,
-                message="Invalid cs_type value; expected ap, bk, cr, cv, or mdl.",
+                message="Invalid cs_type value; expected ap, bk, cr, cv, mdl, or mj.",
             )
             error_count += 1
 
