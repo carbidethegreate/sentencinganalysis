@@ -134,35 +134,69 @@
     }
 
     .case-card {
-      border: 1px solid #e5e5e5;
+      border: 1px solid #e1e4ea;
       border-radius: 12px;
       padding: 16px;
-      background: #fff;
+      background: #fafbff;
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      gap: 12px;
+      box-shadow: 0 6px 18px rgba(31, 111, 235, 0.08);
     }
 
     .case-card__title {
       font-weight: 700;
-      font-size: 1.05rem;
+      font-size: 1.1rem;
       margin: 0;
     }
 
     .case-card__subtitle {
-      color: #666;
+      color: #5a6472;
       margin: 0;
+      font-size: 0.95rem;
     }
 
     .case-card__meta {
-      display: grid;
-      gap: 6px;
-      font-size: 0.9rem;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
     }
 
-    .case-card__meta span {
-      color: #444;
+    .case-card__section {
+      background: #fff;
+      border: 1px solid #e4e8f0;
+      border-radius: 10px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .case-card__section-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #6b7280;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .case-card__field {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) 1.4fr;
+      gap: 8px;
+      align-items: baseline;
+    }
+
+    .case-card__label {
+      color: #1f2937;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+
+    .case-card__value {
+      color: #374151;
+      font-size: 0.9rem;
     }
 
     .case-data-one-pagination {
@@ -217,6 +251,60 @@
         return value;
       };
 
+      const caseTypeMap = {
+        ap: 'Appellate',
+        bk: 'Bankruptcy',
+        cr: 'Criminal',
+        cv: 'Civil',
+        mdl: 'Judicial Panel Multidistrict Litigation (JPML)'
+      };
+
+      const formatCaseTypeValue = (value) => {
+        const formatted = formatValue(value);
+        if (formatted === '—') {
+          return formatted;
+        }
+        const trimmed = String(formatted).trim();
+        const mapped = caseTypeMap[trimmed.toLowerCase()];
+        if (!mapped) {
+          return formatted;
+        }
+        return `${trimmed} (${mapped})`;
+      };
+
+      const buildFieldRow = (label, value) => {
+        const row = document.createElement('div');
+        row.className = 'case-card__field';
+
+        const labelEl = document.createElement('div');
+        labelEl.className = 'case-card__label';
+        labelEl.textContent = label;
+
+        const valueEl = document.createElement('div');
+        valueEl.className = 'case-card__value';
+        valueEl.textContent = value;
+
+        row.appendChild(labelEl);
+        row.appendChild(valueEl);
+        return row;
+      };
+
+      const buildSection = (title, fields) => {
+        const section = document.createElement('div');
+        section.className = 'case-card__section';
+
+        const heading = document.createElement('p');
+        heading.className = 'case-card__section-title';
+        heading.textContent = title;
+        section.appendChild(heading);
+
+        fields.forEach((field) => {
+          section.appendChild(buildFieldRow(field.label, field.value));
+        });
+
+        return section;
+      };
+
       const renderCards = (records) => {
         resultsEl.innerHTML = '';
         if (!records.length) {
@@ -242,28 +330,46 @@
           const meta = document.createElement('div');
           meta.className = 'case-card__meta';
 
-          const fields = [
-            { label: 'Filed', value: record.cs_date_filed },
-            { label: 'Terminated', value: record.cs_date_term },
-            { label: 'Case Type', value: record.cs_type },
-            { label: 'Case Type (normalized)', value: record.cs_type_normalized },
-            { label: 'Case Year', value: record.cs_case_year },
-            { label: 'Case Type Code', value: record.cs_case_type_code },
-            { label: 'Case Number Seq', value: record.cs_case_number_seq },
-            { label: 'Office', value: record.cs_case_office },
-            { label: 'Term Digit', value: record.cs_term_digit },
-            { label: 'Party', value: record.party },
-            { label: 'Party Type', value: record.party_type },
-            { label: 'Party Role', value: record.party_role },
-            { label: 'Party Def #', value: record.party_def_num },
-            { label: 'Presiding Judge', value: record.pre_judge_name },
-            { label: 'Referred Judge', value: record.ref_judge_name }
+          const sections = [
+            {
+              title: 'Case identifiers',
+              fields: [
+                { label: 'Case Type', value: formatCaseTypeValue(record.cs_type) },
+                { label: 'Case Type (normalized)', value: formatCaseTypeValue(record.cs_type_normalized) },
+                { label: 'Case Type Code', value: formatCaseTypeValue(record.cs_case_type_code) },
+                { label: 'Case Year', value: formatValue(record.cs_case_year) },
+                { label: 'Case Number Seq', value: formatValue(record.cs_case_number_seq) },
+                { label: 'Office', value: formatValue(record.cs_case_office) },
+                { label: 'Term Digit', value: formatValue(record.cs_term_digit) }
+              ]
+            },
+            {
+              title: 'Dates',
+              fields: [
+                { label: 'Filed', value: formatValue(record.cs_date_filed) },
+                { label: 'Terminated', value: formatValue(record.cs_date_term) }
+              ]
+            },
+            {
+              title: 'Parties',
+              fields: [
+                { label: 'Party', value: formatValue(record.party) },
+                { label: 'Party Type', value: formatValue(record.party_type) },
+                { label: 'Party Role', value: formatValue(record.party_role) },
+                { label: 'Party Def #', value: formatValue(record.party_def_num) }
+              ]
+            },
+            {
+              title: 'Judges',
+              fields: [
+                { label: 'Presiding Judge', value: formatValue(record.pre_judge_name) },
+                { label: 'Referred Judge', value: formatValue(record.ref_judge_name) }
+              ]
+            }
           ];
 
-          fields.forEach((field) => {
-            const row = document.createElement('span');
-            row.textContent = `${field.label}: ${formatValue(field.value)}`;
-            meta.appendChild(row);
+          sections.forEach((section) => {
+            meta.appendChild(buildSection(section.title, section.fields));
           });
 
           card.appendChild(title);
