@@ -48,6 +48,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -459,27 +460,16 @@ def create_app() -> Flask:
         else:
             raise
 
-    def _ensure_case_data_one_columns() -> None:
-        column_specs = {
-            "cs_type_normalized": "TEXT",
-            "cs_case_office": "TEXT",
-            "cs_case_year": "TEXT",
-            "cs_case_type_code": "TEXT",
-            "cs_case_number_seq": "TEXT",
-            "party_normalized": "TEXT",
-            "party_type": "TEXT",
-            "party_type_normalized": "TEXT",
-            "party_role": "TEXT",
-            "party_role_normalized": "TEXT",
-            "party_def_num_normalized": "TEXT",
-        }
+    def _ensure_table_columns(
+        table_name: str, column_specs: Dict[str, str], *, label: str
+    ) -> None:
         try:
             inspector = inspect(engine)
             existing_columns = {
-                column["name"] for column in inspector.get_columns("case_data_one")
+                column["name"] for column in inspector.get_columns(table_name)
             }
         except Exception:
-            app.logger.exception("Unable to inspect case_data_one columns.")
+            app.logger.exception("Unable to inspect %s columns.", label)
             return
 
         missing = [name for name in column_specs if name not in existing_columns]
@@ -491,13 +481,34 @@ def create_app() -> Flask:
                 for name in missing:
                     conn.execute(
                         sa_text(
-                            f"ALTER TABLE case_data_one ADD COLUMN {name} {column_specs[name]}"
+                            f"ALTER TABLE {table_name} ADD COLUMN {name} {column_specs[name]}"
                         )
                     )
         except Exception:
-            app.logger.exception("Unable to add missing case_data_one columns.")
+            app.logger.exception("Unable to add missing %s columns.", label)
 
-    _ensure_case_data_one_columns()
+    _ensure_table_columns(
+        "case_stage1",
+        {"search_text": "TEXT"},
+        label="case_stage1",
+    )
+    _ensure_table_columns(
+        "case_data_one",
+        {
+            "cs_type_normalized": "TEXT",
+            "cs_case_office": "TEXT",
+            "cs_case_year": "TEXT",
+            "cs_case_type_code": "TEXT",
+            "cs_case_number_seq": "TEXT",
+            "party_normalized": "TEXT",
+            "party_type": "TEXT",
+            "party_type_normalized": "TEXT",
+            "party_role": "TEXT",
+            "party_role_normalized": "TEXT",
+            "party_def_num_normalized": "TEXT",
+        },
+        label="case_data_one",
+    )
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
@@ -677,6 +688,15 @@ def create_app() -> Flask:
         if not _is_postgres():
             return
         try:
+            inspector = inspect(engine)
+            existing_columns = {
+                column["name"] for column in inspector.get_columns("case_stage1")
+            }
+            if "search_text" not in existing_columns:
+                app.logger.warning(
+                    "case_stage1.search_text missing; skipping search index creation."
+                )
+                return
             with engine.begin() as conn:
                 conn.execute(
                     sa_text(
@@ -742,7 +762,7 @@ def create_app() -> Flask:
         if not rows:
             return 0, 0
         if _is_postgres():
-            stmt = insert(table).values(rows)
+            stmt = pg_insert(table).values(rows)
             update_values = {
                 col.name: stmt.excluded[col.name]
                 for col in table.c
@@ -802,7 +822,7 @@ def create_app() -> Flask:
         if not rows:
             return 0, 0
         if _is_postgres():
-            stmt = insert(table).values(rows)
+            stmt = pg_insert(table).values(rows)
             update_values = {
                 col.name: stmt.excluded[col.name]
                 for col in table.c
@@ -1336,7 +1356,7 @@ def create_app() -> Flask:
                                 error_details,
                                 row_number=row_index,
                                 message="Invalid cs_caseid value.",
-                                record=row,
+                                record=row_data,
                             )
                             row_valid = False
                         if row_valid and row_data["cs_caseid"] is None:
@@ -1346,7 +1366,7 @@ def create_app() -> Flask:
                                 error_details,
                                 row_number=row_index,
                                 message="Missing cs_caseid value.",
-                                record=row,
+                                record=row_data,
                             )
                             row_valid = False
 
@@ -1377,7 +1397,7 @@ def create_app() -> Flask:
                             error_details,
                             row_number=row_index,
                             message=f"Row parsing failed: {exc}",
-                            record=row,
+                            record=row_data,
                         )
                     rows_since_update += 1
                     _update_case_data_one_progress(status="validating")
