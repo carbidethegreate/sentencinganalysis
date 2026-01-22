@@ -1184,9 +1184,16 @@ def create_app() -> Flask:
     @app.route("/admin/login", methods=["GET", "POST"])
     def admin_login():
         expected_pass = os.environ.get("CPD_ADMIN_KEY")
+        admin_key_file = os.environ.get("CPD_ADMIN_KEY_FILE", "/etc/secrets/CPD_ADMIN_KEY")
+        if not expected_pass and admin_key_file:
+            try:
+                expected_pass = Path(admin_key_file).read_text(encoding="utf-8").strip()
+            except (FileNotFoundError, OSError):
+                expected_pass = None
         if not expected_pass:
             flash(
-                "Admin login is not configured. Set CPD_ADMIN_KEY to enable admin access.",
+                "Admin login is not configured. Set CPD_ADMIN_KEY or provide a secret file "
+                "to enable admin access.",
                 "error",
             )
             return render_template("admin_login.html", admin_configured=False)

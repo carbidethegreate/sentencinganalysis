@@ -5,10 +5,13 @@
 {% block content %}
   <div class="card" style="max-width: 520px;">
     <h1>Admin login</h1>
-    <p class="small">Username is CPDADMIN. The password is read from the CPD_ADMIN_KEY environment variable.</p>
+    <p class="small">
+      Username is CPDADMIN. The password is read from the CPD_ADMIN_KEY environment variable or a configured secret file
+      (CPD_ADMIN_KEY_FILE or /etc/secrets/CPD_ADMIN_KEY).
+    </p>
     {% if admin_configured is defined and not admin_configured %}
       <p class="small" style="color: #b42318; margin-top: 8px;">
-        Admin login is disabled until CPD_ADMIN_KEY is set in the environment.
+        Admin login is disabled until CPD_ADMIN_KEY is set or a secret file is provided.
       </p>
     {% endif %}
 
