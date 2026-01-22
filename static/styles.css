@@ -106,6 +106,48 @@ header {
   text-decoration: none;
 }
 
+.page-header {
+  margin-bottom: 16px;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+  color: var(--primary-dark);
+}
+
+.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  margin-bottom: 24px;
+  border: 1px solid rgba(140, 132, 128, 0.35);
+  border-radius: 14px;
+  background: rgba(217, 203, 186, 0.25);
+}
+
+.subnav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.subnav a:hover {
+  background: rgba(217, 203, 186, 0.35);
+  text-decoration: none;
+}
+
+.subnav-icon {
+  width: 20px;
+  height: 20px;
+}
+
 .right {
   display: flex;
   align-items: center;
