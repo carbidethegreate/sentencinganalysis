@@ -4,6 +4,7 @@ import hmac
 import os
 import re
 import secrets
+import time
 import tempfile
 import threading
 import urllib.error
@@ -78,6 +79,8 @@ CASE_STAGE1_DATE_COLUMNS = {"cs_file_date"}
 CASE_STAGE1_HEADER_ALIASES = {"cs_date_filed": "cs_file_date"}
 CASE_DATA_ONE_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 CASE_DATA_ONE_CHUNK_SIZE = 1000
+CASE_DATA_ONE_PROGRESS_INTERVAL_ROWS = 50
+CASE_DATA_ONE_PROGRESS_INTERVAL_SECONDS = 1.0
 CASE_DATA_ONE_DISPLAY_COLUMNS = [
     "cs_caseid",
     "cs_case_number",
@@ -1218,6 +1221,36 @@ def create_app() -> Flask:
                     header if header in CASE_DATA_ONE_IMPORT_COLUMNS else None
                     for header in headers
                 ]
+                last_progress_update = time.monotonic()
+                rows_since_update = 0
+
+                def _update_case_data_one_progress(force: bool = False) -> None:
+                    nonlocal last_progress_update, rows_since_update
+                    now = time.monotonic()
+                    if not force:
+                        if (
+                            rows_since_update < CASE_DATA_ONE_PROGRESS_INTERVAL_ROWS
+                            and (now - last_progress_update)
+                            < CASE_DATA_ONE_PROGRESS_INTERVAL_SECONDS
+                        ):
+                            return
+                    _set_case_data_one_import(
+                        job_id,
+                        status="processing",
+                        total_rows=total_rows,
+                        processed_rows=processed_rows,
+                        inserted_rows=inserted_rows,
+                        updated_rows=updated_rows,
+                        skipped_rows=skipped_rows,
+                        error_rows=error_rows,
+                        error_details=error_details,
+                        message=(
+                            "Processing rows. "
+                            f"Processed {processed_rows} of {total_rows}."
+                        ),
+                    )
+                    last_progress_update = now
+                    rows_since_update = 0
 
                 with engine.begin() as conn:
                     case_data_one_table = case_data_one
@@ -1239,6 +1272,7 @@ def create_app() -> Flask:
                                 row_data.setdefault(column, None)
 
                             case_id_raw = row_data.get("cs_caseid")
+                            row_valid = True
                             try:
                                 row_data["cs_caseid"] = (
                                     int(case_id_raw) if case_id_raw is not None else None
@@ -1252,8 +1286,8 @@ def create_app() -> Flask:
                                     message="Invalid cs_caseid value.",
                                     record=row,
                                 )
-                                continue
-                            if row_data["cs_caseid"] is None:
+                                row_valid = False
+                            if row_valid and row_data["cs_caseid"] is None:
                                 skipped_rows += 1
                                 error_rows += 1
                                 _record_case_data_one_error(
@@ -1262,22 +1296,23 @@ def create_app() -> Flask:
                                     message="Missing cs_caseid value.",
                                     record=row,
                                 )
-                                continue
+                                row_valid = False
 
-                            for header in date_columns:
-                                row_data[header] = _parse_case_data_one_date(
-                                    row_data.get(header)
+                            if row_valid:
+                                for header in date_columns:
+                                    row_data[header] = _parse_case_data_one_date(
+                                        row_data.get(header)
+                                    )
+                                validation_errors = _apply_case_data_one_classifications(
+                                    row_data,
+                                    row_number=row_index,
+                                    error_details=error_details,
                                 )
-                            validation_errors = _apply_case_data_one_classifications(
-                                row_data,
-                                row_number=row_index,
-                                error_details=error_details,
-                            )
-                            if validation_errors:
-                                error_rows += validation_errors
+                                if validation_errors:
+                                    error_rows += validation_errors
 
-                            processed_rows += 1
-                            batch.append(row_data)
+                                processed_rows += 1
+                                batch.append(row_data)
                         except Exception as exc:
                             error_rows += 1
                             _record_case_data_one_error(
@@ -1286,7 +1321,8 @@ def create_app() -> Flask:
                                 message=f"Row parsing failed: {exc}",
                                 record=row,
                             )
-                            continue
+                        rows_since_update += 1
+                        _update_case_data_one_progress()
 
                         if len(batch) >= CASE_DATA_ONE_CHUNK_SIZE:
                             inserted, updated = _upsert_case_data_one_batch(
@@ -1298,21 +1334,7 @@ def create_app() -> Flask:
                             inserted_rows += inserted
                             updated_rows += updated
                             batch = []
-                            _set_case_data_one_import(
-                                job_id,
-                                status="processing",
-                                total_rows=total_rows,
-                                processed_rows=processed_rows,
-                                inserted_rows=inserted_rows,
-                                updated_rows=updated_rows,
-                                skipped_rows=skipped_rows,
-                                error_rows=error_rows,
-                                error_details=error_details,
-                                message=(
-                                    "Processing rows. "
-                                    f"Processed {processed_rows} of {total_rows}."
-                                ),
-                            )
+                            _update_case_data_one_progress(force=True)
 
                     if batch:
                         inserted, updated = _upsert_case_data_one_batch(
@@ -1323,21 +1345,7 @@ def create_app() -> Flask:
                         )
                         inserted_rows += inserted
                         updated_rows += updated
-                        _set_case_data_one_import(
-                            job_id,
-                            status="processing",
-                            total_rows=total_rows,
-                            processed_rows=processed_rows,
-                            inserted_rows=inserted_rows,
-                            updated_rows=updated_rows,
-                            skipped_rows=skipped_rows,
-                            error_rows=error_rows,
-                            error_details=error_details,
-                            message=(
-                                "Processing rows. "
-                                f"Processed {processed_rows} of {total_rows}."
-                            ),
-                        )
+                        _update_case_data_one_progress(force=True)
 
                 if _is_postgres():
                     with engine.connect() as conn:
