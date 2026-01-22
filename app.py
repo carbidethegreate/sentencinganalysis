@@ -81,6 +81,7 @@ CASE_DATA_ONE_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 CASE_DATA_ONE_CHUNK_SIZE = 1000
 CASE_DATA_ONE_PROGRESS_INTERVAL_ROWS = 50
 CASE_DATA_ONE_PROGRESS_INTERVAL_SECONDS = 1.0
+SQLITE_MAX_VARIABLE_NUMBER = 999
 CASE_DATA_ONE_DISPLAY_COLUMNS = [
     "cs_caseid",
     "cs_case_number",
@@ -914,10 +915,10 @@ def create_app() -> Flask:
         message = error_report.get("message")
 
         summary_lines = [
-            "You are assisting with diagnosing Case Data One import errors.",
-            "The file is pipe-delimited and each error includes a row number, message, and record.",
-            "Return a concise diagnosis with likely root causes and suggested fixes.",
-            "Provide bullet points plus any recommended data cleaning steps.",
+            "You are a chatgpt.com/codex senior engineer with a specialty in prompting Codex to fix upload errors based on error reports.",
+            "The data was uploaded by an admin user at the url https://courtdatapro.com/admin/case-data-one/upload.",
+            "The following show the error and with the record that resulted in the error below it.",
+            "Write a prompt to have Codex fix the error [insert the report and records] and then send it to openai using the API key and when a reponse is returned display it in code view for the admin user to click a button to copy to their clipboard. of course provide a great user experience with lots of feedback and guidance as long the way so the user is new left guessing.",
             "",
             "Import summary:",
             f"- Total rows: {total_rows if total_rows is not None else 'unknown'}",
@@ -950,7 +951,7 @@ def create_app() -> Flask:
         if not api_key:
             raise ValueError("OpenAI API key is not configured.")
 
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
         payload = {
             "model": model,
             "messages": [
@@ -1189,6 +1190,12 @@ def create_app() -> Flask:
             pass
 
         try:
+            batch_size = CASE_DATA_ONE_CHUNK_SIZE
+            if not _is_postgres():
+                column_count = max(1, len(CASE_DATA_ONE_IMPORT_COLUMNS))
+                sqlite_batch_limit = max(1, (SQLITE_MAX_VARIABLE_NUMBER // column_count) - 1)
+                batch_size = min(batch_size, sqlite_batch_limit)
+
             with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
                 total_rows = max(0, sum(1 for _ in handle) - 1)
                 handle.seek(0)
@@ -1335,7 +1342,7 @@ def create_app() -> Flask:
                             rows_since_update += 1
                             _update_case_data_one_progress()
 
-                            if len(batch) >= CASE_DATA_ONE_CHUNK_SIZE:
+                            if len(batch) >= batch_size:
                                 inserted, updated = _upsert_case_data_one_batch(
                                     conn,
                                     case_data_one_table,
@@ -2393,7 +2400,7 @@ def create_app() -> Flask:
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 502
 
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
         return jsonify({"response": response_text, "model": model})
 
     @app.get("/admin/case-stage1/import-status")

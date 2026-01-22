@@ -3,36 +3,81 @@
 {% block title %}Admin | Case Data One Upload{% endblock %}
 
 {% block content %}
-  <div class="card">
-    <h1>Case Data One Upload</h1>
-    <p class="small">Upload the pipe-delimited Case Data One file (max 25MB).</p>
-
-    <form method="post" enctype="multipart/form-data" style="margin-top: 16px;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="file" name="case_data_one_file" accept=".txt,.csv" required>
-      <div style="margin-top: 12px;">
-        <button class="pill" type="submit">Upload case data one</button>
+  <div class="card upload-card">
+    <div class="upload-header">
+      <div>
+        <h1>Case Data One Upload</h1>
+        <p class="small">Upload the pipe-delimited Case Data One file (max 25MB).</p>
       </div>
+      <span class="upload-badge">Admin upload</span>
+    </div>
+
+    <div class="upload-guidance">
+      <div>
+        <h3>What happens next</h3>
+        <ul>
+          <li>We validate each row and track progress in real time.</li>
+          <li>You will see totals, inserts, updates, skips, and errors as they happen.</li>
+          <li>If any error occurs, nothing is added and you can download a report.</li>
+        </ul>
+      </div>
+      <div class="upload-callout">
+        <strong>Tip:</strong> Make sure the header row includes <code>cs_caseid</code> and dates are in a parseable format.
+      </div>
+    </div>
+
+    <form method="post" enctype="multipart/form-data" class="upload-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="file-input">
+        <input type="file" name="case_data_one_file" accept=".txt,.csv" required>
+        <span>Select file to upload</span>
+      </label>
+      <button class="pill" type="submit">Upload case data one</button>
     </form>
 
-    <div id="case-data-one-status" style="margin-top: 24px; display: none;">
-      <h2 style="margin-bottom: 8px;">Import Progress</h2>
-      <div style="background: #f1f5f9; border-radius: 999px; height: 12px; overflow: hidden;">
-        <div id="case-data-one-progress-bar" style="background: #2563eb; height: 12px; width: 0%;"></div>
+    <div id="case-data-one-status" class="upload-status" style="display: none;">
+      <div class="status-header">
+        <div>
+          <h2>Import Progress</h2>
+          <p id="case-data-one-progress-text" class="small">Waiting for import status...</p>
+        </div>
+        <span id="case-data-one-status-pill" class="status-pill">Waiting</span>
       </div>
-      <p id="case-data-one-progress-text" class="small" style="margin-top: 8px;">
-        Waiting for import status...
-      </p>
-      <ul class="small" style="margin-top: 12px; padding-left: 18px;">
-        <li>Total rows read: <span id="case-data-one-total">0</span></li>
-        <li>Processed rows: <span id="case-data-one-processed">0</span></li>
-        <li>Inserted rows: <span id="case-data-one-inserted">0</span></li>
-        <li>Updated rows: <span id="case-data-one-updated">0</span></li>
-        <li>Skipped rows: <span id="case-data-one-skipped">0</span></li>
-        <li>Error rows: <span id="case-data-one-errors">0</span></li>
-      </ul>
-      <div id="case-data-one-error-actions" style="margin-top: 12px; display: none;">
-        <p class="small" style="margin-bottom: 8px;">
+      <div class="progress-track">
+        <div id="case-data-one-progress-bar" class="progress-bar"></div>
+      </div>
+      <div class="progress-meta small">
+        <span id="case-data-one-progress-percent">0%</span>
+        <span id="case-data-one-progress-value">0 / 0 rows</span>
+      </div>
+      <div class="stat-grid">
+        <div class="stat-card">
+          <span>Total rows</span>
+          <strong id="case-data-one-total">0</strong>
+        </div>
+        <div class="stat-card">
+          <span>Processed</span>
+          <strong id="case-data-one-processed">0</strong>
+        </div>
+        <div class="stat-card">
+          <span>Inserted</span>
+          <strong id="case-data-one-inserted">0</strong>
+        </div>
+        <div class="stat-card">
+          <span>Updated</span>
+          <strong id="case-data-one-updated">0</strong>
+        </div>
+        <div class="stat-card">
+          <span>Skipped</span>
+          <strong id="case-data-one-skipped">0</strong>
+        </div>
+        <div class="stat-card stat-card--error">
+          <span>Errors</span>
+          <strong id="case-data-one-errors">0</strong>
+        </div>
+      </div>
+      <div id="case-data-one-error-actions" class="error-actions" style="display: none;">
+        <p class="small">
           One or more errors occurred; no files were added to the database. Download the
           error report or check the server logs.
         </p>
@@ -40,25 +85,23 @@
           Download error report
         </button>
       </div>
-      <details id="case-data-one-error-details" style="margin-top: 12px; display: none;">
+      <details id="case-data-one-error-details" class="error-details" style="display: none;">
         <summary class="small">View error details</summary>
-        <ul id="case-data-one-error-list" class="small" style="margin-top: 8px;"></ul>
+        <ul id="case-data-one-error-list" class="small"></ul>
       </details>
-      <div id="case-data-one-ai" style="margin-top: 16px; display: none;">
-        <p class="small" style="margin-bottom: 8px;">
-          Generate an AI summary of the error report to help fix the source data.
+      <div id="case-data-one-ai" class="ai-panel" style="display: none;">
+        <p class="small">
+          Generate an AI response that builds a Codex prompt for fixing the source data.
         </p>
-        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+        <div class="ai-controls">
           <button class="pill" id="case-data-one-ai-button" type="button">
             Generate AI response
           </button>
           <span id="case-data-one-ai-status" class="small"></span>
         </div>
-        <div id="case-data-one-ai-response" style="margin-top: 12px; display: none;">
-          <pre style="background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto;">
-<code id="case-data-one-ai-output"></code>
-          </pre>
-          <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+        <div id="case-data-one-ai-response" class="ai-response" style="display: none;">
+          <pre><code id="case-data-one-ai-output"></code></pre>
+          <div class="ai-actions">
             <button class="pill" id="case-data-one-ai-copy" type="button">
               Copy to clipboard
             </button>
@@ -73,6 +116,9 @@
     const statusContainer = document.getElementById("case-data-one-status");
     const progressBar = document.getElementById("case-data-one-progress-bar");
     const progressText = document.getElementById("case-data-one-progress-text");
+    const statusPill = document.getElementById("case-data-one-status-pill");
+    const progressPercent = document.getElementById("case-data-one-progress-percent");
+    const progressValue = document.getElementById("case-data-one-progress-value");
     const totalEl = document.getElementById("case-data-one-total");
     const processedEl = document.getElementById("case-data-one-processed");
     const insertedEl = document.getElementById("case-data-one-inserted");
@@ -93,12 +139,39 @@
     let lastErrors = [];
     let lastStatus = null;
 
+    function formatRecord(record) {
+      if (record === null || record === undefined || record === "") {
+        return "(none)";
+      }
+      if (typeof record === "string") {
+        try {
+          const parsed = JSON.parse(record);
+          if (Array.isArray(parsed)) {
+            return parsed.join("|");
+          }
+          if (parsed && typeof parsed === "object") {
+            return JSON.stringify(parsed, null, 2);
+          }
+        } catch (error) {
+          return record;
+        }
+        return record;
+      }
+      if (Array.isArray(record)) {
+        return record.join("|");
+      }
+      if (record && typeof record === "object") {
+        return JSON.stringify(record, null, 2);
+      }
+      return String(record);
+    }
+
     function renderErrors(errors) {
       errorList.innerHTML = "";
       errors.forEach((item) => {
         const li = document.createElement("li");
         const rowLabel = item.row_number ? `Row ${item.row_number}` : "Row";
-        const recordText = item.record ? item.record : "(none)";
+        const recordText = formatRecord(item.record);
         const rowEl = document.createElement("p");
         rowEl.textContent = rowLabel;
         const messageEl = document.createElement("p");
@@ -113,13 +186,25 @@
     }
 
     function buildErrorReportText(errors) {
-      return errors
+      const summary = [
+        `Status: ${lastStatus?.status || "unknown"}`,
+        `Message: ${lastStatus?.message || "N/A"}`,
+        `Total rows: ${lastStatus?.total_rows ?? 0}`,
+        `Processed rows: ${lastStatus?.processed_rows ?? 0}`,
+        `Inserted rows: ${lastStatus?.inserted_rows ?? 0}`,
+        `Updated rows: ${lastStatus?.updated_rows ?? 0}`,
+        `Skipped rows: ${lastStatus?.skipped_rows ?? 0}`,
+        `Error rows: ${lastStatus?.error_rows ?? 0}`,
+        "",
+      ].join("\n");
+      const details = errors
         .map((item) => {
           const rowLabel = item.row_number ? `Row ${item.row_number}` : "Row";
-          const recordText = item.record ? item.record : "(none)";
+          const recordText = formatRecord(item.record);
           return `${rowLabel}\nMessage: ${item.message}\nRecord: ${recordText}`;
         })
         .join("\n\n");
+      return `${summary}${details}`;
     }
 
     function downloadErrorReport() {
@@ -241,8 +326,15 @@
         const total = Number(data.total_rows ?? 0);
         const processed = Number(data.processed_rows ?? 0);
         const percent = total > 0 ? Math.min((processed / total) * 100, 100) : 0;
+        const percentLabel = `${Math.round(percent)}%`;
         progressBar.style.width = `${percent}%`;
         progressText.textContent = data.message || `Status: ${data.status}`;
+        progressPercent.textContent = percentLabel;
+        progressValue.textContent = `${processed} / ${total} rows`;
+        if (statusPill) {
+          statusPill.textContent = data.status || "processing";
+          statusPill.dataset.status = data.status || "processing";
+        }
 
         lastErrors = Array.isArray(data.error_details) ? data.error_details : [];
         if (lastErrors.length) {
