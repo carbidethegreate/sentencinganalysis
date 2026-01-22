@@ -35,11 +35,13 @@ from sqlalchemy import (
     Table,
     Text,
     bindparam,
+    cast,
     create_engine,
     delete,
     func,
     insert,
     literal_column,
+    or_,
     select,
     update,
 )
@@ -72,7 +74,21 @@ CASE_STAGE1_IMPORT_COLUMNS = [
 ]
 CASE_STAGE1_DATE_COLUMNS = {"cs_file_date"}
 CASE_STAGE1_HEADER_ALIASES = {"cs_date_filed": "cs_file_date"}
+CASE_DATA_ONE_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 CASE_DATA_ONE_CHUNK_SIZE = 1000
+CASE_DATA_ONE_DISPLAY_COLUMNS = [
+    "cs_caseid",
+    "cs_case_number",
+    "cs_short_title",
+    "cs_date_filed",
+    "cs_date_term",
+    "cs_type",
+    "lead_case_number",
+    "lead_short_title",
+    "pre_judge_name",
+    "ref_judge_name",
+    "party",
+]
 CASE_DATA_ONE_IMPORT_COLUMNS = [
     "cs_caseid",
     "cs_case_number",
@@ -622,6 +638,12 @@ def create_app() -> Flask:
 
     def _set_case_data_one_import(job_id: str, **fields: Any) -> None:
         case_data_one_imports.setdefault(job_id, {}).update(fields)
+
+    def _latest_case_data_one_import() -> Optional[Dict[str, Any]]:
+        latest_id = case_data_one_imports.get("latest")
+        if not latest_id:
+            return None
+        return case_data_one_imports.get(latest_id)
 
     _ensure_case_stage1_search_index()
 
@@ -1697,6 +1719,140 @@ def create_app() -> Flask:
                 "data": [dict(row) for row in rows],
             }
         )
+
+    @app.get("/admin/case-data-one/upload")
+    @admin_required
+    def admin_case_data_one_upload():
+        return render_template("admin_case_data_one_upload.html")
+
+    @app.post("/admin/case-data-one/upload")
+    @admin_required
+    def admin_case_data_one_upload_post():
+        require_csrf()
+
+        if request.content_length and request.content_length > CASE_DATA_ONE_MAX_UPLOAD_BYTES:
+            flash("File too large. Maximum size is 25MB.", "error")
+            return redirect(url_for("admin_case_data_one_upload"))
+
+        uploaded = request.files.get("case_data_one_file")
+        if not uploaded or not uploaded.filename:
+            flash("Please select a file to upload.", "error")
+            return redirect(url_for("admin_case_data_one_upload"))
+        if not uploaded.filename.lower().endswith((".txt", ".csv")):
+            flash("Only .txt or .csv files are supported.", "error")
+            return redirect(url_for("admin_case_data_one_upload"))
+
+        suffix = Path(uploaded.filename).suffix or ".txt"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            uploaded.save(temp_file.name)
+            temp_path = temp_file.name
+
+        job_id = secrets.token_urlsafe(8)
+        case_data_one_imports["latest"] = job_id
+        _set_case_data_one_import(
+            job_id,
+            status="processing",
+            started_at=datetime.utcnow().isoformat(),
+            original_filename=uploaded.filename,
+            message="Upload started. Processing in the background.",
+        )
+
+        thread = threading.Thread(
+            target=_process_case_data_one_upload, args=(job_id, temp_path), daemon=True
+        )
+        thread.start()
+
+        flash("Upload started. Processing in the background.", "success")
+        return redirect(url_for("admin_case_data_one_list"))
+
+    @app.get("/admin/case-data-one")
+    @admin_required
+    def admin_case_data_one_list():
+        return render_template(
+            "admin_case_data_one_list.html", columns=CASE_DATA_ONE_DISPLAY_COLUMNS
+        )
+
+    @app.get("/admin/case-data-one/data")
+    @admin_required
+    def admin_case_data_one_data():
+        case_data_one_table = case_data_one
+        columns = CASE_DATA_ONE_DISPLAY_COLUMNS
+        draw = int(request.args.get("draw", 1))
+        start = max(int(request.args.get("start", 0)), 0)
+        length = min(int(request.args.get("length", 25)), 200)
+        search_value = request.args.get("search[value]", "").strip()
+
+        order_col_index = request.args.get("order[0][column]", "0")
+        order_dir = request.args.get("order[0][dir]", "asc")
+        try:
+            order_index = int(order_col_index)
+        except ValueError:
+            order_index = 0
+        order_column_name = columns[order_index] if order_index < len(columns) else "cs_caseid"
+        order_column = case_data_one_table.c.get(
+            order_column_name, case_data_one_table.c.cs_caseid
+        )
+
+        selected_columns = [case_data_one_table.c[name] for name in columns]
+        base_query = select(*selected_columns)
+
+        if search_value:
+            like_term = f"%{search_value.lower()}%"
+            search_clauses = []
+            for column_name in columns:
+                column = case_data_one_table.c.get(column_name)
+                if column is None:
+                    continue
+                search_clauses.append(func.lower(cast(column, Text)).like(like_term))
+            if search_clauses:
+                search_filter = or_(*search_clauses)
+                base_query = base_query.where(search_filter)
+                count_query = (
+                    select(func.count())
+                    .select_from(case_data_one_table)
+                    .where(search_filter)
+                )
+            else:
+                count_query = select(func.count()).select_from(case_data_one_table)
+        else:
+            count_query = select(func.count()).select_from(case_data_one_table)
+
+        if search_value:
+            if order_dir == "desc":
+                base_query = base_query.order_by(order_column.desc())
+            else:
+                base_query = base_query.order_by(order_column.asc())
+        else:
+            base_query = base_query.order_by(case_data_one_table.c.cs_caseid.desc())
+
+        base_query = base_query.limit(length).offset(start)
+
+        with engine.connect() as conn:
+            records_total = conn.execute(
+                select(func.count()).select_from(case_data_one_table)
+            ).scalar_one()
+            if search_value:
+                records_filtered = conn.execute(count_query).scalar_one()
+            else:
+                records_filtered = records_total
+            rows = conn.execute(base_query).mappings().all()
+
+        return jsonify(
+            {
+                "draw": draw,
+                "recordsTotal": records_total,
+                "recordsFiltered": records_filtered,
+                "data": [dict(row) for row in rows],
+            }
+        )
+
+    @app.get("/admin/case-data-one/import-status")
+    @admin_required
+    def admin_case_data_one_import_status():
+        latest = _latest_case_data_one_import()
+        if not latest:
+            return jsonify({"status": "idle"})
+        return jsonify(latest)
 
     @app.get("/admin/case-stage1/import-status")
     @admin_required

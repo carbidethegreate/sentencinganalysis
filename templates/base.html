@@ -30,6 +30,11 @@
             <a href="{{ url_for('login') }}" class="{% if active_page == 'login' %}active{% endif %}">Login / Sign Up</a>
           {% endif %}
 
+          {% if is_admin %}
+            <a href="{{ url_for('admin_case_data_one_upload') }}">Add Data</a>
+            <a href="{{ url_for('admin_case_data_one_list') }}">Case Reports</a>
+          {% endif %}
+
           <a href="{{ url_for('pricing') }}" class="{% if active_page == 'pricing' %}active{% endif %}">Pricing</a>
           <a href="{{ url_for('news') }}" class="{% if active_page == 'news' %}active{% endif %}">News</a>
           <a href="{{ url_for('about') }}" class="{% if active_page == 'about' %}active{% endif %}">About</a>
