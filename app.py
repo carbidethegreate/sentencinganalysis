@@ -111,6 +111,35 @@ def _first_env(*names: str) -> Optional[str]:
     return None
 
 
+def _read_secret_file(path: Path) -> Optional[str]:
+    try:
+        if path.exists():
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+    except OSError:
+        return None
+    return None
+
+
+def _first_env_or_secret_file(*names: str) -> Optional[str]:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+
+        file_override = os.environ.get(f"{name}_FILE")
+        if file_override:
+            value = _read_secret_file(Path(file_override))
+            if value:
+                return value
+
+        value = _read_secret_file(Path("/etc/secrets") / name)
+        if value:
+            return value
+    return None
+
+
 def _normalize_database_url(url: str) -> str:
     # Normalize older scheme and explicitly select the psycopg driver.
     if url.startswith("postgres://"):
@@ -122,7 +151,7 @@ def _normalize_database_url(url: str) -> str:
 
 def build_database_url() -> str:
     # Prefer a full URL when available.
-    url = _first_env(
+    url = _first_env_or_secret_file(
         "DATABASE_URL",
         "InternalDatabaseURL",
         "Internal_Database_URL",
@@ -133,11 +162,11 @@ def build_database_url() -> str:
         return _normalize_database_url(url)
 
     # Fall back to discrete parts if present.
-    host = _first_env("Hostname", "HOSTNAME")
-    port = _first_env("Port", "PORT")
-    dbname = _first_env("Database", "DB_NAME")
-    user = _first_env("Username", "DB_USER")
-    password = _first_env("Password", "DB_PASSWORD")
+    host = _first_env_or_secret_file("Hostname", "HOSTNAME")
+    port = _first_env_or_secret_file("Port", "PORT")
+    dbname = _first_env_or_secret_file("Database", "DB_NAME")
+    user = _first_env_or_secret_file("Username", "DB_USER")
+    password = _first_env_or_secret_file("Password", "DB_PASSWORD")
     if host and port and dbname and user and password:
         return (
             "postgresql+psycopg://"
@@ -152,7 +181,7 @@ def build_database_url() -> str:
 
 
 def _load_or_create_secret_key() -> Tuple[str, str]:
-    secret_key = _first_env("SECRET_KEY", "Secrets", "SECRETS")
+    secret_key = _first_env_or_secret_file("SECRET_KEY", "Secrets", "SECRETS")
     if secret_key:
         return secret_key, "env"
 
