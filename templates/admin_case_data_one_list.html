@@ -4,61 +4,247 @@
 
 {% block content %}
   <div class="card">
-    <h1>Case Data One</h1>
-    <p class="small">Search, filter, and sort Case Data One records.</p>
-    <div id="case-data-one-import-status" class="small" style="margin-top: 8px;"></div>
+    <div class="case-data-one-header">
+      <div>
+        <h1>Case Data One</h1>
+        <p class="small">Browse case data one records in a card view.</p>
+        <div id="case-data-one-import-status" class="small" style="margin-top: 8px;"></div>
+      </div>
+      <form id="case-data-one-search" class="case-data-one-search">
+        <input
+          type="search"
+          name="search"
+          id="case-data-one-search-input"
+          placeholder="Search case number, short title, party, or judge names..."
+          aria-label="Search Case Data One"
+        />
+        <button type="submit">Search</button>
+      </form>
+    </div>
 
-    <table id="case-data-one-table" class="display" style="width: 100%; margin-top: 16px;">
-      <thead>
-        <tr>
-          {% for column in columns %}
-            <th>{{ column }}</th>
-          {% endfor %}
-        </tr>
-      </thead>
-    </table>
+    <div id="case-data-one-results" class="case-data-one-results"></div>
+    <div class="case-data-one-pagination">
+      <button type="button" id="case-data-one-prev" class="secondary">Previous</button>
+      <span id="case-data-one-page" class="small"></span>
+      <button type="button" id="case-data-one-next" class="secondary">Next</button>
+    </div>
   </div>
 
   <style>
-    .dataTables_wrapper .dataTables_filter input {
+    .case-data-one-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .case-data-one-search {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
       border-radius: 999px;
-      border: 1px solid #d6d6d6;
-      padding: 6px 10px;
+      background: #f7f7f7;
     }
 
-    table.dataTable {
-      border-collapse: collapse;
+    .case-data-one-search input {
+      border: none;
+      background: transparent;
+      min-width: 280px;
+      font-size: 1rem;
     }
 
-    table.dataTable thead th {
-      background: #f5f5f5;
+    .case-data-one-search input:focus {
+      outline: none;
+    }
+
+    .case-data-one-search button {
+      border: none;
+      background: #1f6feb;
+      color: white;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .case-data-one-results {
+      margin-top: 24px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+
+    .case-card {
+      border: 1px solid #e5e5e5;
+      border-radius: 12px;
+      padding: 16px;
+      background: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
+
+    .case-card__title {
+      font-weight: 700;
+      font-size: 1.05rem;
+      margin: 0;
+    }
+
+    .case-card__subtitle {
+      color: #666;
+      margin: 0;
+    }
+
+    .case-card__meta {
+      display: grid;
+      gap: 6px;
+      font-size: 0.9rem;
+    }
+
+    .case-card__meta span {
+      color: #444;
+    }
+
+    .case-data-one-pagination {
+      margin-top: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+
+    .case-data-one-pagination button.secondary {
+      border: 1px solid #d0d7de;
+      background: #fff;
+      color: #333;
+      padding: 8px 16px;
+      border-radius: 999px;
+      cursor: pointer;
     }
   </style>
 
-  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/jquery.dataTables.min.css">
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
   <script>
-    $(document).ready(function () {
-      $('#case-data-one-table').DataTable({
-        serverSide: true,
-        processing: true,
-        searchDelay: 250,
-        pageLength: 25,
-        lengthMenu: [25, 50, 100],
-        ajax: {
-          url: '{{ url_for("admin_case_data_one_data") }}',
-          dataSrc: 'data'
-        },
-        columns: [
-          {% for column in columns %}
-            { data: '{{ column }}' }{% if not loop.last %},{% endif %}
-          {% endfor %}
-        ]
-      });
-
+    document.addEventListener('DOMContentLoaded', () => {
+      const resultsEl = document.getElementById('case-data-one-results');
+      const pageEl = document.getElementById('case-data-one-page');
+      const prevButton = document.getElementById('case-data-one-prev');
+      const nextButton = document.getElementById('case-data-one-next');
+      const searchForm = document.getElementById('case-data-one-search');
+      const searchInput = document.getElementById('case-data-one-search-input');
       const statusEl = document.getElementById('case-data-one-import-status');
       const statusUrl = '{{ url_for("admin_case_data_one_import_status") }}';
+      const dataUrl = '{{ url_for("admin_case_data_one_data") }}';
+
+      const state = {
+        page: 1,
+        perPage: 12,
+        search: '',
+        totalPages: 1
+      };
+
+      const formatValue = (value) => {
+        if (value === null || value === undefined || value === '') {
+          return '—';
+        }
+        return value;
+      };
+
+      const renderCards = (records) => {
+        resultsEl.innerHTML = '';
+        if (!records.length) {
+          const empty = document.createElement('div');
+          empty.className = 'small';
+          empty.textContent = 'No case records found.';
+          resultsEl.appendChild(empty);
+          return;
+        }
+
+        records.forEach((record) => {
+          const card = document.createElement('div');
+          card.className = 'case-card';
+
+          const title = document.createElement('h3');
+          title.className = 'case-card__title';
+          title.textContent = formatValue(record.cs_case_number);
+
+          const subtitle = document.createElement('p');
+          subtitle.className = 'case-card__subtitle';
+          subtitle.textContent = formatValue(record.cs_short_title);
+
+          const meta = document.createElement('div');
+          meta.className = 'case-card__meta';
+
+          const fields = [
+            { label: 'Filed', value: record.cs_date_filed },
+            { label: 'Terminated', value: record.cs_date_term },
+            { label: 'Case Type', value: record.cs_type },
+            { label: 'Party', value: record.party },
+            { label: 'Presiding Judge', value: record.pre_judge_name },
+            { label: 'Referred Judge', value: record.ref_judge_name }
+          ];
+
+          fields.forEach((field) => {
+            const row = document.createElement('span');
+            row.textContent = `${field.label}: ${formatValue(field.value)}`;
+            meta.appendChild(row);
+          });
+
+          card.appendChild(title);
+          card.appendChild(subtitle);
+          card.appendChild(meta);
+          resultsEl.appendChild(card);
+        });
+      };
+
+      const renderPagination = () => {
+        pageEl.textContent = `Page ${state.page} of ${state.totalPages}`;
+        prevButton.disabled = state.page <= 1;
+        nextButton.disabled = state.page >= state.totalPages;
+      };
+
+      const fetchData = () => {
+        const url = new URL(dataUrl, window.location.origin);
+        url.searchParams.set('page', state.page);
+        url.searchParams.set('per_page', state.perPage);
+        if (state.search) {
+          url.searchParams.set('search', state.search);
+        }
+
+        fetch(url, { credentials: 'same-origin' })
+          .then((response) => response.json())
+          .then((payload) => {
+            renderCards(payload.data || []);
+            state.totalPages = payload.totalPages || 1;
+            renderPagination();
+          })
+          .catch(() => {
+            resultsEl.innerHTML = '<div class="small">Unable to load case records.</div>';
+          });
+      };
+
+      searchForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        state.search = searchInput.value.trim();
+        state.page = 1;
+        fetchData();
+      });
+
+      prevButton.addEventListener('click', () => {
+        if (state.page > 1) {
+          state.page -= 1;
+          fetchData();
+        }
+      });
+
+      nextButton.addEventListener('click', () => {
+        if (state.page < state.totalPages) {
+          state.page += 1;
+          fetchData();
+        }
+      });
 
       function renderStatus(payload) {
         if (!statusEl) {
@@ -96,6 +282,7 @@
       }
 
       pollStatus();
+      fetchData();
     });
   </script>
 {% endblock %}

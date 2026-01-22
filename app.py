@@ -35,13 +35,11 @@ from sqlalchemy import (
     Table,
     Text,
     bindparam,
-    cast,
     create_engine,
     delete,
     func,
     insert,
     literal_column,
-    or_,
     select,
     update,
 )
@@ -131,6 +129,24 @@ CASE_DATA_ONE_DATE_COLUMNS = {
 }
 CASE_DATA_ONE_HEADER_ALIASES: Dict[str, str] = {}
 CASE_DATA_ONE_ERROR_DETAIL_LIMIT = 200
+CASE_DATA_ONE_SEARCH_COLUMNS = [
+    "cs_case_number",
+    "cs_short_title",
+    "party",
+    "pre_judge_name",
+    "ref_judge_name",
+]
+CASE_DATA_ONE_CARD_FIELDS = [
+    "cs_caseid",
+    "cs_case_number",
+    "cs_short_title",
+    "cs_date_filed",
+    "cs_date_term",
+    "cs_type",
+    "party",
+    "pre_judge_name",
+    "ref_judge_name",
+]
 
 USER_TYPES = [
     "Attorney, Solo Practitioner",
@@ -512,6 +528,34 @@ def create_app() -> Flask:
             parts.append(text_value.lower())
         return " ".join(parts) if parts else None
 
+    def _case_data_one_search_text_expression(table: Table) -> Any:
+        expr = func.coalesce(table.c.cs_case_number, "")
+        for column_name in CASE_DATA_ONE_SEARCH_COLUMNS[1:]:
+            expr = expr + literal_column("' '") + func.coalesce(table.c[column_name], "")
+        return expr
+
+    def _ensure_case_data_one_search_index() -> None:
+        if not _is_postgres():
+            return
+        try:
+            search_expression = (
+                "coalesce(cs_case_number, '') || ' ' || "
+                "coalesce(cs_short_title, '') || ' ' || "
+                "coalesce(party, '') || ' ' || "
+                "coalesce(pre_judge_name, '') || ' ' || "
+                "coalesce(ref_judge_name, '')"
+            )
+            with engine.begin() as conn:
+                conn.execute(
+                    sa_text(
+                        "CREATE INDEX IF NOT EXISTS case_data_one_search_idx "
+                        "ON case_data_one USING GIN "
+                        f"(to_tsvector('english', {search_expression}))"
+                    )
+                )
+        except Exception:
+            app.logger.exception("Unable to create case data one search index.")
+
     def _upsert_case_stage1_batch(
         conn: Any,
         table: Table,
@@ -647,6 +691,7 @@ def create_app() -> Flask:
         return case_data_one_imports.get(latest_id)
 
     _ensure_case_stage1_search_index()
+    _ensure_case_data_one_search_index()
 
     def _record_case_data_one_error(
         error_details: List[Dict[str, Any]],
@@ -1870,63 +1915,40 @@ def create_app() -> Flask:
     @admin_required
     def admin_case_data_one_list():
         return render_template(
-            "admin_case_data_one_list.html", columns=CASE_DATA_ONE_DISPLAY_COLUMNS
+            "admin_case_data_one_list.html", columns=CASE_DATA_ONE_CARD_FIELDS
         )
 
     @app.get("/admin/case-data-one/data")
     @admin_required
     def admin_case_data_one_data():
         case_data_one_table = case_data_one
-        columns = CASE_DATA_ONE_DISPLAY_COLUMNS
-        draw = int(request.args.get("draw", 1))
-        start = max(int(request.args.get("start", 0)), 0)
-        length = min(int(request.args.get("length", 25)), 200)
-        search_value = request.args.get("search[value]", "").strip()
-
-        order_col_index = request.args.get("order[0][column]", "0")
-        order_dir = request.args.get("order[0][dir]", "asc")
-        try:
-            order_index = int(order_col_index)
-        except ValueError:
-            order_index = 0
-        order_column_name = columns[order_index] if order_index < len(columns) else "cs_caseid"
-        order_column = case_data_one_table.c.get(
-            order_column_name, case_data_one_table.c.cs_caseid
-        )
+        columns = CASE_DATA_ONE_CARD_FIELDS
+        page = max(int(request.args.get("page", 1)), 1)
+        per_page = min(max(int(request.args.get("per_page", 12)), 1), 100)
+        search_value = request.args.get("search", "").strip()
+        offset = (page - 1) * per_page
 
         selected_columns = [case_data_one_table.c[name] for name in columns]
         base_query = select(*selected_columns)
+        search_expression = _case_data_one_search_text_expression(case_data_one_table)
 
         if search_value:
-            like_term = f"%{search_value.lower()}%"
-            search_clauses = []
-            for column_name in columns:
-                column = case_data_one_table.c.get(column_name)
-                if column is None:
-                    continue
-                search_clauses.append(func.lower(cast(column, Text)).like(like_term))
-            if search_clauses:
-                search_filter = or_(*search_clauses)
-                base_query = base_query.where(search_filter)
-                count_query = (
-                    select(func.count())
-                    .select_from(case_data_one_table)
-                    .where(search_filter)
+            if _is_postgres():
+                search_filter = func.to_tsvector("english", search_expression).op("@@")(
+                    func.plainto_tsquery("english", search_value)
                 )
             else:
-                count_query = select(func.count()).select_from(case_data_one_table)
+                like_term = f"%{search_value.lower()}%"
+                search_filter = func.lower(search_expression).like(like_term)
+            base_query = base_query.where(search_filter)
+            count_query = select(func.count()).select_from(case_data_one_table).where(
+                search_filter
+            )
         else:
             count_query = select(func.count()).select_from(case_data_one_table)
 
-        if search_value:
-            if order_dir == "desc":
-                base_query = base_query.order_by(order_column.desc())
-            else:
-                base_query = base_query.order_by(order_column.asc())
-        else:
-            base_query = base_query.order_by(case_data_one_table.c.cs_caseid.desc())
-
-        base_query = base_query.limit(length).offset(start)
+        base_query = base_query.order_by(case_data_one_table.c.cs_caseid.desc())
+        base_query = base_query.limit(per_page).offset(offset)
 
         with engine.connect() as conn:
             records_total = conn.execute(
@@ -1938,11 +1960,14 @@ def create_app() -> Flask:
                 records_filtered = records_total
             rows = conn.execute(base_query).mappings().all()
 
+        total_pages = max(1, (records_filtered + per_page - 1) // per_page)
         return jsonify(
             {
-                "draw": draw,
+                "page": page,
+                "per_page": per_page,
                 "recordsTotal": records_total,
                 "recordsFiltered": records_filtered,
+                "totalPages": total_pages,
                 "data": [dict(row) for row in rows],
             }
         )
