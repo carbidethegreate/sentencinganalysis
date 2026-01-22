@@ -23,19 +23,23 @@
         </div>
         <div class="case-data-one-search__filters">
           <label>
-            <span class="small">Case Type (criminal only)</span>
+            <span class="small">Case Type</span>
             <select id="case-data-one-filter-type" name="case_type">
               <option value="">All</option>
+              <option value="ap">Appellate (ap)</option>
+              <option value="bk">Bankruptcy (bk)</option>
               <option value="cr">Criminal (cr)</option>
+              <option value="cv">Civil (cv)</option>
+              <option value="mdl">MDL (mdl)</option>
             </select>
           </label>
           <label>
             <span class="small">Party Role</span>
-            <input type="text" id="case-data-one-filter-role" name="party_role" placeholder="e.g., def" />
+            <input type="text" id="case-data-one-filter-role" name="party_role" placeholder="e.g., plt" />
           </label>
           <label>
             <span class="small">Party Type</span>
-            <input type="text" id="case-data-one-filter-party-type" name="party_type" placeholder="e.g., defendant" />
+            <input type="text" id="case-data-one-filter-party-type" name="party_type" placeholder="e.g., debtor" />
           </label>
           <label>
             <span class="small">Case Year</span>

@@ -202,7 +202,7 @@ USER_TYPES = [
     "Other",
 ]
 
-VALID_JURISDICTION_TYPES = {"cr"}  # Criminal cases only.
+VALID_JURISDICTION_TYPES = {"ap", "bk", "cr", "cv", "mdl"}
 
 
 def _first_env(*names: str) -> Optional[str]:
@@ -869,7 +869,7 @@ def create_app() -> Flask:
             _record_case_data_one_error(
                 error_details,
                 row_number=row_number,
-                message="Invalid cs_type value; expected cr (criminal).",
+                message="Invalid cs_type value; expected ap, bk, cr, cv, or mdl.",
             )
             error_count += 1
 
