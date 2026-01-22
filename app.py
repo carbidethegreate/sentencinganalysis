@@ -210,7 +210,7 @@ USER_TYPES = [
     "Other",
 ]
 
-VALID_JURISDICTION_TYPES = {"ap", "bk", "cr", "cv", "mdl", "mj"}
+VALID_JURISDICTION_TYPES = {"ap", "bk", "cr", "cv", "mdl", "mj", "po"}
 
 
 def _first_env(*names: str) -> Optional[str]:
@@ -609,6 +609,8 @@ def create_app() -> Flask:
             "mdl": "mdl",
             "mag": "mj",
             "magistrate": "mj",
+            "petty offense": "po",
+            "pettyoffense": "po",
         }
         return aliases.get(normalized)
 
@@ -1086,7 +1088,7 @@ def create_app() -> Flask:
                 error_details,
                 row_number=row_number,
                 message=(
-                    "Invalid cs_type value; expected ap, bk, cr, cv, mdl, or mj "
+                    "Invalid cs_type value; expected ap, bk, cr, cv, mdl, mj, or po "
                     "(values containing sealed/unavailable are treated as unavailable)."
                 ),
                 record=row_data,
@@ -1345,6 +1347,9 @@ def create_app() -> Flask:
 
                         case_id_raw = row_data.get("cs_caseid")
                         row_valid = True
+                        if all(value is None for value in row_data.values()):
+                            skipped_rows += 1
+                            continue
                         try:
                             row_data["cs_caseid"] = (
                                 int(case_id_raw) if case_id_raw is not None else None
