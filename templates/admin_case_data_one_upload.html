@@ -14,5 +14,128 @@
         <button class="pill" type="submit">Upload case data one</button>
       </div>
     </form>
+
+    <div id="case-data-one-status" style="margin-top: 24px; display: none;">
+      <h2 style="margin-bottom: 8px;">Import Progress</h2>
+      <div style="background: #f1f5f9; border-radius: 999px; height: 12px; overflow: hidden;">
+        <div id="case-data-one-progress-bar" style="background: #2563eb; height: 12px; width: 0%;"></div>
+      </div>
+      <p id="case-data-one-progress-text" class="small" style="margin-top: 8px;">
+        Waiting for import status...
+      </p>
+      <ul class="small" style="margin-top: 12px; padding-left: 18px;">
+        <li>Total rows read: <span id="case-data-one-total">0</span></li>
+        <li>Processed rows: <span id="case-data-one-processed">0</span></li>
+        <li>Inserted rows: <span id="case-data-one-inserted">0</span></li>
+        <li>Updated rows: <span id="case-data-one-updated">0</span></li>
+        <li>Skipped rows: <span id="case-data-one-skipped">0</span></li>
+        <li>Error rows: <span id="case-data-one-errors">0</span></li>
+      </ul>
+      <div id="case-data-one-error-actions" style="margin-top: 12px; display: none;">
+        <p class="small" style="margin-bottom: 8px;">
+          Parsing errors were detected. Download the error report or check the server logs.
+        </p>
+        <button class="pill" id="case-data-one-download-errors" type="button">
+          Download error report
+        </button>
+      </div>
+      <details id="case-data-one-error-details" style="margin-top: 12px; display: none;">
+        <summary class="small">View error details</summary>
+        <ul id="case-data-one-error-list" class="small" style="margin-top: 8px;"></ul>
+      </details>
+    </div>
   </div>
+
+  <script>
+    const statusContainer = document.getElementById("case-data-one-status");
+    const progressBar = document.getElementById("case-data-one-progress-bar");
+    const progressText = document.getElementById("case-data-one-progress-text");
+    const totalEl = document.getElementById("case-data-one-total");
+    const processedEl = document.getElementById("case-data-one-processed");
+    const insertedEl = document.getElementById("case-data-one-inserted");
+    const updatedEl = document.getElementById("case-data-one-updated");
+    const skippedEl = document.getElementById("case-data-one-skipped");
+    const errorsEl = document.getElementById("case-data-one-errors");
+    const errorActions = document.getElementById("case-data-one-error-actions");
+    const errorDetails = document.getElementById("case-data-one-error-details");
+    const errorList = document.getElementById("case-data-one-error-list");
+    const downloadErrors = document.getElementById("case-data-one-download-errors");
+    let lastErrors = [];
+
+    function renderErrors(errors) {
+      errorList.innerHTML = "";
+      errors.forEach((item) => {
+        const li = document.createElement("li");
+        const rowLabel = item.row_number ? `Row ${item.row_number}` : "Row";
+        li.textContent = `${rowLabel}: ${item.message}`;
+        errorList.appendChild(li);
+      });
+    }
+
+    function downloadErrorReport() {
+      if (!lastErrors.length) {
+        return;
+      }
+      const blob = new Blob([JSON.stringify(lastErrors, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "case-data-one-import-errors.json";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    downloadErrors.addEventListener("click", downloadErrorReport);
+
+    async function fetchStatus() {
+      try {
+        const response = await fetch("/admin/case-data-one/import-status", {
+          headers: {"Accept": "application/json"},
+        });
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        if (!data || data.status === "idle") {
+          return;
+        }
+        statusContainer.style.display = "block";
+        totalEl.textContent = data.total_rows ?? 0;
+        processedEl.textContent = data.processed_rows ?? 0;
+        insertedEl.textContent = data.inserted_rows ?? 0;
+        updatedEl.textContent = data.updated_rows ?? 0;
+        skippedEl.textContent = data.skipped_rows ?? 0;
+        errorsEl.textContent = data.error_rows ?? 0;
+
+        const total = Number(data.total_rows ?? 0);
+        const processed = Number(data.processed_rows ?? 0);
+        const percent = total > 0 ? Math.min((processed / total) * 100, 100) : 0;
+        progressBar.style.width = `${percent}%`;
+        progressText.textContent = data.message || `Status: ${data.status}`;
+
+        lastErrors = Array.isArray(data.error_details) ? data.error_details : [];
+        if (lastErrors.length) {
+          errorActions.style.display = "block";
+          errorDetails.style.display = "block";
+          renderErrors(lastErrors);
+        } else {
+          errorActions.style.display = "none";
+          errorDetails.style.display = "none";
+        }
+
+        if (data.status === "completed" || data.status === "failed") {
+          clearInterval(window.caseDataOneStatusTimer);
+        }
+      } catch (error) {
+        console.error("Failed to fetch import status", error);
+      }
+    }
+
+    fetchStatus();
+    window.caseDataOneStatusTimer = setInterval(fetchStatus, 3000);
+  </script>
 {% endblock %}
