@@ -1385,9 +1385,13 @@ def create_app() -> Flask:
             )
             if error_rows:
                 completion_message = (
-                    f"{completion_message} No rows were inserted due to validation "
-                    "errors. Download the error report or check the server logs for "
-                    "details."
+                    f"{completion_message} One or more errors occurred; no files were "
+                    "added to the database. Download the error report or check the "
+                    "server logs for details."
+                )
+            else:
+                completion_message = (
+                    f"{completion_message} All files have been added to the database."
                 )
 
             _set_case_data_one_import(
