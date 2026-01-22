@@ -72,6 +72,48 @@ CASE_STAGE1_IMPORT_COLUMNS = [
 ]
 CASE_STAGE1_DATE_COLUMNS = {"cs_file_date"}
 CASE_STAGE1_HEADER_ALIASES = {"cs_date_filed": "cs_file_date"}
+CASE_DATA_ONE_CHUNK_SIZE = 1000
+CASE_DATA_ONE_IMPORT_COLUMNS = [
+    "cs_caseid",
+    "cs_case_number",
+    "cs_short_title",
+    "cs_date_filed",
+    "cs_date_term",
+    "cs_date_reopen",
+    "cs_type",
+    "cs_case_restriction",
+    "lead_caseid",
+    "lead_case_number",
+    "lead_short_title",
+    "lead_date_filed",
+    "lead_date_term",
+    "lead_date_reopen",
+    "office_trans",
+    "pre_judge_name",
+    "ref_judge_name",
+    "cs_sort_case_numb",
+    "cs_def_num",
+    "cs_term_digit",
+    "party",
+    "party_start_date",
+    "party_end_date",
+    "party_def_num",
+    "loc_date_start",
+    "loc_date_end",
+]
+CASE_DATA_ONE_DATE_COLUMNS = {
+    "cs_date_filed",
+    "cs_date_term",
+    "cs_date_reopen",
+    "lead_date_filed",
+    "lead_date_term",
+    "lead_date_reopen",
+    "party_start_date",
+    "party_end_date",
+    "loc_date_start",
+    "loc_date_end",
+}
+CASE_DATA_ONE_HEADER_ALIASES: Dict[str, str] = {}
 
 USER_TYPES = [
     "Attorney, Solo Practitioner",
@@ -297,9 +339,42 @@ def create_app() -> Flask:
         Column("search_text", Text, nullable=True),
     )
 
-    # Create the users/newsletter/case_stage1 tables if they don't exist.
+    case_data_one = Table(
+        "case_data_one",
+        metadata,
+        Column("cs_caseid", Integer, primary_key=True),
+        Column("cs_case_number", Text, nullable=True),
+        Column("cs_short_title", Text, nullable=True),
+        Column("cs_date_filed", Date, nullable=True),
+        Column("cs_date_term", Date, nullable=True),
+        Column("cs_date_reopen", Date, nullable=True),
+        Column("cs_type", Text, nullable=True),
+        Column("cs_case_restriction", Text, nullable=True),
+        Column("lead_caseid", Text, nullable=True),
+        Column("lead_case_number", Text, nullable=True),
+        Column("lead_short_title", Text, nullable=True),
+        Column("lead_date_filed", Date, nullable=True),
+        Column("lead_date_term", Date, nullable=True),
+        Column("lead_date_reopen", Date, nullable=True),
+        Column("office_trans", Text, nullable=True),
+        Column("pre_judge_name", Text, nullable=True),
+        Column("ref_judge_name", Text, nullable=True),
+        Column("cs_sort_case_numb", Text, nullable=True),
+        Column("cs_def_num", Text, nullable=True),
+        Column("cs_term_digit", Text, nullable=True),
+        Column("party", Text, nullable=True),
+        Column("party_start_date", Date, nullable=True),
+        Column("party_end_date", Date, nullable=True),
+        Column("party_def_num", Text, nullable=True),
+        Column("loc_date_start", Date, nullable=True),
+        Column("loc_date_end", Date, nullable=True),
+    )
+
+    # Create the users/newsletter/case_stage1/case_data_one tables if they don't exist.
     try:
-        metadata.create_all(engine, tables=[users, newsletter_subscriptions, case_stage1])
+        metadata.create_all(
+            engine, tables=[users, newsletter_subscriptions, case_stage1, case_data_one]
+        )
     except OperationalError as exc:
         if "already exists" in str(exc).lower():
             app.logger.warning("Database tables already exist; skipping create_all.")
@@ -307,6 +382,7 @@ def create_app() -> Flask:
             raise
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
+    case_data_one_imports: Dict[str, Dict[str, Any]] = {}
 
     # -----------------
     # Helpers
@@ -352,6 +428,14 @@ def create_app() -> Flask:
         except ValueError:
             return None
 
+    def _parse_case_data_one_date(value: Optional[str]) -> Optional[Any]:
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value.strip(), "%m/%d/%Y").date()
+        except ValueError:
+            return None
+
     def _normalize_case_stage1_headers(raw_headers: Sequence[str]) -> List[str]:
         normalized: List[str] = []
         counts: Dict[str, int] = {}
@@ -365,6 +449,22 @@ def create_app() -> Flask:
             elif counts[name] > 1:
                 name = f"{name}_{counts[name]}"
             name = CASE_STAGE1_HEADER_ALIASES.get(name, name)
+            normalized.append(name)
+        return normalized
+
+    def _normalize_case_data_one_headers(raw_headers: Sequence[str]) -> List[str]:
+        normalized: List[str] = []
+        counts: Dict[str, int] = {}
+        for header in raw_headers:
+            name = re.sub(r"[^a-zA-Z0-9_]", "_", header.strip())
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            if name == "cs_short_title" and counts[name] == 2:
+                name = "lead_short_title"
+            elif counts[name] > 1:
+                name = f"{name}_{counts[name]}"
+            name = CASE_DATA_ONE_HEADER_ALIASES.get(name, name)
             normalized.append(name)
         return normalized
 
@@ -455,6 +555,62 @@ def create_app() -> Flask:
             conn.execute(update_stmt, update_rows)
         return inserted_count, updated_count
 
+    def _upsert_case_data_one_batch(
+        conn: Any,
+        table: Table,
+        rows: List[Dict[str, Any]],
+        *,
+        track_counts: bool = True,
+    ) -> Tuple[int, int]:
+        if not rows:
+            return 0, 0
+        if _is_postgres():
+            stmt = insert(table).values(rows)
+            update_values = {
+                col.name: stmt.excluded[col.name]
+                for col in table.c
+                if col.name not in {"cs_caseid"}
+            }
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[table.c.cs_caseid], set_=update_values
+            )
+            if track_counts:
+                stmt = stmt.returning(literal_column("xmax = 0").label("inserted"))
+                inserted_flags = conn.execute(stmt).scalars().all()
+                inserted_count = sum(1 for flag in inserted_flags if flag)
+                updated_count = len(inserted_flags) - inserted_count
+                return inserted_count, updated_count
+            conn.execute(stmt)
+            return 0, 0
+
+        ids = [row["cs_caseid"] for row in rows]
+        existing_ids = set(
+            conn.execute(select(table.c.cs_caseid).where(table.c.cs_caseid.in_(ids))).scalars()
+        )
+        inserted_count = len(rows) - len(existing_ids)
+        updated_count = len(existing_ids)
+        insert_rows = [row for row in rows if row["cs_caseid"] not in existing_ids]
+        update_rows = [
+            {**row, "b_cs_caseid": row["cs_caseid"]}
+            for row in rows
+            if row["cs_caseid"] in existing_ids
+        ]
+        if insert_rows:
+            conn.execute(insert(table), insert_rows)
+        if update_rows:
+            update_columns = {
+                col.name: bindparam(col.name)
+                for col in table.c
+                if col.name not in {"cs_caseid"}
+            }
+            update_stmt = (
+                update(table)
+                .where(table.c.cs_caseid == bindparam("b_cs_caseid"))
+                .values(**update_columns)
+            )
+            conn.execute(update_stmt, update_rows)
+        return inserted_count, updated_count
+
     def _set_case_stage1_import(job_id: str, **fields: Any) -> None:
         case_stage1_imports.setdefault(job_id, {}).update(fields)
 
@@ -463,6 +619,9 @@ def create_app() -> Flask:
         if not latest_id:
             return None
         return case_stage1_imports.get(latest_id)
+
+    def _set_case_data_one_import(job_id: str, **fields: Any) -> None:
+        case_data_one_imports.setdefault(job_id, {}).update(fields)
 
     _ensure_case_stage1_search_index()
 
@@ -583,6 +742,138 @@ def create_app() -> Flask:
             app.logger.exception("Case stage 1 upload failed.")
             error_rows += 1
             _set_case_stage1_import(
+                job_id,
+                status="failed",
+                completed_at=datetime.utcnow().isoformat(),
+                total_rows=total_rows,
+                inserted_rows=inserted_rows,
+                updated_rows=updated_rows,
+                skipped_rows=skipped_rows,
+                error_rows=error_rows,
+                message="Upload failed. Please check the server logs for details.",
+            )
+        finally:
+            try:
+                os.remove(file_path)
+            except OSError:
+                app.logger.warning("Unable to remove uploaded file %s", file_path)
+
+    def _process_case_data_one_upload(job_id: str, file_path: str) -> None:
+        total_rows = 0
+        inserted_rows = 0
+        updated_rows = 0
+        skipped_rows = 0
+        error_rows = 0
+        processed_rows = 0
+
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+                reader = csv.reader(handle, delimiter="|")
+                raw_headers = next(reader, None)
+                if not raw_headers:
+                    raise ValueError("Uploaded file is missing a header row.")
+
+                headers = _normalize_case_data_one_headers(raw_headers)
+                if "cs_caseid" not in headers:
+                    raise ValueError("Uploaded file must include cs_caseid header.")
+                if _is_postgres():
+                    with engine.connect() as conn:
+                        records_total_before = conn.execute(
+                            select(func.count()).select_from(case_data_one)
+                        ).scalar_one()
+                else:
+                    records_total_before = 0
+
+                header_columns = [
+                    header if header in CASE_DATA_ONE_IMPORT_COLUMNS else None
+                    for header in headers
+                ]
+
+                with engine.begin() as conn:
+                    case_data_one_table = case_data_one
+                    date_columns = CASE_DATA_ONE_DATE_COLUMNS
+                    data_columns = CASE_DATA_ONE_IMPORT_COLUMNS
+
+                    batch: List[Dict[str, Any]] = []
+                    for row in reader:
+                        total_rows += 1
+                        row_data: Dict[str, Any] = {column: None for column in data_columns}
+                        for header, value in zip(header_columns, row):
+                            if not header:
+                                continue
+                            clean_value = value.strip()
+                            row_data[header] = clean_value if clean_value else None
+                        for column in data_columns:
+                            row_data.setdefault(column, None)
+
+                        case_id_raw = row_data.get("cs_caseid")
+                        try:
+                            row_data["cs_caseid"] = (
+                                int(case_id_raw) if case_id_raw is not None else None
+                            )
+                        except (TypeError, ValueError):
+                            skipped_rows += 1
+                            continue
+                        if row_data["cs_caseid"] is None:
+                            skipped_rows += 1
+                            continue
+
+                        for header in date_columns:
+                            row_data[header] = _parse_case_data_one_date(row_data.get(header))
+
+                        processed_rows += 1
+                        batch.append(row_data)
+                        if len(batch) >= CASE_DATA_ONE_CHUNK_SIZE:
+                            inserted, updated = _upsert_case_data_one_batch(
+                                conn,
+                                case_data_one_table,
+                                batch,
+                                track_counts=not _is_postgres(),
+                            )
+                            inserted_rows += inserted
+                            updated_rows += updated
+                            batch = []
+
+                    if batch:
+                        inserted, updated = _upsert_case_data_one_batch(
+                            conn,
+                            case_data_one_table,
+                            batch,
+                            track_counts=not _is_postgres(),
+                        )
+                        inserted_rows += inserted
+                        updated_rows += updated
+
+                if _is_postgres():
+                    with engine.connect() as conn:
+                        records_total_after = conn.execute(
+                            select(func.count()).select_from(case_data_one)
+                        ).scalar_one()
+                    inserted_rows = max(0, records_total_after - records_total_before)
+                    updated_rows = max(0, processed_rows - inserted_rows)
+
+            _set_case_data_one_import(
+                job_id,
+                status="completed",
+                completed_at=datetime.utcnow().isoformat(),
+                total_rows=total_rows,
+                inserted_rows=inserted_rows,
+                updated_rows=updated_rows,
+                skipped_rows=skipped_rows,
+                error_rows=error_rows,
+                message=(
+                    "Upload complete. "
+                    f"Total rows: {total_rows}. "
+                    f"Inserted: {inserted_rows}. "
+                    f"Updated: {updated_rows}. "
+                    f"Skipped: {skipped_rows}. "
+                    f"Errors: {error_rows}."
+                ),
+            )
+        except Exception:
+            app.logger.exception("Case data one upload failed.")
+            error_rows += 1
+            _set_case_data_one_import(
                 job_id,
                 status="failed",
                 completed_at=datetime.utcnow().isoformat(),
@@ -1437,13 +1728,14 @@ def create_app() -> Flask:
         tables = [
             t
             for t in metadata.tables.keys()
-            if t.lower() not in {"users", "newsletter_subscriptions", "case_stage1"}
+            if t.lower()
+            not in {"users", "newsletter_subscriptions", "case_stage1", "case_data_one"}
         ]
         return jsonify(sorted(tables))
 
     @app.route("/api/<table_name>", methods=["GET", "POST"])
     def table_records(table_name: str):
-        if table_name.lower() in {"users", "newsletter_subscriptions", "case_stage1"}:
+        if table_name.lower() in {"users", "newsletter_subscriptions", "case_stage1", "case_data_one"}:
             return jsonify({"error": "Forbidden"}), 403
 
         try:
