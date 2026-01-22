@@ -946,6 +946,44 @@ def create_app() -> Flask:
 
         return "\n".join(summary_lines + error_lines).strip()
 
+    def _build_case_data_one_error_report_text(error_report: Dict[str, Any]) -> str:
+        error_details = error_report.get("error_details") or []
+        total_rows = error_report.get("total_rows")
+        processed_rows = error_report.get("processed_rows")
+        inserted_rows = error_report.get("inserted_rows")
+        updated_rows = error_report.get("updated_rows")
+        skipped_rows = error_report.get("skipped_rows")
+        error_rows = error_report.get("error_rows")
+        message = error_report.get("message")
+        status = error_report.get("status")
+
+        summary_lines = [
+            "Case Data One Import Error Report",
+            f"Status: {status or 'unknown'}",
+            f"Message: {message or 'N/A'}",
+            f"Total rows: {total_rows if total_rows is not None else 'unknown'}",
+            f"Processed rows: {processed_rows if processed_rows is not None else 'unknown'}",
+            f"Inserted rows: {inserted_rows if inserted_rows is not None else 'unknown'}",
+            f"Updated rows: {updated_rows if updated_rows is not None else 'unknown'}",
+            f"Skipped rows: {skipped_rows if skipped_rows is not None else 'unknown'}",
+            f"Error rows: {error_rows if error_rows is not None else 'unknown'}",
+            "",
+        ]
+
+        detail_lines = ["Itemized errors:"]
+        for index, item in enumerate(error_details, start=1):
+            row_number = item.get("row_number")
+            row_label = f"Row {row_number}" if row_number else "Row (unknown)"
+            detail_message = item.get("message", "(no message)")
+            record_text = _stringify_case_data_one_error_record(item.get("record"))
+            detail_lines.append(
+                f"{index}. {row_label}\n   Message: {detail_message}\n   Record: {record_text}"
+            )
+        if not error_details:
+            detail_lines.append("No itemized error records were captured.")
+
+        return "\n".join(summary_lines + detail_lines).strip()
+
     def _call_openai_chat_completion(prompt: str) -> str:
         api_key = _first_env_or_secret_file("OPENAI_API_KEY")
         if not api_key:
@@ -1185,16 +1223,17 @@ def create_app() -> Flask:
         processed_rows = 0
         error_details: List[Dict[str, Any]] = []
         validation_failed = False
-
-        class CaseDataOneValidationError(Exception):
-            pass
+        valid_rows: Optional[List[Dict[str, Any]]] = []
 
         try:
             batch_size = CASE_DATA_ONE_CHUNK_SIZE
             if not _is_postgres():
                 column_count = max(1, len(CASE_DATA_ONE_IMPORT_COLUMNS))
-                sqlite_batch_limit = max(1, (SQLITE_MAX_VARIABLE_NUMBER // column_count) - 1)
-                batch_size = min(batch_size, sqlite_batch_limit)
+                sqlite_insert_limit = max(
+                    1, (SQLITE_MAX_VARIABLE_NUMBER // column_count) - 1
+                )
+                sqlite_in_limit = max(1, SQLITE_MAX_VARIABLE_NUMBER - 1)
+                batch_size = min(batch_size, sqlite_insert_limit, sqlite_in_limit)
 
             with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
                 total_rows = max(0, sum(1 for _ in handle) - 1)
@@ -1235,7 +1274,9 @@ def create_app() -> Flask:
                 last_progress_update = time.monotonic()
                 rows_since_update = 0
 
-                def _update_case_data_one_progress(force: bool = False) -> None:
+                def _update_case_data_one_progress(
+                    force: bool = False, *, status: str = "processing", message: str = ""
+                ) -> None:
                     nonlocal last_progress_update, rows_since_update
                     now = time.monotonic()
                     if not force:
@@ -1247,7 +1288,7 @@ def create_app() -> Flask:
                             return
                     _set_case_data_one_import(
                         job_id,
-                        status="processing",
+                        status=status,
                         total_rows=total_rows,
                         processed_rows=processed_rows,
                         inserted_rows=inserted_rows,
@@ -1255,93 +1296,105 @@ def create_app() -> Flask:
                         skipped_rows=skipped_rows,
                         error_rows=error_rows,
                         error_details=error_details,
-                        message=(
-                            "Processing rows. "
+                        message=message
+                        or (
+                            "Validating rows. "
                             f"Processed {processed_rows} of {total_rows}."
                         ),
                     )
                     last_progress_update = now
                     rows_since_update = 0
 
-                try:
-                    with engine.begin() as conn:
-                        case_data_one_table = case_data_one
-                        date_columns = CASE_DATA_ONE_DATE_COLUMNS
-                        data_columns = CASE_DATA_ONE_IMPORT_COLUMNS
+                case_data_one_table = case_data_one
+                date_columns = CASE_DATA_ONE_DATE_COLUMNS
+                data_columns = CASE_DATA_ONE_IMPORT_COLUMNS
 
-                        batch: List[Dict[str, Any]] = []
-                        for row_index, row in enumerate(reader, start=2):
-                            try:
-                                row_data: Dict[str, Any] = {
-                                    column: None for column in data_columns
-                                }
-                                for header, value in zip(header_columns, row):
-                                    if not header:
-                                        continue
-                                    clean_value = value.strip()
-                                    row_data[header] = (
-                                        clean_value if clean_value else None
-                                    )
-                                for column in data_columns:
-                                    row_data.setdefault(column, None)
+                for row_index, row in enumerate(reader, start=2):
+                    processed_rows += 1
+                    try:
+                        row_data: Dict[str, Any] = {
+                            column: None for column in data_columns
+                        }
+                        for header, value in zip(header_columns, row):
+                            if not header:
+                                continue
+                            clean_value = value.strip()
+                            row_data[header] = clean_value if clean_value else None
+                        for column in data_columns:
+                            row_data.setdefault(column, None)
 
-                                case_id_raw = row_data.get("cs_caseid")
-                                row_valid = True
-                                try:
-                                    row_data["cs_caseid"] = (
-                                        int(case_id_raw)
-                                        if case_id_raw is not None
-                                        else None
-                                    )
-                                except (TypeError, ValueError):
-                                    skipped_rows += 1
-                                    error_rows += 1
-                                    _record_case_data_one_error(
-                                        error_details,
-                                        row_number=row_index,
-                                        message="Invalid cs_caseid value.",
-                                        record=row,
-                                    )
-                                    row_valid = False
-                                if row_valid and row_data["cs_caseid"] is None:
-                                    skipped_rows += 1
-                                    error_rows += 1
-                                    _record_case_data_one_error(
-                                        error_details,
-                                        row_number=row_index,
-                                        message="Missing cs_caseid value.",
-                                        record=row,
-                                    )
-                                    row_valid = False
+                        case_id_raw = row_data.get("cs_caseid")
+                        row_valid = True
+                        try:
+                            row_data["cs_caseid"] = (
+                                int(case_id_raw) if case_id_raw is not None else None
+                            )
+                        except (TypeError, ValueError):
+                            skipped_rows += 1
+                            error_rows += 1
+                            _record_case_data_one_error(
+                                error_details,
+                                row_number=row_index,
+                                message="Invalid cs_caseid value.",
+                                record=row,
+                            )
+                            row_valid = False
+                        if row_valid and row_data["cs_caseid"] is None:
+                            skipped_rows += 1
+                            error_rows += 1
+                            _record_case_data_one_error(
+                                error_details,
+                                row_number=row_index,
+                                message="Missing cs_caseid value.",
+                                record=row,
+                            )
+                            row_valid = False
 
-                                if row_valid:
-                                    for header in date_columns:
-                                        row_data[header] = _parse_case_data_one_date(
-                                            row_data.get(header)
-                                        )
-                                    validation_errors = (
-                                        _apply_case_data_one_classifications(
-                                            row_data,
-                                            row_number=row_index,
-                                            error_details=error_details,
-                                        )
-                                    )
-                                    if validation_errors:
-                                        error_rows += validation_errors
-
-                                    processed_rows += 1
-                                    batch.append(row_data)
-                            except Exception as exc:
-                                error_rows += 1
-                                _record_case_data_one_error(
-                                    error_details,
-                                    row_number=row_index,
-                                    message=f"Row parsing failed: {exc}",
-                                    record=row,
+                        if row_valid:
+                            for header in date_columns:
+                                row_data[header] = _parse_case_data_one_date(
+                                    row_data.get(header)
                                 )
-                            rows_since_update += 1
-                            _update_case_data_one_progress()
+                            validation_errors = _apply_case_data_one_classifications(
+                                row_data,
+                                row_number=row_index,
+                                error_details=error_details,
+                            )
+                            if validation_errors:
+                                error_rows += validation_errors
+                                row_valid = False
 
+                        if row_valid and valid_rows is not None:
+                            valid_rows.append(row_data)
+                        if not row_valid:
+                            validation_failed = True
+                            valid_rows = None
+                    except Exception as exc:
+                        error_rows += 1
+                        validation_failed = True
+                        valid_rows = None
+                        _record_case_data_one_error(
+                            error_details,
+                            row_number=row_index,
+                            message=f"Row parsing failed: {exc}",
+                            record=row,
+                        )
+                    rows_since_update += 1
+                    _update_case_data_one_progress(status="validating")
+
+                _update_case_data_one_progress(
+                    force=True, status="validating", message="Validation complete."
+                )
+
+                if error_rows:
+                    validation_failed = True
+
+                if not validation_failed:
+                    valid_rows = valid_rows or []
+                    with engine.begin() as conn:
+                        batch: List[Dict[str, Any]] = []
+                        for row_data in valid_rows:
+                            batch.append(row_data)
                             if len(batch) >= batch_size:
                                 inserted, updated = _upsert_case_data_one_batch(
                                     conn,
@@ -1352,7 +1405,11 @@ def create_app() -> Flask:
                                 inserted_rows += inserted
                                 updated_rows += updated
                                 batch = []
-                                _update_case_data_one_progress(force=True)
+                                _update_case_data_one_progress(
+                                    force=True,
+                                    status="processing",
+                                    message="Applying validated rows.",
+                                )
 
                         if batch:
                             inserted, updated = _upsert_case_data_one_batch(
@@ -1363,14 +1420,12 @@ def create_app() -> Flask:
                             )
                             inserted_rows += inserted
                             updated_rows += updated
-                            _update_case_data_one_progress(force=True)
-
-                        if error_rows:
-                            raise CaseDataOneValidationError(
-                                "Validation errors detected; rolling back inserts."
+                            _update_case_data_one_progress(
+                                force=True,
+                                status="processing",
+                                message="Applying validated rows.",
                             )
-                except CaseDataOneValidationError:
-                    validation_failed = True
+                else:
                     inserted_rows = 0
                     updated_rows = 0
 
@@ -1418,6 +1473,13 @@ def create_app() -> Flask:
         except Exception:
             app.logger.exception("Case data one upload failed.")
             error_rows += 1
+            if not error_details:
+                _record_case_data_one_error(
+                    error_details,
+                    row_number=None,
+                    message="Upload failed unexpectedly. Check server logs for details.",
+                    record=None,
+                )
             _set_case_data_one_import(
                 job_id,
                 status="failed",
@@ -2402,6 +2464,27 @@ def create_app() -> Flask:
 
         model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
         return jsonify({"response": response_text, "model": model})
+
+    @app.get("/admin/case-data-one/error-report")
+    @admin_required
+    def admin_case_data_one_error_report():
+        latest = _latest_case_data_one_import()
+        if not latest:
+            return jsonify({"error": "No import found."}), 404
+        if not latest.get("error_rows"):
+            return jsonify({"error": "No errors were recorded."}), 404
+
+        report_text = _build_case_data_one_error_report_text(latest)
+        return (
+            report_text,
+            200,
+            {
+                "Content-Type": "text/plain; charset=utf-8",
+                "Content-Disposition": (
+                    "attachment; filename=case-data-one-import-errors.txt"
+                ),
+            },
+        )
 
     @app.get("/admin/case-stage1/import-status")
     @admin_required

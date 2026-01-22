@@ -29,11 +29,31 @@
     <form method="post" enctype="multipart/form-data" class="upload-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label class="file-input">
-        <input type="file" name="case_data_one_file" accept=".txt,.csv" required>
-        <span>Select file to upload</span>
+        <input id="case-data-one-file" type="file" name="case_data_one_file" accept=".txt,.csv" required>
+        <span id="case-data-one-file-label">Select file to upload</span>
       </label>
       <button class="pill" type="submit">Upload case data one</button>
     </form>
+    <div id="case-data-one-file-panel" class="file-panel" style="display: none;">
+      <div class="file-meta">
+        <div>
+          <strong id="case-data-one-file-name">No file selected</strong>
+          <p id="case-data-one-file-size" class="small"></p>
+        </div>
+        <span class="file-status">Ready</span>
+      </div>
+      <div class="file-preflight">
+        <div>
+          <span class="small">Preflight rows</span>
+          <strong id="case-data-one-file-rows">-</strong>
+        </div>
+        <div>
+          <span class="small">Header check</span>
+          <strong id="case-data-one-file-header">Pending</strong>
+        </div>
+      </div>
+      <p id="case-data-one-file-warning" class="small"></p>
+    </div>
 
     <div id="case-data-one-status" class="upload-status" style="display: none;">
       <div class="status-header">
@@ -168,6 +188,12 @@
 
     function renderErrors(errors) {
       errorList.innerHTML = "";
+      if (!errors.length) {
+        const li = document.createElement("li");
+        li.textContent = "No itemized error records were captured.";
+        errorList.appendChild(li);
+        return;
+      }
       errors.forEach((item) => {
         const li = document.createElement("li");
         const rowLabel = item.row_number ? `Row ${item.row_number}` : "Row";
@@ -197,19 +223,38 @@
         `Error rows: ${lastStatus?.error_rows ?? 0}`,
         "",
       ].join("\n");
-      const details = errors
-        .map((item) => {
-          const rowLabel = item.row_number ? `Row ${item.row_number}` : "Row";
-          const recordText = formatRecord(item.record);
-          return `${rowLabel}\nMessage: ${item.message}\nRecord: ${recordText}`;
-        })
-        .join("\n\n");
+      const details = errors.length
+        ? errors
+            .map((item) => {
+              const rowLabel = item.row_number ? `Row ${item.row_number}` : "Row";
+              const recordText = formatRecord(item.record);
+              return `${rowLabel}\nMessage: ${item.message}\nRecord: ${recordText}`;
+            })
+            .join("\n\n")
+        : "No itemized error records were captured.";
       return `${summary}${details}`;
     }
 
-    function downloadErrorReport() {
-      if (!lastErrors.length) {
+    async function downloadErrorReport() {
+      if (!lastStatus || !(lastStatus.error_rows > 0)) {
         return;
+      }
+      try {
+        const response = await fetch("/admin/case-data-one/error-report");
+        if (response.ok) {
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = "case-data-one-import-errors.txt";
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(url);
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to download server report", error);
       }
       const blob = new Blob([buildErrorReportText(lastErrors)], {
         type: "text/plain;charset=utf-8",
@@ -337,11 +382,12 @@
         }
 
         lastErrors = Array.isArray(data.error_details) ? data.error_details : [];
-        if (lastErrors.length) {
+        const hasErrors = Number(data.error_rows ?? 0) > 0;
+        if (hasErrors) {
           errorActions.style.display = "block";
-          errorDetails.style.display = "block";
           aiContainer.style.display = "block";
           renderErrors(lastErrors);
+          errorDetails.style.display = "block";
         } else {
           errorActions.style.display = "none";
           errorDetails.style.display = "none";
@@ -358,5 +404,73 @@
 
     fetchStatus();
     window.caseDataOneStatusTimer = setInterval(fetchStatus, 3000);
+
+    const fileInput = document.getElementById("case-data-one-file");
+    const fileLabel = document.getElementById("case-data-one-file-label");
+    const filePanel = document.getElementById("case-data-one-file-panel");
+    const fileName = document.getElementById("case-data-one-file-name");
+    const fileSize = document.getElementById("case-data-one-file-size");
+    const fileRows = document.getElementById("case-data-one-file-rows");
+    const fileHeader = document.getElementById("case-data-one-file-header");
+    const fileWarning = document.getElementById("case-data-one-file-warning");
+
+    function formatBytes(bytes) {
+      if (!bytes) {
+        return "0 B";
+      }
+      const units = ["B", "KB", "MB", "GB"];
+      let value = bytes;
+      let index = 0;
+      while (value >= 1024 && index < units.length - 1) {
+        value /= 1024;
+        index += 1;
+      }
+      return `${value.toFixed(1)} ${units[index]}`;
+    }
+
+    async function runPreflight(file) {
+      fileLabel.textContent = file.name;
+      fileName.textContent = file.name;
+      fileSize.textContent = `Size: ${formatBytes(file.size)}`;
+      fileRows.textContent = "Scanning...";
+      fileHeader.textContent = "Scanning...";
+      fileWarning.textContent = "";
+      filePanel.style.display = "block";
+
+      try {
+        const text = await file.text();
+        const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
+        const headerLine = lines[0] || "";
+        const headers = headerLine
+          .split("|")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        const hasCaseId = headers.includes("cs_caseid");
+        fileRows.textContent = Math.max(0, lines.length - 1).toString();
+        fileHeader.textContent = hasCaseId ? "cs_caseid ok" : "Missing cs_caseid";
+        if (!hasCaseId) {
+          fileWarning.textContent =
+            "Preflight warning: header is missing cs_caseid.";
+        } else {
+          fileWarning.textContent = "Preflight complete. Ready to upload.";
+        }
+      } catch (error) {
+        console.error("Failed to read file", error);
+        fileRows.textContent = "Unavailable";
+        fileHeader.textContent = "Unavailable";
+        fileWarning.textContent =
+          "Preflight failed. You can still upload, or try selecting the file again.";
+      }
+    }
+
+    fileInput.addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      if (!file) {
+        fileLabel.textContent = "Select file to upload";
+        filePanel.style.display = "none";
+        return;
+      }
+      runPreflight(file);
+    });
   </script>
 {% endblock %}
