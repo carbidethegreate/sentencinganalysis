@@ -202,7 +202,7 @@ USER_TYPES = [
     "Other",
 ]
 
-VALID_JURISDICTION_TYPES = {"cr"}
+VALID_JURISDICTION_TYPES = {"cr"}  # Criminal cases only.
 
 
 def _first_env(*names: str) -> Optional[str]:
