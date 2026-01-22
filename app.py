@@ -568,9 +568,21 @@ def create_app() -> Flask:
         normalized = _normalize_text(value)
         if not normalized:
             return None
+        normalized = normalized.replace(".", "")
         if normalized in VALID_JURISDICTION_TYPES:
             return normalized
-        return None
+        aliases = {
+            "appeal": "ap",
+            "appellate": "ap",
+            "bankruptcy": "bk",
+            "bankrupt": "bk",
+            "civil": "cv",
+            "civ": "cv",
+            "criminal": "cr",
+            "crim": "cr",
+            "mdl": "mdl",
+        }
+        return aliases.get(normalized)
 
     def _parse_case_number_components(value: Optional[str]) -> Dict[str, Optional[str]]:
         if not value:
@@ -585,9 +597,14 @@ def create_app() -> Flask:
             raw = office_match.group("rest")
         compact = re.sub(r"[\s\-]", "", raw)
         match = re.match(
-            r"^(?P<year>\d{2,4})(?P<case_type>[a-z0-9]{1,2})?(?P<number>\d{1,5})$",
+            r"^(?P<year>\d{2,4})(?P<case_type>[a-z]{1,4})?(?P<number>\d{1,6})$",
             compact,
         )
+        if not match:
+            match = re.match(
+                r"^(?P<year>\d{2,4})\s*[-/\\]?\s*(?P<case_type>[a-z]{1,4})?\s*[-/\\]?\s*(?P<number>\d{1,6})(?:\D.*)?$",
+                raw,
+            )
         if not match:
             return {}
         year = match.group("year")
