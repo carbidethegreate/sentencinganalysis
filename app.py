@@ -1,4 +1,5 @@
 import csv
+import json
 import hmac
 import os
 import re
@@ -867,10 +868,23 @@ def create_app() -> Flask:
         *,
         row_number: Optional[int],
         message: str,
+        record: Optional[Any] = None,
     ) -> None:
         if len(error_details) >= CASE_DATA_ONE_ERROR_DETAIL_LIMIT:
             return
-        error_details.append({"row_number": row_number, "message": message})
+        serialized_record = None
+        if record is not None:
+            try:
+                serialized_record = json.dumps(record, default=str, ensure_ascii=False)
+            except (TypeError, ValueError):
+                serialized_record = str(record)
+        error_details.append(
+            {
+                "row_number": row_number,
+                "message": message,
+                "record": serialized_record,
+            }
+        )
 
     def _apply_case_data_one_classifications(
         row_data: Dict[str, Any],
@@ -887,6 +901,7 @@ def create_app() -> Flask:
                 error_details,
                 row_number=row_number,
                 message="Unable to parse cs_case_number components.",
+                record=row_data,
             )
             error_count += 1
 
@@ -904,6 +919,7 @@ def create_app() -> Flask:
                     "Invalid cs_type value; expected ap, bk, cr, cv, mdl, or mj "
                     "(values containing sealed/unavailable are treated as unavailable)."
                 ),
+                record=row_data,
             )
             error_count += 1
 
@@ -1068,6 +1084,7 @@ def create_app() -> Flask:
                         error_details,
                         row_number=1,
                         message="Missing header row.",
+                        record=raw_headers,
                     )
                     raise ValueError("Uploaded file is missing a header row.")
 
@@ -1077,6 +1094,7 @@ def create_app() -> Flask:
                         error_details,
                         row_number=1,
                         message="Missing cs_caseid header.",
+                        record=raw_headers,
                     )
                     raise ValueError("Uploaded file must include cs_caseid header.")
                 _set_case_data_one_import(job_id, total_rows=total_rows)
@@ -1124,6 +1142,7 @@ def create_app() -> Flask:
                                     error_details,
                                     row_number=row_index,
                                     message="Invalid cs_caseid value.",
+                                    record=row,
                                 )
                                 continue
                             if row_data["cs_caseid"] is None:
@@ -1133,6 +1152,7 @@ def create_app() -> Flask:
                                     error_details,
                                     row_number=row_index,
                                     message="Missing cs_caseid value.",
+                                    record=row,
                                 )
                                 continue
 
@@ -1156,6 +1176,7 @@ def create_app() -> Flask:
                                 error_details,
                                 row_number=row_index,
                                 message=f"Row parsing failed: {exc}",
+                                record=row,
                             )
                             continue
 
