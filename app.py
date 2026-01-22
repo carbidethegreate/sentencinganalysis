@@ -564,9 +564,17 @@ def create_app() -> Flask:
         except ValueError:
             return None
 
+    def _is_sealed_or_unavailable_case_type(value: Optional[str]) -> bool:
+        normalized = _normalize_text(value)
+        if not normalized:
+            return False
+        return "sealed" in normalized or "unavailable" in normalized
+
     def _normalize_case_type(value: Optional[str]) -> Optional[str]:
         normalized = _normalize_text(value)
         if not normalized:
+            return None
+        if _is_sealed_or_unavailable_case_type(normalized):
             return None
         normalized = normalized.replace(".", "")
         if normalized in VALID_JURISDICTION_TYPES:
@@ -884,11 +892,18 @@ def create_app() -> Flask:
 
         normalized_case_type = _normalize_case_type(row_data.get("cs_type"))
         row_data["cs_type_normalized"] = normalized_case_type
-        if row_data.get("cs_type") and normalized_case_type is None:
+        if (
+            row_data.get("cs_type")
+            and normalized_case_type is None
+            and not _is_sealed_or_unavailable_case_type(row_data.get("cs_type"))
+        ):
             _record_case_data_one_error(
                 error_details,
                 row_number=row_number,
-                message="Invalid cs_type value; expected ap, bk, cr, cv, mdl, or mj.",
+                message=(
+                    "Invalid cs_type value; expected ap, bk, cr, cv, mdl, or mj "
+                    "(values containing sealed/unavailable are treated as unavailable)."
+                ),
             )
             error_count += 1
 
