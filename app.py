@@ -6,6 +6,8 @@ import re
 import secrets
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -885,6 +887,112 @@ def create_app() -> Flask:
                 "record": serialized_record,
             }
         )
+
+    def _stringify_case_data_one_error_record(record: Any) -> str:
+        if record is None:
+            return "(none)"
+        if isinstance(record, str):
+            return record
+        if isinstance(record, list):
+            return "|".join(str(item) for item in record)
+        try:
+            return json.dumps(record, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(record)
+
+    def _build_case_data_one_error_prompt(error_report: Dict[str, Any]) -> str:
+        error_details = error_report.get("error_details") or []
+        total_rows = error_report.get("total_rows")
+        processed_rows = error_report.get("processed_rows")
+        inserted_rows = error_report.get("inserted_rows")
+        updated_rows = error_report.get("updated_rows")
+        skipped_rows = error_report.get("skipped_rows")
+        error_rows = error_report.get("error_rows")
+        message = error_report.get("message")
+
+        summary_lines = [
+            "You are assisting with diagnosing Case Data One import errors.",
+            "The file is pipe-delimited and each error includes a row number, message, and record.",
+            "Return a concise diagnosis with likely root causes and suggested fixes.",
+            "Provide bullet points plus any recommended data cleaning steps.",
+            "",
+            "Import summary:",
+            f"- Total rows: {total_rows if total_rows is not None else 'unknown'}",
+            f"- Processed rows: {processed_rows if processed_rows is not None else 'unknown'}",
+            f"- Inserted rows: {inserted_rows if inserted_rows is not None else 'unknown'}",
+            f"- Updated rows: {updated_rows if updated_rows is not None else 'unknown'}",
+            f"- Skipped rows: {skipped_rows if skipped_rows is not None else 'unknown'}",
+            f"- Error rows: {error_rows if error_rows is not None else 'unknown'}",
+        ]
+        if message:
+            summary_lines.append(f"- Status message: {message}")
+
+        error_lines = ["", "Error details:"]
+        for index, item in enumerate(error_details, start=1):
+            row_number = item.get("row_number")
+            row_label = f"Row {row_number}" if row_number else "Row (unknown)"
+            detail_message = item.get("message", "(no message)")
+            record_text = _stringify_case_data_one_error_record(item.get("record"))
+            error_lines.append(
+                f"{index}. {row_label}\n   Message: {detail_message}\n   Record: {record_text}"
+            )
+
+        if not error_details:
+            error_lines.append("No error detail rows were provided.")
+
+        return "\n".join(summary_lines + error_lines).strip()
+
+    def _call_openai_chat_completion(prompt: str) -> str:
+        api_key = _first_env_or_secret_file("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OpenAI API key is not configured.")
+
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a data ingestion assistant helping diagnose CSV/pipe "
+                        "delimited import errors. Focus on root causes and fixes."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+        }
+
+        request_data = json.dumps(payload).encode("utf-8")
+        request_obj = urllib.request.Request(
+            "https://api.openai.com/v1/chat/completions",
+            data=request_data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request_obj, timeout=30) as response:
+                response_body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="ignore")
+            app.logger.warning("OpenAI API error: %s", error_body)
+            raise ValueError("OpenAI API request failed.") from exc
+        except urllib.error.URLError as exc:
+            app.logger.warning("OpenAI API connection error: %s", exc)
+            raise ValueError("OpenAI API request failed.") from exc
+
+        response_payload = json.loads(response_body)
+        choices = response_payload.get("choices") or []
+        content = ""
+        if choices:
+            content = choices[0].get("message", {}).get("content", "")
+        if not content:
+            raise ValueError("OpenAI response was empty.")
+        return content.strip()
 
     def _apply_case_data_one_classifications(
         row_data: Dict[str, Any],
@@ -2236,6 +2344,23 @@ def create_app() -> Flask:
         if not latest:
             return jsonify({"status": "idle"})
         return jsonify(latest)
+
+    @app.post("/admin/case-data-one/error-prompt")
+    @admin_required
+    def admin_case_data_one_error_prompt():
+        require_csrf()
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON payload required."}), 400
+
+        prompt = _build_case_data_one_error_prompt(payload)
+        try:
+            response_text = _call_openai_chat_completion(prompt)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 502
+
+        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        return jsonify({"response": response_text, "model": model})
 
     @app.get("/admin/case-stage1/import-status")
     @admin_required

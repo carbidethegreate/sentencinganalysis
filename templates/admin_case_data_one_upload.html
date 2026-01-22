@@ -43,6 +43,28 @@
         <summary class="small">View error details</summary>
         <ul id="case-data-one-error-list" class="small" style="margin-top: 8px;"></ul>
       </details>
+      <div id="case-data-one-ai" style="margin-top: 16px; display: none;">
+        <p class="small" style="margin-bottom: 8px;">
+          Generate an AI summary of the error report to help fix the source data.
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+          <button class="pill" id="case-data-one-ai-button" type="button">
+            Generate AI response
+          </button>
+          <span id="case-data-one-ai-status" class="small"></span>
+        </div>
+        <div id="case-data-one-ai-response" style="margin-top: 12px; display: none;">
+          <pre style="background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto;">
+<code id="case-data-one-ai-output"></code>
+          </pre>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+            <button class="pill" id="case-data-one-ai-copy" type="button">
+              Copy to clipboard
+            </button>
+            <span id="case-data-one-ai-copy-status" class="small"></span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -60,7 +82,15 @@
     const errorDetails = document.getElementById("case-data-one-error-details");
     const errorList = document.getElementById("case-data-one-error-list");
     const downloadErrors = document.getElementById("case-data-one-download-errors");
+    const aiContainer = document.getElementById("case-data-one-ai");
+    const aiButton = document.getElementById("case-data-one-ai-button");
+    const aiStatus = document.getElementById("case-data-one-ai-status");
+    const aiResponse = document.getElementById("case-data-one-ai-response");
+    const aiOutput = document.getElementById("case-data-one-ai-output");
+    const aiCopyButton = document.getElementById("case-data-one-ai-copy");
+    const aiCopyStatus = document.getElementById("case-data-one-ai-copy-status");
     let lastErrors = [];
+    let lastStatus = null;
 
     function renderErrors(errors) {
       errorList.innerHTML = "";
@@ -110,6 +140,82 @@
 
     downloadErrors.addEventListener("click", downloadErrorReport);
 
+    async function copyAiOutput() {
+      const text = aiOutput.textContent.trim();
+      if (!text) {
+        return;
+      }
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const textarea = document.createElement("textarea");
+          textarea.value = text;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand("copy");
+          textarea.remove();
+        }
+        aiCopyStatus.textContent = "Copied!";
+      } catch (error) {
+        console.error("Failed to copy", error);
+        aiCopyStatus.textContent = "Copy failed.";
+      }
+      setTimeout(() => {
+        aiCopyStatus.textContent = "";
+      }, 2000);
+    }
+
+    aiCopyButton.addEventListener("click", copyAiOutput);
+
+    async function requestAiSummary() {
+      if (!lastErrors.length) {
+        aiStatus.textContent = "No error details available.";
+        return;
+      }
+      aiStatus.textContent = "Generating response...";
+      aiOutput.textContent = "";
+      aiResponse.style.display = "none";
+      aiButton.disabled = true;
+      aiCopyStatus.textContent = "";
+
+      try {
+        const payload = {
+          error_details: lastErrors,
+          total_rows: lastStatus?.total_rows,
+          processed_rows: lastStatus?.processed_rows,
+          inserted_rows: lastStatus?.inserted_rows,
+          updated_rows: lastStatus?.updated_rows,
+          skipped_rows: lastStatus?.skipped_rows,
+          error_rows: lastStatus?.error_rows,
+          message: lastStatus?.message,
+        };
+        const response = await fetch("/admin/case-data-one/error-prompt", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Token": "{{ csrf_token }}",
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          aiStatus.textContent = data.error || "Failed to generate response.";
+          return;
+        }
+        aiOutput.textContent = data.response || "(No response returned.)";
+        aiResponse.style.display = "block";
+        aiStatus.textContent = "Response ready.";
+      } catch (error) {
+        console.error("Failed to request AI response", error);
+        aiStatus.textContent = "Request failed. Please try again.";
+      } finally {
+        aiButton.disabled = false;
+      }
+    }
+
+    aiButton.addEventListener("click", requestAiSummary);
+
     async function fetchStatus() {
       try {
         const response = await fetch("/admin/case-data-one/import-status", {
@@ -122,6 +228,7 @@
         if (!data || data.status === "idle") {
           return;
         }
+        lastStatus = data;
         statusContainer.style.display = "block";
         totalEl.textContent = data.total_rows ?? 0;
         processedEl.textContent = data.processed_rows ?? 0;
@@ -140,10 +247,12 @@
         if (lastErrors.length) {
           errorActions.style.display = "block";
           errorDetails.style.display = "block";
+          aiContainer.style.display = "block";
           renderErrors(lastErrors);
         } else {
           errorActions.style.display = "none";
           errorDetails.style.display = "none";
+          aiContainer.style.display = "none";
         }
 
         if (data.status === "completed" || data.status === "failed") {
