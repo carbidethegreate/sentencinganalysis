@@ -35,10 +35,12 @@
             <a href="{{ url_for('admin_case_data_one_list') }}">Case Reports</a>
           {% endif %}
 
-          <a href="{{ url_for('pricing') }}" class="{% if active_page == 'pricing' %}active{% endif %}">Pricing</a>
-          <a href="{{ url_for('news') }}" class="{% if active_page == 'news' %}active{% endif %}">News</a>
-          <a href="{{ url_for('about') }}" class="{% if active_page == 'about' %}active{% endif %}">About</a>
-          <a href="{{ url_for('contact') }}" class="{% if active_page == 'contact' %}active{% endif %}">Contact</a>
+          {% if not is_admin %}
+            <a href="{{ url_for('pricing') }}" class="{% if active_page == 'pricing' %}active{% endif %}">Pricing</a>
+            <a href="{{ url_for('news') }}" class="{% if active_page == 'news' %}active{% endif %}">News</a>
+            <a href="{{ url_for('about') }}" class="{% if active_page == 'about' %}active{% endif %}">About</a>
+            <a href="{{ url_for('contact') }}" class="{% if active_page == 'contact' %}active{% endif %}">Contact</a>
+          {% endif %}
         </nav>
 
         <div class="right">
