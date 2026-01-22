@@ -869,7 +869,7 @@ def create_app() -> Flask:
             _record_case_data_one_error(
                 error_details,
                 row_number=row_number,
-                message="Invalid cs_type value; expected cr.",
+                message="Invalid cs_type value; expected cr (criminal).",
             )
             error_count += 1
 
