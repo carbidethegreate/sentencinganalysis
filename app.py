@@ -130,6 +130,7 @@ CASE_DATA_ONE_DATE_COLUMNS = {
     "loc_date_end",
 }
 CASE_DATA_ONE_HEADER_ALIASES: Dict[str, str] = {}
+CASE_DATA_ONE_ERROR_DETAIL_LIMIT = 200
 
 USER_TYPES = [
     "Attorney, Solo Practitioner",
@@ -647,6 +648,16 @@ def create_app() -> Flask:
 
     _ensure_case_stage1_search_index()
 
+    def _record_case_data_one_error(
+        error_details: List[Dict[str, Any]],
+        *,
+        row_number: Optional[int],
+        message: str,
+    ) -> None:
+        if len(error_details) >= CASE_DATA_ONE_ERROR_DETAIL_LIMIT:
+            return
+        error_details.append({"row_number": row_number, "message": message})
+
     def _process_case_stage1_upload(job_id: str, file_path: str) -> None:
         total_rows = 0
         inserted_rows = 0
@@ -787,17 +798,31 @@ def create_app() -> Flask:
         skipped_rows = 0
         error_rows = 0
         processed_rows = 0
+        error_details: List[Dict[str, Any]] = []
 
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+                total_rows = max(0, sum(1 for _ in handle) - 1)
+                handle.seek(0)
                 reader = csv.reader(handle, delimiter="|")
                 raw_headers = next(reader, None)
                 if not raw_headers:
+                    _record_case_data_one_error(
+                        error_details,
+                        row_number=1,
+                        message="Missing header row.",
+                    )
                     raise ValueError("Uploaded file is missing a header row.")
 
                 headers = _normalize_case_data_one_headers(raw_headers)
                 if "cs_caseid" not in headers:
+                    _record_case_data_one_error(
+                        error_details,
+                        row_number=1,
+                        message="Missing cs_caseid header.",
+                    )
                     raise ValueError("Uploaded file must include cs_caseid header.")
+                _set_case_data_one_import(job_id, total_rows=total_rows)
                 if _is_postgres():
                     with engine.connect() as conn:
                         records_total_before = conn.execute(
@@ -817,34 +842,59 @@ def create_app() -> Flask:
                     data_columns = CASE_DATA_ONE_IMPORT_COLUMNS
 
                     batch: List[Dict[str, Any]] = []
-                    for row in reader:
-                        total_rows += 1
-                        row_data: Dict[str, Any] = {column: None for column in data_columns}
-                        for header, value in zip(header_columns, row):
-                            if not header:
-                                continue
-                            clean_value = value.strip()
-                            row_data[header] = clean_value if clean_value else None
-                        for column in data_columns:
-                            row_data.setdefault(column, None)
-
-                        case_id_raw = row_data.get("cs_caseid")
+                    for row_index, row in enumerate(reader, start=2):
                         try:
-                            row_data["cs_caseid"] = (
-                                int(case_id_raw) if case_id_raw is not None else None
+                            row_data: Dict[str, Any] = {
+                                column: None for column in data_columns
+                            }
+                            for header, value in zip(header_columns, row):
+                                if not header:
+                                    continue
+                                clean_value = value.strip()
+                                row_data[header] = clean_value if clean_value else None
+                            for column in data_columns:
+                                row_data.setdefault(column, None)
+
+                            case_id_raw = row_data.get("cs_caseid")
+                            try:
+                                row_data["cs_caseid"] = (
+                                    int(case_id_raw) if case_id_raw is not None else None
+                                )
+                            except (TypeError, ValueError):
+                                skipped_rows += 1
+                                error_rows += 1
+                                _record_case_data_one_error(
+                                    error_details,
+                                    row_number=row_index,
+                                    message="Invalid cs_caseid value.",
+                                )
+                                continue
+                            if row_data["cs_caseid"] is None:
+                                skipped_rows += 1
+                                error_rows += 1
+                                _record_case_data_one_error(
+                                    error_details,
+                                    row_number=row_index,
+                                    message="Missing cs_caseid value.",
+                                )
+                                continue
+
+                            for header in date_columns:
+                                row_data[header] = _parse_case_data_one_date(
+                                    row_data.get(header)
+                                )
+
+                            processed_rows += 1
+                            batch.append(row_data)
+                        except Exception as exc:
+                            error_rows += 1
+                            _record_case_data_one_error(
+                                error_details,
+                                row_number=row_index,
+                                message=f"Row parsing failed: {exc}",
                             )
-                        except (TypeError, ValueError):
-                            skipped_rows += 1
-                            continue
-                        if row_data["cs_caseid"] is None:
-                            skipped_rows += 1
                             continue
 
-                        for header in date_columns:
-                            row_data[header] = _parse_case_data_one_date(row_data.get(header))
-
-                        processed_rows += 1
-                        batch.append(row_data)
                         if len(batch) >= CASE_DATA_ONE_CHUNK_SIZE:
                             inserted, updated = _upsert_case_data_one_batch(
                                 conn,
@@ -855,6 +905,21 @@ def create_app() -> Flask:
                             inserted_rows += inserted
                             updated_rows += updated
                             batch = []
+                            _set_case_data_one_import(
+                                job_id,
+                                status="processing",
+                                total_rows=total_rows,
+                                processed_rows=processed_rows,
+                                inserted_rows=inserted_rows,
+                                updated_rows=updated_rows,
+                                skipped_rows=skipped_rows,
+                                error_rows=error_rows,
+                                error_details=error_details,
+                                message=(
+                                    "Processing rows. "
+                                    f"Processed {processed_rows} of {total_rows}."
+                                ),
+                            )
 
                     if batch:
                         inserted, updated = _upsert_case_data_one_batch(
@@ -865,6 +930,21 @@ def create_app() -> Flask:
                         )
                         inserted_rows += inserted
                         updated_rows += updated
+                        _set_case_data_one_import(
+                            job_id,
+                            status="processing",
+                            total_rows=total_rows,
+                            processed_rows=processed_rows,
+                            inserted_rows=inserted_rows,
+                            updated_rows=updated_rows,
+                            skipped_rows=skipped_rows,
+                            error_rows=error_rows,
+                            error_details=error_details,
+                            message=(
+                                "Processing rows. "
+                                f"Processed {processed_rows} of {total_rows}."
+                            ),
+                        )
 
                 if _is_postgres():
                     with engine.connect() as conn:
@@ -874,23 +954,32 @@ def create_app() -> Flask:
                     inserted_rows = max(0, records_total_after - records_total_before)
                     updated_rows = max(0, processed_rows - inserted_rows)
 
+            completion_message = (
+                "Upload complete. "
+                f"Total rows: {total_rows}. "
+                f"Inserted: {inserted_rows}. "
+                f"Updated: {updated_rows}. "
+                f"Skipped: {skipped_rows}. "
+                f"Errors: {error_rows}."
+            )
+            if error_rows:
+                completion_message = (
+                    f"{completion_message} Download the error report or check the "
+                    "server logs for details."
+                )
+
             _set_case_data_one_import(
                 job_id,
                 status="completed",
                 completed_at=datetime.utcnow().isoformat(),
                 total_rows=total_rows,
+                processed_rows=processed_rows,
                 inserted_rows=inserted_rows,
                 updated_rows=updated_rows,
                 skipped_rows=skipped_rows,
                 error_rows=error_rows,
-                message=(
-                    "Upload complete. "
-                    f"Total rows: {total_rows}. "
-                    f"Inserted: {inserted_rows}. "
-                    f"Updated: {updated_rows}. "
-                    f"Skipped: {skipped_rows}. "
-                    f"Errors: {error_rows}."
-                ),
+                error_details=error_details,
+                message=completion_message,
             )
         except Exception:
             app.logger.exception("Case data one upload failed.")
@@ -900,11 +989,16 @@ def create_app() -> Flask:
                 status="failed",
                 completed_at=datetime.utcnow().isoformat(),
                 total_rows=total_rows,
+                processed_rows=processed_rows,
                 inserted_rows=inserted_rows,
                 updated_rows=updated_rows,
                 skipped_rows=skipped_rows,
                 error_rows=error_rows,
-                message="Upload failed. Please check the server logs for details.",
+                error_details=error_details,
+                message=(
+                    "Upload failed. Please check the server logs for details or "
+                    "download the error report."
+                ),
             )
         finally:
             try:
@@ -1755,6 +1849,13 @@ def create_app() -> Flask:
             started_at=datetime.utcnow().isoformat(),
             original_filename=uploaded.filename,
             message="Upload started. Processing in the background.",
+            total_rows=0,
+            processed_rows=0,
+            inserted_rows=0,
+            updated_rows=0,
+            skipped_rows=0,
+            error_rows=0,
+            error_details=[],
         )
 
         thread = threading.Thread(
@@ -1763,7 +1864,7 @@ def create_app() -> Flask:
         thread.start()
 
         flash("Upload started. Processing in the background.", "success")
-        return redirect(url_for("admin_case_data_one_list"))
+        return redirect(url_for("admin_case_data_one_upload"))
 
     @app.get("/admin/case-data-one")
     @admin_required
