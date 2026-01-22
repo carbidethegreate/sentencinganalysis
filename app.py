@@ -38,6 +38,7 @@ from sqlalchemy import (
     create_engine,
     delete,
     func,
+    inspect,
     insert,
     literal_column,
     select,
@@ -450,6 +451,46 @@ def create_app() -> Flask:
             app.logger.warning("Database tables already exist; skipping create_all.")
         else:
             raise
+
+    def _ensure_case_data_one_columns() -> None:
+        column_specs = {
+            "cs_type_normalized": "TEXT",
+            "cs_case_office": "TEXT",
+            "cs_case_year": "TEXT",
+            "cs_case_type_code": "TEXT",
+            "cs_case_number_seq": "TEXT",
+            "party_normalized": "TEXT",
+            "party_type": "TEXT",
+            "party_type_normalized": "TEXT",
+            "party_role": "TEXT",
+            "party_role_normalized": "TEXT",
+            "party_def_num_normalized": "TEXT",
+        }
+        try:
+            inspector = inspect(engine)
+            existing_columns = {
+                column["name"] for column in inspector.get_columns("case_data_one")
+            }
+        except Exception:
+            app.logger.exception("Unable to inspect case_data_one columns.")
+            return
+
+        missing = [name for name in column_specs if name not in existing_columns]
+        if not missing:
+            return
+
+        try:
+            with engine.begin() as conn:
+                for name in missing:
+                    conn.execute(
+                        sa_text(
+                            f"ALTER TABLE case_data_one ADD COLUMN {name} {column_specs[name]}"
+                        )
+                    )
+        except Exception:
+            app.logger.exception("Unable to add missing case_data_one columns.")
+
+    _ensure_case_data_one_columns()
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
