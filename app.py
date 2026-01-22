@@ -1183,6 +1183,14 @@ def create_app() -> Flask:
 
     @app.route("/admin/login", methods=["GET", "POST"])
     def admin_login():
+        expected_pass = os.environ.get("CPD_ADMIN_KEY")
+        if not expected_pass:
+            flash(
+                "Admin login is not configured. Set CPD_ADMIN_KEY to enable admin access.",
+                "error",
+            )
+            return render_template("admin_login.html", admin_configured=False)
+
         if request.method == "POST":
             require_csrf()
 
@@ -1190,11 +1198,6 @@ def create_app() -> Flask:
             admin_pass = request.form.get("password", "")
 
             expected_user = "CPDADMIN"
-            expected_pass = os.environ.get("CPD_ADMIN_KEY")
-
-            if not expected_pass:
-                flash("Admin login is not configured.", "error")
-                return render_template("admin_login.html")
 
             if hmac.compare_digest(admin_user, expected_user) and hmac.compare_digest(
                 admin_pass, expected_pass
@@ -1208,7 +1211,7 @@ def create_app() -> Flask:
 
             flash("Invalid admin credentials.", "error")
 
-        return render_template("admin_login.html")
+        return render_template("admin_login.html", admin_configured=True)
 
     @app.get("/admin")
     @admin_required
