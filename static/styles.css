@@ -284,6 +284,11 @@ input, select, textarea {
   color: var(--text);
 }
 
+.input-error {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
 textarea { min-height: 90px; resize: vertical; }
 
 .actions {
