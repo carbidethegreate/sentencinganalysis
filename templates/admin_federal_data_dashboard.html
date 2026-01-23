@@ -1,31 +1,9 @@
-{% extends "base.html" %}
+{% extends "admin_federal_data_base.html" %}
 
-{% block title %}Federal Data Dashboard | CourtDataPro{% endblock %}
-
-{% block content %}
-  <div class="page-header">
-    <h1>Federal Data Dashboard</h1>
-  </div>
-
-  <nav class="subnav" aria-label="Federal data sections">
-    <a href="#">Get PACER Data</a>
-    <a href="#">Case Cards</a>
-    <a href="#">Logs</a>
-    <a href="#">Health Checks</a>
-    <a href="#" class="subnav-with-icon">
-      <img
-        src="{{ url_for('static', filename='ask-loulou-icon.svg') }}"
-        alt=""
-        class="subnav-icon"
-      />
-      Configure Ask LouLou
-    </a>
-  </nav>
-
+{% block federal_content %}
   <div class="card">
     <p class="small">
-      Federal data tools will live here. Select a section above to manage PACER data ingestion,
-      case cards, and system health checks.
+      Select a section above to get started with PACER data ingestion and federal dashboard tools.
     </p>
   </div>
 {% endblock %}

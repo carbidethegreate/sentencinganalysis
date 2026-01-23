@@ -143,6 +143,12 @@ header {
   text-decoration: none;
 }
 
+.subnav a.active {
+  background: rgba(217, 203, 186, 0.4);
+  border: 1px solid rgba(140, 132, 128, 0.35);
+  text-decoration: none;
+}
+
 .subnav-icon {
   width: 20px;
   height: 20px;

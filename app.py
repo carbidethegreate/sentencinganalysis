@@ -512,6 +512,12 @@ def create_app() -> Flask:
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
+    pacer_sessions: Dict[str, Dict[str, Any]] = {}
+    pacer_auth_base_url = os.environ.get(
+        "PACER_AUTH_BASE_URL", "https://qa-login.uscourts.gov"
+    ).strip()
+    if pacer_auth_base_url.endswith("/"):
+        pacer_auth_base_url = pacer_auth_base_url[:-1]
 
     # -----------------
     # Helpers
@@ -570,6 +576,81 @@ def create_app() -> Flask:
             return None
         cleaned = value.strip()
         return cleaned.lower() if cleaned else None
+
+    def _get_pacer_session() -> Optional[Dict[str, Any]]:
+        session_key = session.get("pacer_session_key")
+        if not session_key:
+            return None
+        return pacer_sessions.get(session_key)
+
+    def _set_pacer_session(token: str) -> None:
+        session_key = session.get("pacer_session_key")
+        if not session_key:
+            session_key = secrets.token_urlsafe(16)
+            session["pacer_session_key"] = session_key
+        pacer_sessions[session_key] = {
+            # Token is used for future PCL API requests via the X-NEXT-GEN-CSO header.
+            "token": token,
+            "authorized_at": datetime.utcnow().isoformat(),
+        }
+
+    def _clear_pacer_session() -> None:
+        session_key = session.pop("pacer_session_key", None)
+        if session_key:
+            pacer_sessions.pop(session_key, None)
+
+    def _pacer_requires_otp(error_description: str, otp_code: Optional[str]) -> bool:
+        if otp_code:
+            return False
+        if not error_description:
+            return False
+        message = error_description.lower()
+        return "one-time" in message or "passcode" in message or "otp" in message
+
+    def _pacer_authenticate(
+        login_id: str, password: str, otp_code: Optional[str]
+    ) -> Tuple[Optional[str], Optional[str], bool]:
+        payload: Dict[str, str] = {"loginId": login_id, "password": password}
+        if otp_code:
+            payload["otpCode"] = otp_code
+        request_data = json.dumps(payload).encode("utf-8")
+        request_obj = urllib.request.Request(
+            f"{pacer_auth_base_url}/services/cso-auth",
+            data=request_data,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request_obj, timeout=30) as response:
+                response_body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="ignore")
+            try:
+                error_payload = json.loads(error_body)
+            except json.JSONDecodeError:
+                error_payload = {}
+            error_description = (error_payload or {}).get("errorDescription", "")
+            needs_otp = _pacer_requires_otp(error_description, otp_code)
+            if error_description:
+                return None, error_description.strip(), needs_otp
+            raise ValueError("PACER authentication failed.") from exc
+        except urllib.error.URLError as exc:
+            raise ValueError("PACER authentication failed. Please try again.") from exc
+
+        try:
+            response_payload = json.loads(response_body)
+        except json.JSONDecodeError as exc:
+            raise ValueError("PACER authentication failed.") from exc
+        login_result = str(response_payload.get("loginResult", "")).strip()
+        token = response_payload.get("nextGenCSO", "") or ""
+        error_description = (response_payload.get("errorDescription") or "").strip()
+        if login_result == "0" and token:
+            return token, None, False
+        needs_otp = _pacer_requires_otp(error_description, otp_code)
+        if error_description:
+            return None, error_description, needs_otp
+        return None, "PACER authentication failed.", needs_otp
 
     def _normalize_party_def_num(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -2185,10 +2266,114 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard")
     @admin_required
     def admin_federal_data_dashboard():
+        return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+
+    @app.get("/admin/federal-data-dashboard/get-pacer-data")
+    @admin_required
+    def admin_federal_data_dashboard_get_pacer_data():
+        pacer_session = _get_pacer_session()
         return render_template(
-            "admin_federal_data_dashboard.html",
+            "admin_federal_data_get_pacer_data.html",
             active_page="federal_data_dashboard",
+            active_subnav="get_pacer_data",
+            pacer_authorized=bool(pacer_session),
+            pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
+            pacer_needs_otp=bool(session.get("pacer_needs_otp")),
+            pacer_base_url=pacer_auth_base_url,
         )
+
+    @app.post("/admin/federal-data-dashboard/pacer-auth")
+    @admin_required
+    def admin_federal_data_dashboard_pacer_auth():
+        require_csrf()
+
+        login_id = request.form.get("pacer_username", "").strip()
+        password = request.form.get("pacer_password", "")
+        otp_code = request.form.get("pacer_otp", "").strip() or None
+
+        if not login_id or not password:
+            session["pacer_needs_otp"] = False
+            flash("PACER username and password are required.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+
+        try:
+            token, error_description, needs_otp = _pacer_authenticate(
+                login_id, password, otp_code
+            )
+        except ValueError as exc:
+            session["pacer_needs_otp"] = False
+            flash(str(exc), "error")
+            return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+
+        if token:
+            _set_pacer_session(token)
+            session["pacer_needs_otp"] = False
+            flash("PACER authentication successful.", "success")
+        else:
+            session["pacer_needs_otp"] = bool(needs_otp)
+            if needs_otp:
+                flash(
+                    "PACER requires a one-time passcode. Enter your 2FA code to continue.",
+                    "error",
+                )
+            else:
+                flash(error_description or "PACER authentication failed.", "error")
+
+        return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+
+    @app.post("/admin/federal-data-dashboard/pacer-logout")
+    @admin_required
+    def admin_federal_data_dashboard_pacer_logout():
+        require_csrf()
+        _clear_pacer_session()
+        session["pacer_needs_otp"] = False
+        flash("PACER session cleared.", "success")
+        return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+
+    def _render_federal_data_placeholder(
+        page_title: str, active_subnav: Optional[str] = None
+    ):
+        return render_template(
+            "admin_federal_data_placeholder.html",
+            active_page="federal_data_dashboard",
+            active_subnav=active_subnav,
+            page_title=page_title,
+        )
+
+    @app.get("/admin/federal-data-dashboard/case-cards")
+    @admin_required
+    def admin_federal_data_dashboard_case_cards():
+        return _render_federal_data_placeholder("Case Cards", "case_cards")
+
+    @app.get("/admin/federal-data-dashboard/logs")
+    @admin_required
+    def admin_federal_data_dashboard_logs():
+        return _render_federal_data_placeholder("Logs", "logs")
+
+    @app.get("/admin/federal-data-dashboard/health-checks")
+    @admin_required
+    def admin_federal_data_dashboard_health_checks():
+        return _render_federal_data_placeholder("Health Checks", "health_checks")
+
+    @app.get("/admin/federal-data-dashboard/configure-ask-loulou")
+    @admin_required
+    def admin_federal_data_dashboard_configure_ask_loulou():
+        return _render_federal_data_placeholder("Configure Ask LouLou", "configure_ask_loulou")
+
+    @app.get("/admin/federal-data-dashboard/pcl-batch-search")
+    @admin_required
+    def admin_federal_data_dashboard_pcl_batch_search():
+        return _render_federal_data_placeholder("PCL Batch Search")
+
+    @app.get("/admin/federal-data-dashboard/expand-existing")
+    @admin_required
+    def admin_federal_data_dashboard_expand_existing():
+        return _render_federal_data_placeholder("Expand Existing PCL Data")
+
+    @app.get("/admin/federal-data-dashboard/advanced")
+    @admin_required
+    def admin_federal_data_dashboard_advanced():
+        return _render_federal_data_placeholder("Advanced")
 
     @app.get("/admin/users")
     @admin_required
