@@ -9,6 +9,7 @@ import tempfile
 import threading
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -313,6 +314,170 @@ def _load_or_create_secret_key() -> Tuple[str, str]:
         return generated, "ephemeral"
 
 
+@dataclass
+class PacerAuthResult:
+    token: str
+    error_description: str
+    login_result: str
+    needs_otp: bool
+    needs_client_code: bool
+    can_proceed: bool
+
+
+def _normalize_pacer_base_url(base_url: str) -> str:
+    normalized = (base_url or "").strip()
+    return normalized[:-1] if normalized.endswith("/") else normalized
+
+
+def pacer_environment_label(base_url: str) -> str:
+    if "qa-login.uscourts.gov" in base_url:
+        return "QA"
+    if "pacer.login.uscourts.gov" in base_url:
+        return "Production"
+    return "Custom"
+
+
+def pacer_environment_notice(base_url: str) -> Optional[str]:
+    if "qa-login.uscourts.gov" in base_url:
+        return "QA environment selected, requires a QA PACER account."
+    if "pacer.login.uscourts.gov" in base_url:
+        return "Production environment selected, billable searches may apply."
+    return None
+
+
+def _safe_json_loads(payload: str) -> Dict[str, Any]:
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+
+
+def build_pacer_auth_payload(
+    login_id: str,
+    password: str,
+    otp_code: Optional[str] = None,
+    client_code: Optional[str] = None,
+    redact_flag: bool = False,
+) -> Dict[str, str]:
+    payload: Dict[str, str] = {"loginId": login_id, "password": password}
+    if otp_code:
+        payload["otpCode"] = otp_code
+    if client_code:
+        payload["clientCode"] = client_code
+    if redact_flag:
+        payload["redactFlag"] = "1"
+    return payload
+
+
+def _pacer_requires_otp(error_description: str, otp_code: Optional[str]) -> bool:
+    if otp_code:
+        return False
+    if not error_description:
+        return False
+    message = error_description.lower()
+    otp_terms = ("one-time", "passcode", "otp", "two-factor", "2fa")
+    required_terms = ("required", "enter", "missing", "needed", "not entered", "provide")
+    return any(term in message for term in otp_terms) and any(
+        term in message for term in required_terms
+    )
+
+
+def _pacer_requires_client_code(error_description: str) -> bool:
+    if not error_description:
+        return False
+    message = error_description.lower()
+    return "client code" in message and any(
+        term in message for term in ("required", "not entered", "enter", "provide", "missing")
+    )
+
+
+def interpret_pacer_auth_response(
+    response_payload: Dict[str, Any], otp_code: Optional[str]
+) -> PacerAuthResult:
+    login_result = str(response_payload.get("loginResult", "")).strip()
+    token = response_payload.get("nextGenCSO") or ""
+    error_description = (response_payload.get("errorDescription") or "").strip()
+    needs_otp = _pacer_requires_otp(error_description, otp_code)
+    needs_client_code = _pacer_requires_client_code(error_description)
+    can_proceed = bool(login_result == "0" and token and not error_description)
+    return PacerAuthResult(
+        token=token if can_proceed else "",
+        error_description=error_description,
+        login_result=login_result,
+        needs_otp=needs_otp,
+        needs_client_code=needs_client_code,
+        can_proceed=can_proceed,
+    )
+
+
+class PacerAuthClient:
+    def __init__(self, base_url: str, logger: Optional[Any] = None, redact_flag: bool = False):
+        self.base_url = _normalize_pacer_base_url(base_url)
+        self.logger = logger
+        self.redact_flag = redact_flag
+
+    def authenticate(
+        self,
+        login_id: str,
+        password: str,
+        otp_code: Optional[str] = None,
+        client_code: Optional[str] = None,
+    ) -> PacerAuthResult:
+        payload = build_pacer_auth_payload(
+            login_id,
+            password,
+            otp_code=otp_code,
+            client_code=client_code,
+            redact_flag=self.redact_flag,
+        )
+        request_data = json.dumps(payload).encode("utf-8")
+        request_obj = urllib.request.Request(
+            f"{self.base_url}/services/cso-auth",
+            data=request_data,
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
+        )
+
+        if self.logger:
+            self.logger.info(
+                "PACER auth environment: %s", pacer_environment_label(self.base_url)
+            )
+
+        try:
+            with urllib.request.urlopen(request_obj, timeout=30) as response:
+                status_code = response.getcode()
+                response_body = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            status_code = exc.code
+            error_body = exc.read().decode("utf-8", errors="ignore")
+            error_payload = _safe_json_loads(error_body)
+            self._log_response(status_code, error_payload)
+            result = interpret_pacer_auth_response(error_payload, otp_code)
+            if result.error_description:
+                return result
+            raise ValueError("PACER authentication failed.") from exc
+        except urllib.error.URLError as exc:
+            raise ValueError("PACER authentication failed. Please try again.") from exc
+
+        response_payload = _safe_json_loads(response_body)
+        if not response_payload:
+            raise ValueError("PACER authentication failed.")
+        self._log_response(status_code, response_payload)
+        return interpret_pacer_auth_response(response_payload, otp_code)
+
+    def _log_response(self, status_code: int, response_payload: Dict[str, Any]) -> None:
+        if not self.logger:
+            return
+        login_result = str(response_payload.get("loginResult", "")).strip() or "unknown"
+        token_present = bool(response_payload.get("nextGenCSO"))
+        self.logger.info(
+            "PACER auth response status=%s loginResult=%s tokenPresent=%s",
+            status_code,
+            login_result,
+            token_present,
+        )
+
+
 def create_app() -> Flask:
     app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -513,11 +678,17 @@ def create_app() -> Flask:
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
     pacer_sessions: Dict[str, Dict[str, Any]] = {}
-    pacer_auth_base_url = os.environ.get(
-        "PACER_AUTH_BASE_URL", "https://qa-login.uscourts.gov"
-    ).strip()
-    if pacer_auth_base_url.endswith("/"):
-        pacer_auth_base_url = pacer_auth_base_url[:-1]
+    pacer_auth_base_url = _normalize_pacer_base_url(
+        os.environ.get("PACER_AUTH_BASE_URL", "https://qa-login.uscourts.gov")
+    )
+    pacer_redact_flag = os.environ.get("PACER_REDACT_FLAG", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    pacer_auth_client = PacerAuthClient(
+        pacer_auth_base_url, logger=app.logger, redact_flag=pacer_redact_flag
+    )
 
     # -----------------
     # Helpers
@@ -598,59 +769,6 @@ def create_app() -> Flask:
         session_key = session.pop("pacer_session_key", None)
         if session_key:
             pacer_sessions.pop(session_key, None)
-
-    def _pacer_requires_otp(error_description: str, otp_code: Optional[str]) -> bool:
-        if otp_code:
-            return False
-        if not error_description:
-            return False
-        message = error_description.lower()
-        return "one-time" in message or "passcode" in message or "otp" in message
-
-    def _pacer_authenticate(
-        login_id: str, password: str, otp_code: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str], bool]:
-        payload: Dict[str, str] = {"loginId": login_id, "password": password}
-        if otp_code:
-            payload["otpCode"] = otp_code
-        request_data = json.dumps(payload).encode("utf-8")
-        request_obj = urllib.request.Request(
-            f"{pacer_auth_base_url}/services/cso-auth",
-            data=request_data,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(request_obj, timeout=30) as response:
-                response_body = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", errors="ignore")
-            try:
-                error_payload = json.loads(error_body)
-            except json.JSONDecodeError:
-                error_payload = {}
-            error_description = (error_payload or {}).get("errorDescription", "")
-            needs_otp = _pacer_requires_otp(error_description, otp_code)
-            if error_description:
-                return None, error_description.strip(), needs_otp
-            raise ValueError("PACER authentication failed.") from exc
-        except urllib.error.URLError as exc:
-            raise ValueError("PACER authentication failed. Please try again.") from exc
-
-        try:
-            response_payload = json.loads(response_body)
-        except json.JSONDecodeError as exc:
-            raise ValueError("PACER authentication failed.") from exc
-        login_result = str(response_payload.get("loginResult", "")).strip()
-        token = response_payload.get("nextGenCSO", "") or ""
-        error_description = (response_payload.get("errorDescription") or "").strip()
-        if login_result == "0" and token:
-            return token, None, False
-        needs_otp = _pacer_requires_otp(error_description, otp_code)
-        if error_description:
-            return None, error_description, needs_otp
-        return None, "PACER authentication failed.", needs_otp
 
     def _normalize_party_def_num(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -2279,7 +2397,9 @@ def create_app() -> Flask:
             pacer_authorized=bool(pacer_session),
             pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
             pacer_needs_otp=bool(session.get("pacer_needs_otp")),
+            pacer_client_code_required=bool(session.get("pacer_client_code_required")),
             pacer_base_url=pacer_auth_base_url,
+            pacer_env_notice=pacer_environment_notice(pacer_auth_base_url),
         )
 
     @app.post("/admin/federal-data-dashboard/pacer-auth")
@@ -2290,34 +2410,45 @@ def create_app() -> Flask:
         login_id = request.form.get("pacer_username", "").strip()
         password = request.form.get("pacer_password", "")
         otp_code = request.form.get("pacer_otp", "").strip() or None
+        client_code = request.form.get("pacer_client_code", "").strip() or None
 
         if not login_id or not password:
             session["pacer_needs_otp"] = False
+            session["pacer_client_code_required"] = False
             flash("PACER username and password are required.", "error")
             return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 
         try:
-            token, error_description, needs_otp = _pacer_authenticate(
-                login_id, password, otp_code
+            result = pacer_auth_client.authenticate(
+                login_id, password, otp_code=otp_code, client_code=client_code
             )
         except ValueError as exc:
             session["pacer_needs_otp"] = False
+            session["pacer_client_code_required"] = False
             flash(str(exc), "error")
             return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 
-        if token:
-            _set_pacer_session(token)
+        if result.can_proceed:
+            _set_pacer_session(result.token)
             session["pacer_needs_otp"] = False
+            session["pacer_client_code_required"] = False
             flash("PACER authentication successful.", "success")
         else:
-            session["pacer_needs_otp"] = bool(needs_otp)
-            if needs_otp:
+            session["pacer_needs_otp"] = bool(result.needs_otp)
+            session["pacer_client_code_required"] = bool(result.needs_client_code)
+            if result.needs_client_code:
+                flash(
+                    result.error_description
+                    or "PACER requires a client code to continue.",
+                    "error",
+                )
+            elif result.needs_otp:
                 flash(
                     "PACER requires a one-time passcode. Enter your 2FA code to continue.",
                     "error",
                 )
             else:
-                flash(error_description or "PACER authentication failed.", "error")
+                flash(result.error_description or "PACER authentication failed.", "error")
 
         return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 
@@ -2327,6 +2458,7 @@ def create_app() -> Flask:
         require_csrf()
         _clear_pacer_session()
         session["pacer_needs_otp"] = False
+        session["pacer_client_code_required"] = False
         flash("PACER session cleared.", "success")
         return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 

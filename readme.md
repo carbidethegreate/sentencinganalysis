@@ -21,6 +21,9 @@ Required for production
 - `SECRET_KEY` (or `Secrets`): Flask session signing key
 - `CPD_ADMIN_KEY`: master admin password (username is always `CPDADMIN`)
 
+Federal data dashboard
+- `PACER_AUTH_BASE_URL`: PACER authentication base URL (use `https://qa-login.uscourts.gov` for QA or `https://pacer.login.uscourts.gov` for Production)
+
 Database
 The app will try these, in order:
 - `DATABASE_URL`
