@@ -329,6 +329,12 @@ def _normalize_pacer_base_url(base_url: str) -> str:
     return normalized[:-1] if normalized.endswith("/") else normalized
 
 
+def _configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
+    login_id = _first_env_or_secret_file("puser")
+    password = _first_env_or_secret_file("ppass")
+    return login_id, password
+
+
 def pacer_environment_label(base_url: str) -> str:
     if "qa-login.uscourts.gov" in base_url:
         return "QA"
@@ -343,6 +349,15 @@ def pacer_environment_notice(base_url: str) -> Optional[str]:
     if "pacer.login.uscourts.gov" in base_url:
         return "Production environment selected, billable searches may apply."
     return None
+
+
+def _pacer_mentions_otp(error_description: str) -> bool:
+    if not error_description:
+        return False
+    message = error_description.lower()
+    if "one-time passcode" in message or "one time passcode" in message:
+        return True
+    return re.search(r"\botp\b", message) is not None
 
 
 def _safe_json_loads(payload: str) -> Dict[str, Any]:
@@ -374,8 +389,10 @@ def _pacer_requires_otp(error_description: str, otp_code: Optional[str]) -> bool
         return False
     if not error_description:
         return False
+    if _pacer_mentions_otp(error_description):
+        return True
     message = error_description.lower()
-    otp_terms = ("one-time", "passcode", "otp", "two-factor", "2fa")
+    otp_terms = ("one-time", "passcode", "two-factor", "2fa")
     required_terms = ("required", "enter", "missing", "needed", "not entered", "provide")
     return any(term in message for term in otp_terms) and any(
         term in message for term in required_terms
@@ -679,7 +696,7 @@ def create_app() -> Flask:
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
     pacer_sessions: Dict[str, Dict[str, Any]] = {}
     pacer_auth_base_url = _normalize_pacer_base_url(
-        os.environ.get("PACER_AUTH_BASE_URL", "https://qa-login.uscourts.gov")
+        os.environ.get("PACER_AUTH_BASE_URL", "https://pacer.login.uscourts.gov")
     )
     pacer_redact_flag = os.environ.get("PACER_REDACT_FLAG", "").strip().lower() in {
         "1",
@@ -2390,6 +2407,11 @@ def create_app() -> Flask:
     @admin_required
     def admin_federal_data_dashboard_get_pacer_data():
         pacer_session = _get_pacer_session()
+        pacer_login_id_configured, pacer_password_configured = _configured_pacer_credentials()
+        pacer_server_creds_available = bool(
+            pacer_login_id_configured and pacer_password_configured
+        )
+        show_manual_creds = request.args.get("manual") == "1"
         return render_template(
             "admin_federal_data_get_pacer_data.html",
             active_page="federal_data_dashboard",
@@ -2400,6 +2422,8 @@ def create_app() -> Flask:
             pacer_client_code_required=bool(session.get("pacer_client_code_required")),
             pacer_base_url=pacer_auth_base_url,
             pacer_env_notice=pacer_environment_notice(pacer_auth_base_url),
+            pacer_server_creds_available=pacer_server_creds_available,
+            show_manual_creds=show_manual_creds,
         )
 
     @app.post("/admin/federal-data-dashboard/pacer-auth")
@@ -2407,16 +2431,40 @@ def create_app() -> Flask:
     def admin_federal_data_dashboard_pacer_auth():
         require_csrf()
 
-        login_id = request.form.get("pacer_username", "").strip()
-        password = request.form.get("pacer_password", "")
+        pacer_login_id_configured, pacer_password_configured = _configured_pacer_credentials()
+        pacer_server_creds_available = bool(
+            pacer_login_id_configured and pacer_password_configured
+        )
+        manual_mode = request.form.get("manual_mode") == "1"
+        if pacer_server_creds_available and not manual_mode:
+            login_id = pacer_login_id_configured or ""
+            password = pacer_password_configured or ""
+        else:
+            login_id = request.form.get("pacer_login_id", "").strip()
+            password = request.form.get("pacer_login_secret", "")
         otp_code = request.form.get("pacer_otp", "").strip() or None
         client_code = request.form.get("pacer_client_code", "").strip() or None
+
+        redirect_target = (
+            url_for("admin_federal_data_dashboard_get_pacer_data", manual="1")
+            if manual_mode
+            else url_for("admin_federal_data_dashboard_get_pacer_data")
+        )
+
+        if login_id.strip().upper() == "CPDADMIN":
+            session["pacer_needs_otp"] = False
+            session["pacer_client_code_required"] = False
+            flash(
+                "Those look like CourtDataPro admin creds. Enter PACER credentials instead.",
+                "error",
+            )
+            return redirect(redirect_target)
 
         if not login_id or not password:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
-            flash("PACER username and password are required.", "error")
-            return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+            flash("PACER login ID and password are required.", "error")
+            return redirect(redirect_target)
 
         try:
             result = pacer_auth_client.authenticate(
@@ -2426,7 +2474,7 @@ def create_app() -> Flask:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
             flash(str(exc), "error")
-            return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+            return redirect(redirect_target)
 
         if result.can_proceed:
             _set_pacer_session(result.token)
@@ -2443,14 +2491,20 @@ def create_app() -> Flask:
                     "error",
                 )
             elif result.needs_otp:
-                flash(
-                    "PACER requires a one-time passcode. Enter your 2FA code to continue.",
-                    "error",
-                )
+                if _pacer_mentions_otp(result.error_description):
+                    flash(
+                        "PACER requires a one-time passcode. Enter your 2FA code to continue.",
+                        "error",
+                    )
+                else:
+                    flash(
+                        "PACER requires a 2FA code. Enter your one-time passcode to continue.",
+                        "error",
+                    )
             else:
                 flash(result.error_description or "PACER authentication failed.", "error")
 
-        return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
+        return redirect(redirect_target)
 
     @app.post("/admin/federal-data-dashboard/pacer-logout")
     @admin_required

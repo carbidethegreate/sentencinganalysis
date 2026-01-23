@@ -32,18 +32,55 @@
       {% if pacer_needs_otp %}
         <p class="small"><strong>2FA required.</strong> Enter the one-time passcode from your authenticator app.</p>
       {% endif %}
-      <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}">
+      <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="grid two">
-          <div>
-            <label for="pacer-username">PACER username</label>
-            <input id="pacer-username" name="pacer_username" autocomplete="off" required>
+        {% if pacer_server_creds_available and not show_manual_creds %}
+          <div class="small" style="margin-bottom: 12px;">
+            PACER credentials are configured on the server for this environment.
           </div>
-          <div>
-            <label for="pacer-password">PACER password</label>
-            <input id="pacer-password" name="pacer_password" type="password" autocomplete="new-password" required>
+          <div class="small" style="margin-bottom: 12px;">
+            <a href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
+              Use different PACER credentials
+            </a>
           </div>
-        </div>
+        {% else %}
+          {% if show_manual_creds %}
+            <input type="hidden" name="manual_mode" value="1">
+          {% endif %}
+          <div style="position:absolute; left:-10000px; width:1px; height:1px; overflow:hidden;">
+            <label for="pacer-decoy-username">Username</label>
+            <input id="pacer-decoy-username" name="username" type="text" autocomplete="username">
+            <label for="pacer-decoy-password">Password</label>
+            <input id="pacer-decoy-password" name="password" type="password" autocomplete="current-password">
+          </div>
+          <div class="grid two">
+            <div>
+              <label for="pacer-login-id">PACER login ID</label>
+              <input
+                id="pacer-login-id"
+                name="pacer_login_id"
+                autocomplete="off"
+                required
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-bwignore="true"
+              >
+            </div>
+            <div>
+              <label for="pacer-login-secret">PACER password</label>
+              <input
+                id="pacer-login-secret"
+                name="pacer_login_secret"
+                type="password"
+                autocomplete="new-password"
+                required
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-bwignore="true"
+              >
+            </div>
+          </div>
+        {% endif %}
         <div style="margin-top: 12px;">
           <label for="pacer-client-code">Client code (optional)</label>
           <input
@@ -51,6 +88,9 @@
             name="pacer_client_code"
             autocomplete="off"
             {% if pacer_client_code_required %}class="input-error"{% endif %}
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-bwignore="true"
           >
           {% if pacer_client_code_required %}
             <p class="small" style="color: var(--danger); margin-top: 6px;">
@@ -59,8 +99,16 @@
           {% endif %}
         </div>
         <div style="margin-top: 12px;">
-          <label for="pacer-otp">2FA code (only if prompted)</label>
-          <input id="pacer-otp" name="pacer_otp" autocomplete="one-time-code" inputmode="numeric">
+          <label for="pacer-otp">2FA code (required if your PACER account uses MFA)</label>
+          <input
+            id="pacer-otp"
+            name="pacer_otp"
+            autocomplete="one-time-code"
+            inputmode="numeric"
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-bwignore="true"
+          >
         </div>
         <div class="actions" style="margin-top: 16px;">
           <button class="primary" type="submit">Authorize</button>
