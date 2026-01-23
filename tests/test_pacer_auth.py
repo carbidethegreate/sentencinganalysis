@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app import (
     PacerAuthClient,
     build_pacer_auth_payload,
+    create_app,
     interpret_pacer_auth_response,
 )
 
@@ -92,7 +93,7 @@ class PacerAuthTests(unittest.TestCase):
         )
         self.assertFalse(response.can_proceed)
         self.assertEqual(response.error_description, "Invalid username, password, or one-time passcode.")
-        self.assertFalse(response.needs_otp)
+        self.assertTrue(response.needs_otp)
 
     def test_interpret_required_client_code(self):
         response = interpret_pacer_auth_response(
@@ -105,6 +106,50 @@ class PacerAuthTests(unittest.TestCase):
         )
         self.assertFalse(response.can_proceed)
         self.assertTrue(response.needs_client_code)
+
+    def test_interpret_needs_otp_when_one_time_passcode_missing(self):
+        response = interpret_pacer_auth_response(
+            {
+                "loginResult": "13",
+                "nextGenCSO": "",
+                "errorDescription": "A one-time passcode is needed to continue.",
+            },
+            None,
+        )
+        self.assertTrue(response.needs_otp)
+
+
+class FederalDataDashboardTests(unittest.TestCase):
+    def test_get_pacer_data_hides_manual_creds_when_server_creds_present(self):
+        def fake_first_env_or_secret_file(*names):
+            if names == ("puser",):
+                return "pacer-user"
+            if names == ("ppass",):
+                return "pacer-pass"
+            if names == ("SECRET_KEY", "Secrets", "SECRETS"):
+                return "test-secret"
+            return None
+
+        with patch("app._first_env_or_secret_file", side_effect=fake_first_env_or_secret_file):
+            app = create_app()
+            app.testing = True
+
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["is_admin"] = True
+
+                response = client.get("/admin/federal-data-dashboard/get-pacer-data")
+                html = response.data.decode("utf-8")
+                self.assertIn("name=\"pacer_otp\"", html)
+                self.assertNotIn("name=\"pacer_login_id\"", html)
+                self.assertNotIn("name=\"pacer_login_secret\"", html)
+
+                manual_response = client.get(
+                    "/admin/federal-data-dashboard/get-pacer-data?manual=1"
+                )
+                manual_html = manual_response.data.decode("utf-8")
+                self.assertIn("name=\"pacer_login_id\"", manual_html)
+                self.assertIn("name=\"pacer_login_secret\"", manual_html)
 
 
 if __name__ == "__main__":
