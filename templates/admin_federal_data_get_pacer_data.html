@@ -32,16 +32,53 @@
       {% if pacer_needs_otp %}
         <p class="small"><strong>2FA required.</strong> Enter the one-time passcode from your authenticator app.</p>
       {% endif %}
-      <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}">
+      <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div style="position:absolute; left:-10000px; top:auto; width:1px; height:1px; overflow:hidden;" aria-hidden="true">
+          <label for="pacer-decoy-username">Username</label>
+          <input
+            id="pacer-decoy-username"
+            name="username"
+            autocomplete="username"
+            tabindex="-1"
+          >
+          <label for="pacer-decoy-password">Password</label>
+          <input
+            id="pacer-decoy-password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            tabindex="-1"
+          >
+        </div>
         <div class="grid two">
           <div>
             <label for="pacer-username">PACER username</label>
-            <input id="pacer-username" name="pacer_username" autocomplete="off" required>
+            <input
+              id="pacer-username"
+              name="pacer_login_id"
+              autocomplete="off"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck="false"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-bwignore="true"
+              required
+            >
           </div>
           <div>
             <label for="pacer-password">PACER password</label>
-            <input id="pacer-password" name="pacer_password" type="password" autocomplete="new-password" required>
+            <input
+              id="pacer-password"
+              name="pacer_login_secret"
+              type="password"
+              autocomplete="new-password"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-bwignore="true"
+              required
+            >
           </div>
         </div>
         <div style="margin-top: 12px;">
@@ -50,6 +87,9 @@
             id="pacer-client-code"
             name="pacer_client_code"
             autocomplete="off"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
             {% if pacer_client_code_required %}class="input-error"{% endif %}
           >
           {% if pacer_client_code_required %}
@@ -59,8 +99,19 @@
           {% endif %}
         </div>
         <div style="margin-top: 12px;">
-          <label for="pacer-otp">2FA code (only if prompted)</label>
-          <input id="pacer-otp" name="pacer_otp" autocomplete="one-time-code" inputmode="numeric">
+          <label for="pacer-otp">2FA code (required if your PACER account uses MFA)</label>
+          <input
+            id="pacer-otp"
+            name="pacer_otp_code"
+            autocomplete="one-time-code"
+            inputmode="numeric"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
+          >
+          <p class="small" style="margin-top: 6px;">
+            If MFA is enabled on your PACER account, include a current one-time passcode (otpCode) with the request.
+          </p>
         </div>
         <div class="actions" style="margin-top: 16px;">
           <button class="primary" type="submit">Authorize</button>

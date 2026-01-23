@@ -22,7 +22,7 @@ Required for production
 - `CPD_ADMIN_KEY`: master admin password (username is always `CPDADMIN`)
 
 Federal data dashboard
-- `PACER_AUTH_BASE_URL`: PACER authentication base URL (use `https://qa-login.uscourts.gov` for QA or `https://pacer.login.uscourts.gov` for Production)
+- `PACER_AUTH_BASE_URL`: PACER authentication base URL (defaults to `https://pacer.login.uscourts.gov`; use `https://qa-login.uscourts.gov` for QA testing)
 
 Database
 The app will try these, in order:

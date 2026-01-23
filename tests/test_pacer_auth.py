@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app import (
     PacerAuthClient,
     build_pacer_auth_payload,
+    create_app,
     interpret_pacer_auth_response,
 )
 
@@ -105,6 +106,27 @@ class PacerAuthTests(unittest.TestCase):
         )
         self.assertFalse(response.can_proceed)
         self.assertTrue(response.needs_client_code)
+
+
+class FederalDataDashboardTemplateTests(unittest.TestCase):
+    def test_get_pacer_data_form_has_autofill_mitigations(self):
+        app = create_app()
+        app.testing = True
+        client = app.test_client()
+
+        with client.session_transaction() as session:
+            session["is_admin"] = True
+
+        response = client.get("/admin/federal-data-dashboard/get-pacer-data")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+
+        self.assertIn('name="username"', html)
+        self.assertIn('name="password"', html)
+        self.assertIn('name="pacer_login_id"', html)
+        self.assertIn('name="pacer_login_secret"', html)
+        self.assertIn('name="pacer_otp_code"', html)
+        self.assertNotIn("2FA code (only if prompted)", html)
 
 
 if __name__ == "__main__":

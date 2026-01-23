@@ -341,7 +341,7 @@ def pacer_environment_notice(base_url: str) -> Optional[str]:
     if "qa-login.uscourts.gov" in base_url:
         return "QA environment selected, requires a QA PACER account."
     if "pacer.login.uscourts.gov" in base_url:
-        return "Production environment selected, billable searches may apply."
+        return "Production environment selected, PACER billing rules may apply."
     return None
 
 
@@ -679,7 +679,7 @@ def create_app() -> Flask:
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
     pacer_sessions: Dict[str, Dict[str, Any]] = {}
     pacer_auth_base_url = _normalize_pacer_base_url(
-        os.environ.get("PACER_AUTH_BASE_URL", "https://qa-login.uscourts.gov")
+        os.environ.get("PACER_AUTH_BASE_URL", "https://pacer.login.uscourts.gov")
     )
     pacer_redact_flag = os.environ.get("PACER_REDACT_FLAG", "").strip().lower() in {
         "1",
@@ -2407,9 +2407,9 @@ def create_app() -> Flask:
     def admin_federal_data_dashboard_pacer_auth():
         require_csrf()
 
-        login_id = request.form.get("pacer_username", "").strip()
-        password = request.form.get("pacer_password", "")
-        otp_code = request.form.get("pacer_otp", "").strip() or None
+        login_id = request.form.get("pacer_login_id", "").strip()
+        password = request.form.get("pacer_login_secret", "")
+        otp_code = request.form.get("pacer_otp_code", "").strip() or None
         client_code = request.form.get("pacer_client_code", "").strip() or None
 
         if not login_id or not password:
@@ -2426,6 +2426,11 @@ def create_app() -> Flask:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
             flash(str(exc), "error")
+            if not otp_code:
+                flash(
+                    "Tip: If MFA is enabled on this PACER account, you must enter a current one-time passcode.",
+                    "info",
+                )
             return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 
         if result.can_proceed:
@@ -2449,6 +2454,11 @@ def create_app() -> Flask:
                 )
             else:
                 flash(result.error_description or "PACER authentication failed.", "error")
+            if not otp_code:
+                flash(
+                    "Tip: If MFA is enabled on this PACER account, you must enter a current one-time passcode.",
+                    "info",
+                )
 
         return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 
