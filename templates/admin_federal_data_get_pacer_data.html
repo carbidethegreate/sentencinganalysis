@@ -34,24 +34,38 @@
       {% endif %}
       <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        {% if pacer_server_creds_available and not show_manual_creds %}
+        {% if pacer_server_creds_available and not manual_mode %}
           <div class="small" style="margin-bottom: 12px;">
-            PACER credentials are configured on the server for this environment.
+            PACER credentials are configured on the server; they are not shown in the browser.
           </div>
           <div class="small" style="margin-bottom: 12px;">
             <a href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
-              Use different PACER credentials
+              Enter PACER username/password manually
             </a>
           </div>
         {% else %}
-          {% if show_manual_creds %}
+          {% if manual_mode %}
             <input type="hidden" name="manual_mode" value="1">
           {% endif %}
           <div style="position:absolute; left:-10000px; width:1px; height:1px; overflow:hidden;">
             <label for="pacer-decoy-username">Username</label>
-            <input id="pacer-decoy-username" name="username" type="text" autocomplete="username">
+            <input
+              id="pacer-decoy-username"
+              name="username"
+              type="text"
+              autocomplete="username"
+              tabindex="-1"
+              aria-hidden="true"
+            >
             <label for="pacer-decoy-password">Password</label>
-            <input id="pacer-decoy-password" name="password" type="password" autocomplete="current-password">
+            <input
+              id="pacer-decoy-password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              tabindex="-1"
+              aria-hidden="true"
+            >
           </div>
           <div class="grid two">
             <div>
@@ -99,10 +113,10 @@
           {% endif %}
         </div>
         <div style="margin-top: 12px;">
-          <label for="pacer-otp">2FA code (required if your PACER account uses MFA)</label>
+          <label for="pacer-otp-code">2FA code (required if your PACER account uses MFA)</label>
           <input
-            id="pacer-otp"
-            name="pacer_otp"
+            id="pacer-otp-code"
+            name="pacer_otp_code"
             autocomplete="one-time-code"
             inputmode="numeric"
             data-lpignore="true"
