@@ -140,7 +140,7 @@ class FederalDataDashboardTests(unittest.TestCase):
 
                 response = client.get("/admin/federal-data-dashboard/get-pacer-data")
                 html = response.data.decode("utf-8")
-                self.assertIn("name=\"pacer_otp\"", html)
+                self.assertIn("name=\"pacer_otp_code\"", html)
                 self.assertNotIn("name=\"pacer_login_id\"", html)
                 self.assertNotIn("name=\"pacer_login_secret\"", html)
 

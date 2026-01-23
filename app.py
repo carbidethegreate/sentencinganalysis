@@ -329,7 +329,7 @@ def _normalize_pacer_base_url(base_url: str) -> str:
     return normalized[:-1] if normalized.endswith("/") else normalized
 
 
-def _configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
+def get_configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
     login_id = _first_env_or_secret_file("puser")
     password = _first_env_or_secret_file("ppass")
     return login_id, password
@@ -2407,11 +2407,10 @@ def create_app() -> Flask:
     @admin_required
     def admin_federal_data_dashboard_get_pacer_data():
         pacer_session = _get_pacer_session()
-        pacer_login_id_configured, pacer_password_configured = _configured_pacer_credentials()
         pacer_server_creds_available = bool(
-            pacer_login_id_configured and pacer_password_configured
+            _first_env_or_secret_file("puser") and _first_env_or_secret_file("ppass")
         )
-        show_manual_creds = request.args.get("manual") == "1"
+        manual_mode = request.args.get("manual") == "1"
         return render_template(
             "admin_federal_data_get_pacer_data.html",
             active_page="federal_data_dashboard",
@@ -2423,7 +2422,7 @@ def create_app() -> Flask:
             pacer_base_url=pacer_auth_base_url,
             pacer_env_notice=pacer_environment_notice(pacer_auth_base_url),
             pacer_server_creds_available=pacer_server_creds_available,
-            show_manual_creds=show_manual_creds,
+            manual_mode=manual_mode,
         )
 
     @app.post("/admin/federal-data-dashboard/pacer-auth")
@@ -2431,25 +2430,32 @@ def create_app() -> Flask:
     def admin_federal_data_dashboard_pacer_auth():
         require_csrf()
 
-        pacer_login_id_configured, pacer_password_configured = _configured_pacer_credentials()
-        pacer_server_creds_available = bool(
-            pacer_login_id_configured and pacer_password_configured
-        )
         manual_mode = request.form.get("manual_mode") == "1"
-        if pacer_server_creds_available and not manual_mode:
-            login_id = pacer_login_id_configured or ""
-            password = pacer_password_configured or ""
-        else:
-            login_id = request.form.get("pacer_login_id", "").strip()
-            password = request.form.get("pacer_login_secret", "")
-        otp_code = request.form.get("pacer_otp", "").strip() or None
-        client_code = request.form.get("pacer_client_code", "").strip() or None
+        login_id = request.form.get("pacer_login_id", "").strip()
+        password = request.form.get("pacer_login_secret", "")
+        otp_code = request.form.get("pacer_otp_code", "").strip()
+        client_code = request.form.get("pacer_client_code", "").strip()
 
         redirect_target = (
             url_for("admin_federal_data_dashboard_get_pacer_data", manual="1")
             if manual_mode
             else url_for("admin_federal_data_dashboard_get_pacer_data")
         )
+
+        if not login_id or not password:
+            fallback_user, fallback_pass = get_configured_pacer_credentials()
+            if fallback_user and fallback_pass:
+                login_id = fallback_user
+                password = fallback_pass
+            else:
+                session["pacer_needs_otp"] = False
+                session["pacer_client_code_required"] = False
+                flash(
+                    "PACER credentials are not configured. Set Render env var puser and "
+                    "secret file ppass, or use manual mode.",
+                    "error",
+                )
+                return redirect(redirect_target)
 
         if login_id.strip().upper() == "CPDADMIN":
             session["pacer_needs_otp"] = False
@@ -2460,11 +2466,8 @@ def create_app() -> Flask:
             )
             return redirect(redirect_target)
 
-        if not login_id or not password:
-            session["pacer_needs_otp"] = False
-            session["pacer_client_code_required"] = False
-            flash("PACER login ID and password are required.", "error")
-            return redirect(redirect_target)
+        otp_code = otp_code or None
+        client_code = client_code or None
 
         try:
             result = pacer_auth_client.authenticate(
@@ -2484,25 +2487,14 @@ def create_app() -> Flask:
         else:
             session["pacer_needs_otp"] = bool(result.needs_otp)
             session["pacer_client_code_required"] = bool(result.needs_client_code)
-            if result.needs_client_code:
+            error_description = result.error_description or "PACER authentication failed."
+            login_result = result.login_result or "unknown"
+            flash(f"{error_description} (loginResult: {login_result})", "error")
+            if login_result == "13" and not otp_code:
                 flash(
-                    result.error_description
-                    or "PACER requires a client code to continue.",
+                    "If your PACER account is enrolled in MFA, a one time passcode (2FA code) is required.",
                     "error",
                 )
-            elif result.needs_otp:
-                if _pacer_mentions_otp(result.error_description):
-                    flash(
-                        "PACER requires a one-time passcode. Enter your 2FA code to continue.",
-                        "error",
-                    )
-                else:
-                    flash(
-                        "PACER requires a 2FA code. Enter your one-time passcode to continue.",
-                        "error",
-                    )
-            else:
-                flash(result.error_description or "PACER authentication failed.", "error")
 
         return redirect(redirect_target)
 
