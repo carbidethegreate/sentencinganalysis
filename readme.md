@@ -39,6 +39,10 @@ The generic table APIs are still available:
 
 For safety, the `users` table is blocked from these endpoints.
 
+## Planning docs
+
+- PACER/PCL pipeline implementation plan: [`docs/pacer_pcl_pipeline_plan.md`](docs/pacer_pcl_pipeline_plan.md)
+
 ## Local development
 
 ```bash
