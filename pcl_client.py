@@ -53,11 +53,11 @@ class PclClient:
         return self._request_json("DELETE", f"/cases/reports/{report_id}")
 
     def immediate_case_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
-        page_num = max(1, int(page))
+        page_num = max(0, int(page))
         return self._request_json_with_meta("POST", f"/cases/find?page={page_num}", payload)
 
     def immediate_party_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
-        page_num = max(1, int(page))
+        page_num = max(0, int(page))
         return self._request_json_with_meta("POST", f"/parties/find?page={page_num}", payload)
 
     def _request_json(

@@ -442,6 +442,7 @@
               <thead>
                 <tr>
                   <th>Page</th>
+                  <th>API page</th>
                   <th>Timestamp (UTC)</th>
                   <th>Endpoint</th>
                   <th>Status</th>
@@ -451,7 +452,8 @@
               <tbody>
                 {% for log in run_result.logs %}
                   <tr>
-                    <td>{{ log.page }}</td>
+                    <td>{{ log.human_display_page or log.page }}</td>
+                    <td>{{ log.api_page if log.api_page is not none else '—' }}</td>
                     <td>{{ log.timestamp.replace('T', ' ') }}</td>
                     <td><code>{{ log.endpoint }}</code></td>
                     <td>{{ log.status_code }}</td>
@@ -476,7 +478,11 @@
           {% for snippet in run_result.response_snippets %}
             <div class="card">
               <p class="small">
-                <strong>Page {{ snippet.page }}</strong> · Status {{ snippet.status_code }} · <code>{{ snippet.endpoint }}</code>
+                <strong>Page {{ snippet.page }}</strong>
+                {% if snippet.api_page is not none %}
+                  · API page {{ snippet.api_page }}
+                {% endif %}
+                · Status {{ snippet.status_code }} · <code>{{ snippet.endpoint }}</code>
               </p>
               <pre class="code-block">{{ snippet.snippet | tojson(indent=2) }}</pre>
             </div>
