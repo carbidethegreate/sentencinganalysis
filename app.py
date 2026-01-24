@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import quote_plus
 
+import requests
 from flask import (
     Flask,
     abort,
@@ -30,11 +31,13 @@ from flask import (
 )
 from sqlalchemy import (
     Boolean,
+    BigInteger,
     Date,
     Column,
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     MetaData,
     String,
     Table,
@@ -47,10 +50,11 @@ from sqlalchemy import (
     inspect,
     insert,
     literal_column,
+    or_,
     select,
     update,
 )
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert as pg_insert
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -73,6 +77,12 @@ from sentencing_models import (
 )
 from pcl_queries import get_case_detail, list_cases, parse_filters
 from sentencing_queries import list_sentencing_events_by_judge, parse_sentencing_filters
+from federal_courts_sync import (
+    FEDERAL_COURTS_SOURCE_URL,
+    FederalCourtsSyncError,
+    fetch_federal_courts_json,
+    upsert_federal_courts,
+)
 
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
 CASE_STAGE1_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -664,6 +674,52 @@ def create_app() -> Flask:
         Column("loc_date_end", Date, nullable=True),
     )
 
+    if engine.dialect.name == "postgresql":
+        federal_id_type = BigInteger
+        federal_states_type = ARRAY(String)
+        federal_raw_json_type = JSONB
+    else:
+        federal_id_type = Integer
+        federal_states_type = JSON
+        federal_raw_json_type = JSON
+
+    federal_courts = Table(
+        "federal_courts",
+        metadata,
+        Column("id", federal_id_type, primary_key=True, autoincrement=True),
+        Column("court_id", Text, nullable=False, unique=True),
+        Column("title", Text, nullable=True),
+        Column("court_name", Text, nullable=True),
+        Column("court_type", Text, nullable=True),
+        Column("circuit", Text, nullable=True),
+        Column("login_url", Text, nullable=True),
+        Column("web_url", Text, nullable=True),
+        Column("rss_url", Text, nullable=True),
+        Column("software_version", Text, nullable=True),
+        Column("go_live_date", Text, nullable=True),
+        Column("pdf_size", Text, nullable=True),
+        Column("merge_doc_size", Text, nullable=True),
+        Column("vcis", Text, nullable=True),
+        Column("states", federal_states_type, nullable=True),
+        Column("counties_count", Integer, nullable=True),
+        Column(
+            "source_url",
+            Text,
+            nullable=False,
+            server_default=sa_text(f"'{FEDERAL_COURTS_SOURCE_URL}'"),
+        ),
+        Column("source_last_updated", Text, nullable=True),
+        Column("fetched_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("raw_json", federal_raw_json_type, nullable=False),
+    )
+
     pacer_tokens = build_pacer_token_table(metadata)
     pcl_tables = build_pcl_tables(metadata)
     sentencing_tables = build_sentencing_tables(metadata)
@@ -679,6 +735,7 @@ def create_app() -> Flask:
                 case_stage1,
                 case_data_one,
                 pacer_tokens,
+                federal_courts,
                 *pcl_tables.values(),
             ],
         )
@@ -788,6 +845,21 @@ def create_app() -> Flask:
             label="sentencing",
         )
 
+    _ensure_indexes(
+        {
+            "ix_federal_courts_court_type": "CREATE INDEX IF NOT EXISTS ix_federal_courts_court_type ON federal_courts (court_type)",
+            "ix_federal_courts_circuit": "CREATE INDEX IF NOT EXISTS ix_federal_courts_circuit ON federal_courts (circuit)",
+        },
+        label="federal courts",
+    )
+    if engine.dialect.name == "postgresql":
+        _ensure_indexes(
+            {
+                "ix_federal_courts_states_gin": "CREATE INDEX IF NOT EXISTS ix_federal_courts_states_gin ON federal_courts USING GIN (states)"
+            },
+            label="federal courts states",
+        )
+
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
     pacer_auth_base_url = _normalize_pacer_base_url(
@@ -810,6 +882,7 @@ def create_app() -> Flask:
     app.pacer_token_store = pacer_token_store
     app.pcl_tables = pcl_tables
     app.engine = engine
+    app.federal_courts_table = federal_courts
 
     pcl_base_url = _normalize_pacer_base_url(
         os.environ.get("PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest")
@@ -853,6 +926,16 @@ def create_app() -> Flask:
 
     def _is_postgres() -> bool:
         return engine.dialect.name == "postgresql"
+
+    def run_federal_courts_sync() -> Dict[str, Any]:
+        meta, records = fetch_federal_courts_json()
+        result = upsert_federal_courts(engine, federal_courts, records, meta)
+        return {
+            "inserted": result.inserted,
+            "updated": result.updated,
+            "total": result.total_records,
+            "source_last_updated": result.source_last_updated,
+        }
 
     def _parse_stage1_date(value: Optional[str]) -> Optional[Any]:
         if not value:
@@ -2606,6 +2689,23 @@ def create_app() -> Flask:
     # Admin
     # -----------------
 
+    @app.cli.command("federal-courts-sync")
+    def federal_courts_sync_command() -> None:
+        """Sync PACER CM/ECF court lookup data into the database."""
+        try:
+            stats = run_federal_courts_sync()
+        except (FederalCourtsSyncError, requests.RequestException) as exc:
+            app.logger.exception("Federal courts sync failed.")
+            raise SystemExit(f"Federal courts sync failed: {exc}") from exc
+
+        message = (
+            "Federal courts sync complete: "
+            f"{stats['inserted']} inserted, {stats['updated']} updated "
+            f"(meta.last_updated={stats['source_last_updated'] or 'unknown'})."
+        )
+        app.logger.info(message)
+        print(message)
+
     @app.route("/admin/login", methods=["GET", "POST"])
     def admin_login():
         expected_pass = os.environ.get("CPD_ADMIN_KEY")
@@ -2677,6 +2777,136 @@ def create_app() -> Flask:
             pacer_env_notice=pacer_environment_notice(pacer_auth_base_url),
             pacer_server_creds_available=pacer_server_creds_available,
             manual_mode=manual_mode,
+        )
+
+    @app.get("/admin/federal-data-dashboard/federal-courts")
+    @admin_required
+    def admin_federal_data_dashboard_federal_courts():
+        q = request.args.get("q", "").strip()
+        summary_columns = [
+            federal_courts.c.court_id,
+            federal_courts.c.title,
+            federal_courts.c.court_name,
+            federal_courts.c.court_type,
+            federal_courts.c.circuit,
+            federal_courts.c.login_url,
+            federal_courts.c.web_url,
+            federal_courts.c.rss_url,
+            federal_courts.c.software_version,
+            federal_courts.c.go_live_date,
+            federal_courts.c.pdf_size,
+            federal_courts.c.merge_doc_size,
+            federal_courts.c.vcis,
+            federal_courts.c.states,
+            federal_courts.c.counties_count,
+            federal_courts.c.source_last_updated,
+            federal_courts.c.fetched_at,
+            federal_courts.c.updated_at,
+        ]
+        stmt = select(*summary_columns)
+        if q:
+            pattern = f"%{q}%"
+            stmt = stmt.where(
+                or_(
+                    federal_courts.c.court_id.ilike(pattern),
+                    federal_courts.c.title.ilike(pattern),
+                    federal_courts.c.court_name.ilike(pattern),
+                    federal_courts.c.court_type.ilike(pattern),
+                    federal_courts.c.circuit.ilike(pattern),
+                    federal_courts.c.states.cast(Text).ilike(pattern),
+                )
+            )
+        stmt = stmt.order_by(federal_courts.c.court_type.asc(), federal_courts.c.title.asc())
+
+        with engine.connect() as conn:
+            rows = conn.execute(stmt).mappings().all()
+            total_courts = conn.execute(
+                select(func.count()).select_from(federal_courts)
+            ).scalar_one()
+            last_fetched_at = conn.execute(select(func.max(federal_courts.c.fetched_at))).scalar_one()
+            last_source_updated = conn.execute(
+                select(func.max(federal_courts.c.source_last_updated))
+            ).scalar_one()
+
+        def _format_dt(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if hasattr(value, "isoformat"):
+                try:
+                    return value.isoformat(sep=" ", timespec="seconds")
+                except TypeError:
+                    return value.isoformat()
+            return str(value)
+
+        courts: List[Dict[str, Any]] = []
+        for row in rows:
+            states_value = row.get("states")
+            if isinstance(states_value, str):
+                try:
+                    parsed_states = json.loads(states_value)
+                    states_value = parsed_states if isinstance(parsed_states, list) else None
+                except json.JSONDecodeError:
+                    states_value = [states_value]
+            courts.append(
+                {
+                    **row,
+                    "states": states_value,
+                    "fetched_at_display": _format_dt(row.get("fetched_at")),
+                    "updated_at_display": _format_dt(row.get("updated_at")),
+                }
+            )
+
+        return render_template(
+            "admin_federal_courts.html",
+            active_page="federal_data_dashboard",
+            active_subnav="federal_courts",
+            courts=courts,
+            total_courts=total_courts,
+            query=q,
+            last_fetched_at_display=_format_dt(last_fetched_at),
+            last_source_updated=last_source_updated,
+        )
+
+    @app.post("/admin/federal-data-dashboard/federal-courts/sync")
+    @admin_required
+    def admin_federal_data_dashboard_federal_courts_sync():
+        require_csrf()
+        try:
+            stats = run_federal_courts_sync()
+        except (FederalCourtsSyncError, requests.RequestException):
+            app.logger.exception("Federal courts sync failed from admin UI.")
+            flash("Federal courts sync failed. Check logs for details.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_federal_courts"))
+
+        flash(
+            "Federal courts sync complete: "
+            f"{stats['inserted']} inserted, {stats['updated']} updated.",
+            "success",
+        )
+        return redirect(url_for("admin_federal_data_dashboard_federal_courts"))
+
+    @app.get("/admin/federal-data-dashboard/federal-courts/<court_id>/json")
+    @admin_required
+    def admin_federal_data_dashboard_federal_court_json(court_id: str):
+        stmt = (
+            select(
+                federal_courts.c.court_id,
+                federal_courts.c.source_last_updated,
+                federal_courts.c.raw_json,
+            )
+            .where(federal_courts.c.court_id == court_id)
+            .limit(1)
+        )
+        with engine.connect() as conn:
+            row = conn.execute(stmt).mappings().first()
+        if not row:
+            abort(404)
+        return jsonify(
+            {
+                "court_id": row["court_id"],
+                "source_last_updated": row.get("source_last_updated"),
+                "raw_json": row.get("raw_json"),
+            }
         )
 
     @app.post("/admin/federal-data-dashboard/pacer-auth")

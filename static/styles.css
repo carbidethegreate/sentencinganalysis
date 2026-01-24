@@ -898,6 +898,169 @@ button.danger {
   text-align: center;
 }
 
+.federal-courts-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.federal-courts-shell__header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.federal-courts-shell__summary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.federal-courts-shell__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+}
+
+.federal-courts-controls {
+  margin-top: 6px;
+}
+
+.federal-courts-controls__actions {
+  margin-top: 10px;
+}
+
+.federal-courts-sync-form {
+  margin-top: 4px;
+}
+
+.federal-courts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.federal-court-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 240px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.05);
+}
+
+.federal-court-card__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.federal-court-card__title {
+  margin: 0 0 6px;
+}
+
+.federal-court-card__subtitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.federal-court-card__id {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.federal-court-card__badges {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.federal-court-card__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 0;
+}
+
+.federal-court-card__meta dt {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.federal-court-card__meta dd {
+  margin: 4px 0 0;
+  font-weight: 600;
+}
+
+.federal-court-card__states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.federal-court-card__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.federal-court-card__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.federal-court-card__timestamps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+}
+
+.federal-court-card__details {
+  border-top: 1px dashed rgba(15, 23, 42, 0.12);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.federal-court-card__details-status {
+  color: var(--muted);
+}
+
+.federal-court-card__details-json {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
 .pcl-pagination {
   margin-top: 16px;
   display: flex;

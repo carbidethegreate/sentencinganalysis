@@ -1,6 +1,7 @@
 Flask==3.0.0
 SQLAlchemy==2.0.25
 gunicorn==21.2.0
+requests==2.32.3
 
 # Needed for PostgreSQL when using InternalDatabaseURL / ExternalDatabaseURL
 psycopg[binary]
