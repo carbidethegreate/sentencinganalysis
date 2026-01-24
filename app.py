@@ -78,6 +78,13 @@ from sentencing_models import (
     VALID_VARIANCE_TYPES,
     build_sentencing_tables,
 )
+from pacer_explore_schemas import (
+    build_case_search_payload,
+    build_party_search_payload,
+    collect_ui_inputs,
+    validate_pcl_payload,
+    validate_ui_inputs,
+)
 from pcl_queries import get_case_detail, list_cases, parse_filters
 from sentencing_queries import list_sentencing_events_by_judge, parse_sentencing_filters
 from federal_courts_sync import (
@@ -1239,33 +1246,6 @@ def create_app() -> Flask:
             return len(value) > 0
         return True
 
-    def _build_pcl_case_search_body(case_values: Dict[str, Any]) -> Dict[str, Any]:
-        """Build an allowlisted PCL payload; immediate case searches do not accept pageSize."""
-        body: Dict[str, Any] = {
-            "courtId": [case_values["court_id"]],
-            "dateFiledFrom": case_values["date_filed_from"],
-            "dateFiledTo": case_values["date_filed_to"],
-        }
-        case_types = [value for value in case_values.get("case_types", []) if value]
-        if case_types:
-            body["caseType"] = case_types
-        return body
-
-    def _build_pcl_party_search_body(
-        party_values: Dict[str, Any],
-        date_from: Optional[datetime.date],
-        date_to: Optional[datetime.date],
-    ) -> Dict[str, Any]:
-        body: Dict[str, Any] = {"lastNamePrefix": party_values["last_name_prefix"]}
-        if party_values.get("first_name"):
-            body["firstName"] = party_values["first_name"]
-        if party_values.get("court_id"):
-            body["courtId"] = [party_values["court_id"]]
-        if date_from and date_to:
-            body["dateFiledFrom"] = party_values["date_filed_from"]
-            body["dateFiledTo"] = party_values["date_filed_to"]
-        return body
-
     def _observed_fields(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         counts: Dict[str, int] = {}
         for record in records:
@@ -1320,9 +1300,11 @@ def create_app() -> Flask:
         last_name_prefix: Optional[str],
         first_name: Optional[str],
         max_records: int,
+        unexpected_input_keys: Sequence[str],
         pages_requested: int,
         pages_fetched: int,
         request_body: Dict[str, Any],
+        request_urls: Sequence[str],
         status_codes: Sequence[int],
         records: Sequence[Dict[str, Any]],
         page_infos: Sequence[Dict[str, Any]],
@@ -1349,8 +1331,10 @@ def create_app() -> Flask:
                 "page_size": PCL_PAGE_SIZE,
                 "pages_requested": pages_requested,
                 "pages_fetched": pages_fetched,
+                "unexpected_input_keys": list(unexpected_input_keys),
             },
             "request_body": request_body,
+            "request_urls": list(request_urls),
             "status_codes": list(status_codes),
             "page_info": list(page_infos),
             "truncated_notice": truncated_notice,
@@ -3188,6 +3172,16 @@ def create_app() -> Flask:
         if mode not in {"cases", "parties"}:
             mode = "cases"
 
+        ui_inputs = collect_ui_inputs(
+            request.form.to_dict(flat=False),
+            multi_keys={"case_types"},
+        )
+        unexpected_input_keys = validate_ui_inputs(mode, ui_inputs)
+        if unexpected_input_keys:
+            app.logger.info(
+                "PACER explore unexpected input keys: %s", ", ".join(unexpected_input_keys)
+            )
+
         case_defaults = {
             "date_filed_from": "",
             "date_filed_to": "",
@@ -3208,23 +3202,23 @@ def create_app() -> Flask:
         party_values = None
         if mode == "cases":
             case_values = {
-                "court_id": (request.form.get("court_id") or "").strip(),
-                "date_filed_from": (request.form.get("date_filed_from") or "").strip(),
-                "date_filed_to": (request.form.get("date_filed_to") or "").strip(),
-                "max_records": (request.form.get("max_records") or "").strip(),
-                "case_types": request.form.getlist("case_types"),
+                "court_id": ui_inputs.get("court_id", ""),
+                "date_filed_from": ui_inputs.get("date_filed_from", ""),
+                "date_filed_to": ui_inputs.get("date_filed_to", ""),
+                "max_records": ui_inputs.get("max_records", ""),
+                "case_types": ui_inputs.get("case_types") or [],
             }
             max_records, max_records_warning = _clamp_max_records(
                 case_values["max_records"]
             )
         else:
             party_values = {
-                "last_name_prefix": (request.form.get("last_name_prefix") or "").strip(),
-                "first_name": (request.form.get("first_name") or "").strip(),
-                "date_filed_from": (request.form.get("date_filed_from") or "").strip(),
-                "date_filed_to": (request.form.get("date_filed_to") or "").strip(),
-                "court_id": (request.form.get("court_id") or "").strip(),
-                "max_records": (request.form.get("max_records") or "").strip(),
+                "last_name_prefix": ui_inputs.get("last_name_prefix", ""),
+                "first_name": ui_inputs.get("first_name", ""),
+                "date_filed_from": ui_inputs.get("date_filed_from", ""),
+                "date_filed_to": ui_inputs.get("date_filed_to", ""),
+                "court_id": ui_inputs.get("court_id", ""),
+                "max_records": ui_inputs.get("max_records", ""),
             }
             max_records, max_records_warning = _clamp_max_records(
                 party_values["max_records"]
@@ -3257,6 +3251,7 @@ def create_app() -> Flask:
         pages_requested = 0
         pages_to_fetch = 0
         truncated_notice = None
+        request_urls: List[str] = []
         date_from: Optional[datetime.date] = None
         date_to: Optional[datetime.date] = None
 
@@ -3297,9 +3292,11 @@ def create_app() -> Flask:
                 last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
+                unexpected_input_keys=unexpected_input_keys,
                 pages_requested=0,
                 pages_fetched=0,
                 request_body={},
+                request_urls=request_urls,
                 status_codes=[],
                 records=[],
                 page_infos=[],
@@ -3390,9 +3387,41 @@ def create_app() -> Flask:
             run_result["warnings"].append(truncated_notice)
 
         if mode == "cases":
-            request_body = _build_pcl_case_search_body(case_values)
+            request_body = build_case_search_payload(ui_inputs)
         else:
-            request_body = _build_pcl_party_search_body(party_values, date_from, date_to)
+            request_body = build_party_search_payload(
+                ui_inputs,
+                include_date_range=bool(date_from and date_to),
+            )
+
+        endpoint_base = (
+            f"{pcl_base_url}/cases/find"
+            if mode == "cases"
+            else f"{pcl_base_url}/parties/find"
+        )
+        request_urls = [
+            f"{endpoint_base}?page={api_page}" for api_page in range(pages_to_fetch)
+        ]
+
+        if not run_result["errors"]:
+            valid_payload, invalid_keys, missing_keys = validate_pcl_payload(
+                mode, request_body
+            )
+            if not valid_payload:
+                run_result["errors"].append(
+                    "Internal payload validation failed before contacting PCL."
+                )
+                if invalid_keys:
+                    run_result["errors"].append(
+                        f"Invalid payload keys: {', '.join(invalid_keys)}."
+                    )
+                if missing_keys:
+                    run_result["errors"].append(
+                        f"Missing required payload keys: {', '.join(missing_keys)}."
+                    )
+                run_result["errors"].append(
+                    "Next step: Copy debug bundle and open a fix request."
+                )
 
         if run_result["errors"]:
             run_result["debug_bundle"] = _build_debug_bundle(
@@ -3407,9 +3436,11 @@ def create_app() -> Flask:
                 last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
+                unexpected_input_keys=unexpected_input_keys,
                 pages_requested=pages_requested,
                 pages_fetched=0,
                 request_body=request_body,
+                request_urls=request_urls,
                 status_codes=[],
                 records=[],
                 page_infos=[],
@@ -3456,12 +3487,6 @@ def create_app() -> Flask:
                 error_summary="; ".join(run_result["errors"]),
             )
             return render_response(True)
-
-        endpoint_base = (
-            f"{pcl_base_url}/cases/find"
-            if mode == "cases"
-            else f"{pcl_base_url}/parties/find"
-        )
         status_codes: List[int] = []
         response_snippets: List[Dict[str, Any]] = []
         all_records: List[Dict[str, Any]] = []
@@ -3615,12 +3640,16 @@ def create_app() -> Flask:
                         "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
                     )
                 elif exc.status_code == 406:
-                    error_message = (
-                        "Invalid search parameter. Next step: copy the debug bundle and open a fix request."
-                    )
+                    error_message = "PCL rejected the request parameters."
                 else:
                     error_message = f"PCL request failed with status {exc.status_code}."
-                error_details = exc.message
+                if exc.status_code == 406:
+                    error_details = (
+                        f"Status {exc.status_code} · Endpoint: {endpoint_url} · "
+                        f"Response: {snippet_payload}. Next step: Copy debug bundle and open a fix request."
+                    )
+                else:
+                    error_details = exc.message
                 if mode == "cases":
                     request_summary = {
                         "courtId": request_body.get("courtId"),
@@ -3761,9 +3790,11 @@ def create_app() -> Flask:
             last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
             first_name=party_values.get("first_name") if party_values else None,
             max_records=max_records,
+            unexpected_input_keys=unexpected_input_keys,
             pages_requested=pages_requested,
             pages_fetched=pages_fetched,
             request_body=request_body,
+            request_urls=request_urls,
             status_codes=status_codes,
             records=records_limited,
             page_infos=page_infos,

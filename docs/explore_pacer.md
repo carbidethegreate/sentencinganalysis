@@ -59,7 +59,9 @@ The UI will warn when a request is truncated by safety caps.
 If you see an error:
 
 * **401**: The PACER token likely expired. Re-authorize and retry.
-* **406**: The search parameters were rejected. Copy the debug bundle and open a fix request.
+* **406**: PCL rejected the request parameters. Copy the debug bundle and open a fix request.
+* **Internal payload validation failed**: The request failed locally before contacting PCL. This means the admin
+  UI inputs did not map cleanly to the PCL allowlist. Copy the debug bundle and open a fix request.
 
 To copy the debug bundle:
 
@@ -68,6 +70,18 @@ To copy the debug bundle:
 3. Paste the bundle into your issue, fix request, or investigation notes.
 
 The debug bundle intentionally excludes secrets and tokens.
+
+## Input and payload validation
+
+Explore PACER uses a strict allowlist to prevent unexpected UI fields from reaching the PCL payloads:
+
+* **UI input validation** records any unexpected POST keys in the debug bundle under
+  `unexpected_input_keys` (without failing the run).
+* **Payload validation** ensures only allowlisted PCL keys are sent. If the payload fails validation, the
+  run stops locally with “Internal payload validation failed before contacting PCL.”
+
+When filing a fix request, include `unexpected_input_keys` from the debug bundle so engineers can
+identify which UI changes need to be mapped or ignored.
 
 ## Recent run history
 

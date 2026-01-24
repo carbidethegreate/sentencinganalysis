@@ -9,6 +9,7 @@ from sqlalchemy import insert, select
 from app import create_app
 from pacer_http import TokenExpired
 from pacer_tokens import PacerTokenRecord
+from pacer_explore_schemas import build_party_search_payload, validate_pcl_payload
 from pcl_client import PclApiError, PclJsonResponse
 
 
@@ -198,8 +199,8 @@ class AdminPacerExploreTests(unittest.TestCase):
             with patch.object(self.app.pcl_client, "immediate_case_search", side_effect=error):
                 response = self._post_run(case_types=["cr"])
             html = response.data.decode("utf-8")
-            self.assertIn("Invalid search parameter", html)
-            self.assertIn("open a fix request", html)
+            self.assertIn("PCL rejected the request parameters", html)
+            self.assertIn("Status 406", html)
             self.assertIn("Copy debug bundle", html)
             self.assertIn("bad filter", html)
             self.assertNotIn("server-side-token", html)
@@ -221,7 +222,65 @@ class AdminPacerExploreTests(unittest.TestCase):
                 select(self.explore_runs_table).order_by(self.explore_runs_table.c.id.desc())
             ).mappings().first()
         self.assertIsNotNone(run)
-        self.assertIn("Invalid search parameter", run["error_summary"])
+        self.assertIn("PCL rejected the request parameters", run["error_summary"])
+
+    def test_payload_validation_blocks_invalid_keys_before_http(self):
+        self._authorize_pacer()
+        invalid_payload = {
+            "courtId": ["akd"],
+            "dateFiledFrom": "2024-01-01",
+            "dateFiledTo": "2024-01-31",
+            "pageSize": 54,
+        }
+        with patch("app.build_case_search_payload", return_value=invalid_payload):
+            with patch.object(self.app.pcl_client, "immediate_case_search") as mock_search:
+                response = self._post_run()
+        html = response.data.decode("utf-8")
+        self.assertIn("Internal payload validation failed before contacting PCL", html)
+        self.assertIn("Invalid payload keys: pageSize.", html)
+        mock_search.assert_not_called()
+
+    def test_unexpected_ui_keys_are_recorded_in_debug_bundle(self):
+        self._authorize_pacer()
+        fake_response = PclJsonResponse(
+            status_code=200,
+            payload={"cases": [], "pageInfo": {"page": 0}},
+            raw_body=b"{}",
+        )
+        with patch.object(self.app.pcl_client, "immediate_case_search", return_value=fake_response):
+            response = self._post_run(page_size="54", someNewField="extra")
+        html = response.data.decode("utf-8")
+        self.assertIn("Run complete", html)
+        self.assertIn("unexpected_input_keys", html)
+        self.assertIn("page_size", html)
+        self.assertIn("someNewField", html)
+
+    def test_party_builder_and_validation_enforce_allowlist(self):
+        payload = build_party_search_payload(
+            {
+                "last_name_prefix": "doe",
+                "first_name": "jane",
+                "court_id": "akd",
+                "date_filed_from": "2024-01-01",
+                "date_filed_to": "2024-01-31",
+                "pageSize": "ignored",
+            },
+            include_date_range=True,
+        )
+        valid, invalid_keys, missing_keys = validate_pcl_payload("parties", payload)
+        self.assertTrue(valid)
+        self.assertEqual(invalid_keys, [])
+        self.assertEqual(missing_keys, [])
+        self.assertNotIn("pageSize", payload)
+
+        invalid_payload = build_party_search_payload(
+            {"first_name": "jane"},
+            include_date_range=False,
+        )
+        valid, invalid_keys, missing_keys = validate_pcl_payload("parties", invalid_payload)
+        self.assertFalse(valid)
+        self.assertEqual(invalid_keys, [])
+        self.assertIn("lastNamePrefix", missing_keys)
 
     def test_party_mode_renders_results_and_nested_fields(self):
         self._authorize_pacer()
