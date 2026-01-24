@@ -42,6 +42,7 @@ from sqlalchemy import (
     bindparam,
     create_engine,
     delete,
+    desc,
     func,
     inspect,
     insert,
@@ -61,6 +62,7 @@ from pacer_tokens import (
     PacerTokenStore,
     build_pacer_token_table,
 )
+from docket_enrichment import DocketEnrichmentWorker
 from pcl_batch import PclBatchPlanner, PclBatchWorker
 from pcl_client import PclClient
 from pcl_models import build_pcl_tables
@@ -2775,6 +2777,76 @@ def create_app() -> Flask:
         flash("PCL batch worker started.", "success")
         return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
 
+    def _parse_include_docket_text(value: Optional[str]) -> bool:
+        if value is None:
+            return False
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _enqueue_docket_enrichment(case_id: int, include_docket_text: bool) -> int:
+        job_table = pcl_tables["docket_enrichment_jobs"]
+        with engine.begin() as conn:
+            result = conn.execute(
+                insert(job_table).values(
+                    case_id=case_id,
+                    include_docket_text=include_docket_text,
+                    status="queued",
+                    attempts=0,
+                    last_error=None,
+                )
+            )
+        return int(result.inserted_primary_key[0])
+
+    def _load_docket_dashboard_rows(limit: int = 200) -> List[Dict[str, Any]]:
+        job_table = pcl_tables["docket_enrichment_jobs"]
+        receipt_table = pcl_tables["docket_enrichment_receipts"]
+        pcl_cases = pcl_tables["pcl_cases"]
+
+        stmt = (
+            select(
+                job_table.c.id,
+                job_table.c.case_id,
+                job_table.c.include_docket_text,
+                job_table.c.status,
+                job_table.c.attempts,
+                job_table.c.last_error,
+                job_table.c.created_at,
+                job_table.c.updated_at,
+                job_table.c.started_at,
+                job_table.c.finished_at,
+                pcl_cases.c.court_id,
+                pcl_cases.c.case_number,
+                pcl_cases.c.case_number_full,
+                pcl_cases.c.short_title,
+                pcl_cases.c.case_title,
+                pcl_cases.c.case_type,
+                func.count(receipt_table.c.id).label("receipt_count"),
+                func.sum(receipt_table.c.fee).label("total_fee"),
+                func.sum(receipt_table.c.billable_pages).label("total_billable_pages"),
+                func.max(receipt_table.c.created_at).label("last_receipt_at"),
+            )
+            .select_from(
+                job_table.join(pcl_cases, pcl_cases.c.id == job_table.c.case_id).outerjoin(
+                    receipt_table, receipt_table.c.job_id == job_table.c.id
+                )
+            )
+            .group_by(job_table.c.id, pcl_cases.c.id)
+            .order_by(desc(job_table.c.created_at), desc(job_table.c.id))
+            .limit(limit)
+        )
+
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [dict(row) for row in rows]
+
+    def _load_docket_status_counts() -> Dict[str, int]:
+        job_table = pcl_tables["docket_enrichment_jobs"]
+        stmt = select(job_table.c.status, func.count().label("count")).group_by(job_table.c.status)
+        counts: Dict[str, int] = {}
+        with engine.begin() as conn:
+            for row in conn.execute(stmt):
+                counts[str(row.status)] = int(row.count)
+        return counts
+
     @app.get("/admin/pcl/cases")
     @admin_required
     def admin_pcl_cases():
@@ -2800,6 +2872,37 @@ def create_app() -> Flask:
             available_case_types=result.available_case_types,
         )
 
+    @app.post("/admin/pcl/cases/<int:case_id>/docket-enrichment/queue")
+    @admin_required
+    def admin_pcl_case_queue_docket_enrichment(case_id: int):
+        require_csrf()
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+
+        include_docket_text = _parse_include_docket_text(request.form.get("include_docket_text"))
+        job_id = _enqueue_docket_enrichment(case_id, include_docket_text)
+
+        estimate = detail.get("docket_estimate", {}).get("by_include_docket_text", {}).get(
+            include_docket_text
+        )
+        if estimate and estimate.get("receipt_count"):
+            fee_value = estimate.get("avg_fee")
+            fee_display = (
+                f"${fee_value:.2f}" if isinstance(fee_value, (int, float)) else "unknown"
+            )
+            flash(
+                f"Queued docket enrichment job {job_id}. Estimated cost: {fee_display} based on {estimate['receipt_count']} receipts.",
+                "success",
+            )
+        else:
+            flash(
+                f"Queued docket enrichment job {job_id}. Estimated cost is unknown (no historical receipts yet).",
+                "success",
+            )
+
+        return redirect(url_for("admin_pcl_case_detail", case_id=case_id))
+
     @app.get("/admin/pcl/cases/<int:case_id>")
     @admin_required
     def admin_pcl_case_detail(case_id: int):
@@ -2812,6 +2915,41 @@ def create_app() -> Flask:
             active_subnav="pcl_cases",
             case_detail=detail,
         )
+
+    @app.get("/admin/docket-enrichment")
+    @admin_required
+    def admin_docket_enrichment_dashboard():
+        rows = _load_docket_dashboard_rows()
+        counts = _load_docket_status_counts()
+        return render_template(
+            "admin_docket_enrichment.html",
+            active_page="federal_data_dashboard",
+            active_subnav="docket_enrichment",
+            jobs=rows,
+            status_counts=counts,
+        )
+
+    @app.post("/admin/docket-enrichment/run")
+    @admin_required
+    def admin_docket_enrichment_run():
+        require_csrf()
+        max_jobs = request.form.get("max_jobs", "5").strip()
+        try:
+            max_jobs_int = max(1, min(50, int(max_jobs)))
+        except ValueError:
+            flash("Enter a valid max jobs value between 1 and 50.", "error")
+            return redirect(url_for("admin_docket_enrichment_dashboard"))
+
+        def _run_worker() -> None:
+            worker = DocketEnrichmentWorker(engine, pcl_tables, logger=app.logger)
+            worker.run_once(max_jobs=max_jobs_int)
+
+        threading.Thread(target=_run_worker, daemon=True).start()
+        flash(
+            "Docket enrichment worker started. Jobs will fail with a placeholder error until endpoints are wired.",
+            "success",
+        )
+        return redirect(url_for("admin_docket_enrichment_dashboard"))
 
     @app.get("/admin/federal-data-dashboard/expand-existing")
     @admin_required

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Dict
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -149,10 +150,62 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("receipt_json", Text, nullable=False),
     )
 
+    docket_enrichment_jobs = Table(
+        "docket_enrichment_jobs",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("case_id", Integer, ForeignKey("pcl_cases.id"), nullable=False, index=True),
+        Column(
+            "include_docket_text",
+            Boolean,
+            nullable=False,
+            server_default="0",
+        ),
+        Column("status", String(40), nullable=False, server_default="queued"),
+        Column("attempts", Integer, nullable=False, server_default="0"),
+        Column("last_error", Text, nullable=True),
+        Column("started_at", DateTime(timezone=True), nullable=True),
+        Column("finished_at", DateTime(timezone=True), nullable=True),
+        Index(
+            "ix_docket_enrichment_jobs_case_status",
+            "case_id",
+            "status",
+        ),
+    )
+
+    docket_enrichment_receipts = Table(
+        "docket_enrichment_receipts",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "job_id",
+            Integer,
+            ForeignKey("docket_enrichment_jobs.id"),
+            nullable=False,
+            index=True,
+        ),
+        Column("billable_pages", Integer, nullable=True),
+        Column("fee", Integer, nullable=True),
+        Column("description", Text, nullable=True),
+        Column("client_code", String(120), nullable=True),
+        Column("receipt_json", Text, nullable=False),
+    )
+
     return {
         "pcl_batch_requests": pcl_batch_requests,
         "pcl_batch_segments": pcl_batch_segments,
         "pcl_case_result_raw": pcl_case_result_raw,
         "pcl_cases": pcl_cases,
         "pcl_batch_receipts": pcl_batch_receipts,
+        "docket_enrichment_jobs": docket_enrichment_jobs,
+        "docket_enrichment_receipts": docket_enrichment_receipts,
     }

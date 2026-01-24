@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select
 
 
 DEFAULT_PAGE_SIZE = 25
@@ -163,9 +163,13 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
         detail = dict(row)
         raw_payloads = _load_raw_payloads(conn, tables, detail)
         receipts = _load_receipts(conn, tables, detail)
+        docket_jobs = _load_docket_jobs(conn, tables, detail)
+        docket_estimate = _estimate_docket_cost(conn, tables, detail)
 
     detail["raw_payloads"] = raw_payloads
     detail["receipts"] = receipts
+    detail["docket_jobs"] = docket_jobs
+    detail["docket_estimate"] = docket_estimate
     return detail
 
 
@@ -240,6 +244,95 @@ def _load_receipts(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, Any]]
         .limit(10)
     )
     return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+
+def _load_docket_jobs(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
+    job_table = tables["docket_enrichment_jobs"]
+    receipt_table = tables["docket_enrichment_receipts"]
+    case_id = detail.get("id")
+    if not case_id:
+        return []
+
+    stmt = (
+        select(
+            job_table.c.id,
+            job_table.c.case_id,
+            job_table.c.include_docket_text,
+            job_table.c.status,
+            job_table.c.attempts,
+            job_table.c.last_error,
+            job_table.c.created_at,
+            job_table.c.updated_at,
+            job_table.c.started_at,
+            job_table.c.finished_at,
+            func.count(receipt_table.c.id).label("receipt_count"),
+            func.max(receipt_table.c.created_at).label("last_receipt_at"),
+        )
+        .select_from(job_table.outerjoin(receipt_table, receipt_table.c.job_id == job_table.c.id))
+        .where(job_table.c.case_id == case_id)
+        .group_by(job_table.c.id)
+        .order_by(desc(job_table.c.created_at), desc(job_table.c.id))
+        .limit(25)
+    )
+    return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+
+def _estimate_docket_cost(conn, tables, detail: Dict[str, Any]) -> Dict[str, Any]:
+    job_table = tables["docket_enrichment_jobs"]
+    receipt_table = tables["docket_enrichment_receipts"]
+    pcl_cases = tables["pcl_cases"]
+
+    case_type = detail.get("case_type")
+    case_id = detail.get("id")
+
+    def _run(include_docket_text: bool, *, match_case_type: bool) -> Dict[str, Any]:
+        join_stmt = job_table.join(receipt_table, receipt_table.c.job_id == job_table.c.id)
+        where_clauses = [job_table.c.include_docket_text.is_(include_docket_text)]
+        if case_id:
+            where_clauses.append(job_table.c.case_id != case_id)
+        if match_case_type and case_type:
+            join_stmt = join_stmt.join(pcl_cases, pcl_cases.c.id == job_table.c.case_id)
+            where_clauses.append(pcl_cases.c.case_type == case_type)
+
+        stmt = (
+            select(
+                func.count(receipt_table.c.id).label("receipt_count"),
+                func.avg(receipt_table.c.fee).label("avg_fee"),
+                func.avg(receipt_table.c.billable_pages).label("avg_pages"),
+            )
+            .select_from(join_stmt)
+            .where(and_(*where_clauses))
+        )
+        row = conn.execute(stmt).mappings().one()
+        receipt_count = int(row["receipt_count"] or 0)
+        return {
+            "receipt_count": receipt_count,
+            "avg_fee": float(row["avg_fee"]) if row["avg_fee"] is not None else None,
+            "avg_billable_pages": float(row["avg_pages"]) if row["avg_pages"] is not None else None,
+            "case_type_matched": bool(match_case_type and case_type),
+        }
+
+    case_type_estimates: Dict[bool, Dict[str, Any]] = {}
+    fallback_estimates: Dict[bool, Dict[str, Any]] = {}
+    for include_docket_text in (False, True):
+        case_type_estimates[include_docket_text] = _run(
+            include_docket_text, match_case_type=True
+        )
+        fallback_estimates[include_docket_text] = _run(
+            include_docket_text, match_case_type=False
+        )
+
+    return {
+        "case_type": case_type,
+        "by_include_docket_text": {
+            include: (
+                case_type_estimates[include]
+                if case_type_estimates[include]["receipt_count"] > 0
+                else fallback_estimates[include]
+            )
+            for include in (False, True)
+        },
+    }
 
 
 def _load_distinct(conn, column) -> List[str]:

@@ -1,0 +1,95 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Docket Enrichment{% endblock %}
+
+{% block federal_content %}
+  <section class="card">
+    <div class="page-header" style="margin: 0 0 12px 0;">
+      <h2>Docket enrichment queue</h2>
+      <p class="small">Scaffolding for docket-level enrichment. Estimates appear on case detail pages; actual costs will come from receipts.</p>
+    </div>
+
+    <div class="grid two" style="margin-bottom: 16px;">
+      <article class="pcl-detail-card">
+        <h3>Status counts</h3>
+        <dl class="pcl-detail-list">
+          {% for status in ["queued", "running", "completed", "failed"] %}
+            <div>
+              <dt>{{ status|capitalize }}</dt>
+              <dd>{{ status_counts.get(status, 0) }}</dd>
+            </div>
+          {% endfor %}
+        </dl>
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Run worker</h3>
+        <p class="small">Runs one worker cycle. Until endpoints are wired, jobs will transition to failed with a placeholder error.</p>
+        <form method="post" action="{{ url_for('admin_docket_enrichment_run') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Max jobs
+            <input type="number" name="max_jobs" min="1" max="50" value="5">
+          </label>
+          <button class="primary" type="submit">Run worker</button>
+        </form>
+      </article>
+    </div>
+
+    {% if jobs %}
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Case</th>
+              <th>Court</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Include text</th>
+              <th>Attempts</th>
+              <th>Receipts</th>
+              <th>Total fee</th>
+              <th>Total pages</th>
+              <th>Last receipt</th>
+              <th>Last error</th>
+              <th>Queued</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in jobs %}
+              <tr>
+                <td class="pcl-mono">{{ job.id }}</td>
+                <td>
+                  <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=job.case_id) }}">
+                    {{ job.case_number_full or job.case_number }}
+                  </a>
+                  <div class="small">{{ job.short_title or job.case_title or "Untitled case" }}</div>
+                </td>
+                <td>{{ job.court_id }}</td>
+                <td>{{ job.case_type or "—" }}</td>
+                <td>{{ job.status }}</td>
+                <td>{{ "yes" if job.include_docket_text else "no" }}</td>
+                <td>{{ job.attempts }}</td>
+                <td>{{ job.receipt_count }}</td>
+                <td>
+                  {% if job.total_fee is not none %}
+                    ${{ '%.2f'|format(job.total_fee) }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>{{ job.total_billable_pages if job.total_billable_pages is not none else "—" }}</td>
+                <td>{{ job.last_receipt_at.isoformat() if job.last_receipt_at else "—" }}</td>
+                <td>{{ job.last_error or "—" }}</td>
+                <td>{{ job.created_at.isoformat() if job.created_at else "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="small">No docket enrichment jobs queued yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}
