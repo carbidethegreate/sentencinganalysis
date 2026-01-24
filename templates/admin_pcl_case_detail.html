@@ -51,6 +51,108 @@
   </section>
 
   <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <h3>Docket enrichment</h3>
+        <p class="small">Queue docket-level enrichment. Cost values below are estimates derived from historical receipts.</p>
+      </div>
+    </div>
+
+    <div class="grid two pcl-detail-grid">
+      <article class="pcl-detail-card">
+        <h3>Queue enrichment</h3>
+        <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case_detail.id) }}" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="checkbox-row">
+            <input type="checkbox" name="include_docket_text" value="1">
+            <span>Include docket text</span>
+          </label>
+          <button class="primary" type="submit">Queue enrichment</button>
+        </form>
+        <p class="small">This action is admin-only and does not store credentials client side.</p>
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Estimated cost (estimate)</h3>
+        {% set estimates = case_detail.docket_estimate.by_include_docket_text %}
+        {% set without_text = estimates.get(False) %}
+        {% set with_text = estimates.get(True) %}
+        <dl class="pcl-detail-list">
+          <div>
+            <dt>Without docket text</dt>
+            <dd>
+              {% if without_text and without_text.receipt_count and without_text.avg_fee is not none %}
+                ${{ '%.2f'|format(without_text.avg_fee) }} · {{ without_text.receipt_count }} receipts
+              {% else %}
+                unknown
+              {% endif %}
+            </dd>
+          </div>
+          <div>
+            <dt>With docket text</dt>
+            <dd>
+              {% if with_text and with_text.receipt_count and with_text.avg_fee is not none %}
+                ${{ '%.2f'|format(with_text.avg_fee) }} · {{ with_text.receipt_count }} receipts
+              {% else %}
+                unknown
+              {% endif %}
+            </dd>
+          </div>
+          <div>
+            <dt>Case type match</dt>
+            <dd>
+              {% if case_detail.case_type %}
+                {{ case_detail.case_type }}{% if (with_text and with_text.case_type_matched) or (without_text and without_text.case_type_matched) %} · matched history{% else %} · using broader history{% endif %}
+              {% else %}
+                Case type unavailable
+              {% endif %}
+            </dd>
+          </div>
+        </dl>
+        <p class="small">Actual costs will be recorded from receipts once docket endpoints are implemented.</p>
+      </article>
+    </div>
+
+    <article class="pcl-detail-card">
+      <h3>Docket jobs</h3>
+      {% if case_detail.docket_jobs %}
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Include text</th>
+                <th>Attempts</th>
+                <th>Receipts</th>
+                <th>Last receipt</th>
+                <th>Last error</th>
+                <th>Queued</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for job in case_detail.docket_jobs %}
+                <tr>
+                  <td class="pcl-mono">{{ job.id }}</td>
+                  <td>{{ job.status }}</td>
+                  <td>{{ "yes" if job.include_docket_text else "no" }}</td>
+                  <td>{{ job.attempts }}</td>
+                  <td>{{ job.receipt_count }}</td>
+                  <td>{{ job.last_receipt_at.isoformat() if job.last_receipt_at else "—" }}</td>
+                  <td>{{ job.last_error or "—" }}</td>
+                  <td>{{ job.created_at.isoformat() if job.created_at else "—" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="small">No docket enrichment jobs queued for this case.</p>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="card pcl-detail-shell">
     <h3>Receipts</h3>
     {% if case_detail.receipts %}
       <div class="pcl-json-list">
