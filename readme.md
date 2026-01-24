@@ -32,6 +32,20 @@ The app will try these, in order:
 - `ExternalDatabaseURL` or `External_Database_URL`
 - If none are set, it falls back to a local SQLite file.
 
+## Runtime entrypoints
+
+All runtime entrypoints call the same Flask app factory (`create_app()`), which ensures a consistent configuration path.
+
+- Local development: `python app.py` (invokes `create_app()` in `__main__`).
+- Docker (`Dockerfile`): `gunicorn --bind 0.0.0.0:${PORT:-5000} --timeout ${GUNICORN_TIMEOUT:-180} "app:create_app()"`.
+- Render (`render.yaml`): same gunicorn `app:create_app()` target as Docker.
+
+## Configuration loading order (summary)
+
+- `SECRET_KEY`: read from `SECRET_KEY`/`Secrets`/`SECRETS`, then `SECRET_KEY_PATH` file (default `.secret_key` next to `app.py`), otherwise generated and persisted (or ephemeral if the file cannot be written).
+- `PACER_AUTH_BASE_URL` and `PCL_BASE_URL`: read directly from environment variables, with defaults for QA endpoints.
+- Database URL: `DATABASE_URL` (or Render variants), then discrete `Hostname`/`Port`/`Database`/`Username`/`Password`, otherwise local SQLite via `DB_PATH` or `case_filed_rpt.sqlite`.
+
 ## Notes about the existing API
 
 The generic table APIs are still available:

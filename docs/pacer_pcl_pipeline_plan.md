@@ -37,7 +37,7 @@ Provide an implementation map for adding PACER Case Locator (PCL) batch indexing
 
 ### Render services, containers, and cron/worker entry points
 - `render.yaml` defines multiple services, including:
-  - `sentencinganalysis_python_3` (Python web, `gunicorn app:app`).
+  - `sentencinganalysis_python_3` (Python web, `gunicorn ... "app:create_app()"`).
   - Docker-based services (`CourtDataPro`, `sentencinganalysis` worker, cron) using `Dockerfile`.
   - A cron service scheduled every 5 minutes that uses the same Dockerfile.
 - `Dockerfile` runs gunicorn with `app:create_app()` by default.
