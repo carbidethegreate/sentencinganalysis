@@ -33,7 +33,7 @@ Each page request is a billable PACER search.
 
 Defaults and caps:
 
-* Page size is 54 (PACER default).
+* Page size is fixed at 54 for immediate searches; do not send `pageSize` in `/cases/find` payloads.
 * Default max records is 54 (one page).
 * Maximum pages defaults to 5.
 

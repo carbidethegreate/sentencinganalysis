@@ -1159,6 +1159,7 @@ def create_app() -> Flask:
     def _clear_pacer_session() -> None:
         pacer_token_store.clear_token()
 
+    # Immediate PCL searches always return 54 records per page; pageSize is not valid in /cases/find.
     PCL_PAGE_SIZE = 54
     PCL_EXPLORE_DEFAULT_MAX_RECORDS = 54
     PCL_EXPLORE_MAX_PAGES = max(1, int(os.environ.get("PCL_EXPLORE_MAX_PAGES", "5")))
@@ -1237,6 +1238,33 @@ def create_app() -> Flask:
         if isinstance(value, (list, dict, tuple, set)):
             return len(value) > 0
         return True
+
+    def _build_pcl_case_search_body(case_values: Dict[str, Any]) -> Dict[str, Any]:
+        """Build an allowlisted PCL payload; immediate case searches do not accept pageSize."""
+        body: Dict[str, Any] = {
+            "courtId": [case_values["court_id"]],
+            "dateFiledFrom": case_values["date_filed_from"],
+            "dateFiledTo": case_values["date_filed_to"],
+        }
+        case_types = [value for value in case_values.get("case_types", []) if value]
+        if case_types:
+            body["caseType"] = case_types
+        return body
+
+    def _build_pcl_party_search_body(
+        party_values: Dict[str, Any],
+        date_from: Optional[datetime.date],
+        date_to: Optional[datetime.date],
+    ) -> Dict[str, Any]:
+        body: Dict[str, Any] = {"lastNamePrefix": party_values["last_name_prefix"]}
+        if party_values.get("first_name"):
+            body["firstName"] = party_values["first_name"]
+        if party_values.get("court_id"):
+            body["courtId"] = [party_values["court_id"]]
+        if date_from and date_to:
+            body["dateFiledFrom"] = party_values["date_filed_from"]
+            body["dateFiledTo"] = party_values["date_filed_to"]
+        return body
 
     def _observed_fields(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         counts: Dict[str, int] = {}
@@ -3362,27 +3390,9 @@ def create_app() -> Flask:
             run_result["warnings"].append(truncated_notice)
 
         if mode == "cases":
-            request_body = {
-                "courtId": [case_values["court_id"]],
-                "dateFiledFrom": case_values["date_filed_from"],
-                "dateFiledTo": case_values["date_filed_to"],
-                "pageSize": PCL_PAGE_SIZE,
-            }
-            case_types = [value for value in case_values["case_types"] if value]
-            if case_types:
-                request_body["caseType"] = case_types
+            request_body = _build_pcl_case_search_body(case_values)
         else:
-            request_body = {
-                "lastNamePrefix": party_values["last_name_prefix"],
-                "pageSize": PCL_PAGE_SIZE,
-            }
-            if party_values["first_name"]:
-                request_body["firstName"] = party_values["first_name"]
-            if party_values["court_id"]:
-                request_body["courtId"] = [party_values["court_id"]]
-            if date_from and date_to:
-                request_body["dateFiledFrom"] = party_values["date_filed_from"]
-                request_body["dateFiledTo"] = party_values["date_filed_to"]
+            request_body = _build_pcl_party_search_body(party_values, date_from, date_to)
 
         if run_result["errors"]:
             run_result["debug_bundle"] = _build_debug_bundle(
@@ -3479,20 +3489,22 @@ def create_app() -> Flask:
         error_details: Optional[str] = None
         trace_text: Optional[str] = None
 
-        for page_num in range(1, pages_to_fetch + 1):
-            endpoint_url = f"{endpoint_base}?page={page_num}"
+        for api_page in range(pages_to_fetch):
+            display_page = api_page + 1
+            endpoint_url = f"{endpoint_base}?page={api_page}"
             started = time.perf_counter()
             try:
                 if mode == "cases":
-                    response = pcl_client.immediate_case_search(page_num, request_body)
+                    response = pcl_client.immediate_case_search(api_page, request_body)
                 else:
-                    response = pcl_client.immediate_party_search(page_num, request_body)
+                    response = pcl_client.immediate_party_search(api_page, request_body)
                 elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                 payload = response.payload
                 status_codes.append(response.status_code)
                 response_snippets.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "api_page": api_page,
                         "status_code": response.status_code,
                         "endpoint": endpoint_url,
                         "snippet": _truncate_value(payload),
@@ -3505,17 +3517,22 @@ def create_app() -> Flask:
                 all_records.extend(page_records)
                 receipt = payload.get("receipt") or payload.get("receiptData")
                 if isinstance(receipt, dict):
-                    receipts.append({"page": page_num, "receipt": receipt})
+                    receipts.append({"page": display_page, "receipt": receipt})
                 page_info = payload.get("pageInfo")
                 if isinstance(page_info, dict):
-                    page_infos.append({"page": page_num, "page_info": page_info})
+                    page_infos.append(
+                        {
+                            "human_display_page": display_page,
+                            "api_page": api_page,
+                            "page_info": page_info,
+                        }
+                    )
                 if mode == "cases":
                     request_summary = {
                         "courtId": request_body.get("courtId"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                         "caseType": request_body.get("caseType", []),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 else:
                     request_summary = {
@@ -3524,11 +3541,12 @@ def create_app() -> Flask:
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 logs.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "human_display_page": display_page,
+                        "api_page": api_page,
                         "timestamp": datetime.utcnow().isoformat(),
                         "endpoint": endpoint_url,
                         "status_code": response.status_code,
@@ -3548,7 +3566,6 @@ def create_app() -> Flask:
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                         "caseType": request_body.get("caseType", []),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 else:
                     request_summary = {
@@ -3557,11 +3574,12 @@ def create_app() -> Flask:
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 logs.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "human_display_page": display_page,
+                        "api_page": api_page,
                         "timestamp": datetime.utcnow().isoformat(),
                         "endpoint": endpoint_url,
                         "status_code": 401,
@@ -3571,7 +3589,8 @@ def create_app() -> Flask:
                 )
                 response_snippets.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "api_page": api_page,
                         "status_code": 401,
                         "endpoint": endpoint_url,
                         "snippet": {"message": error_message},
@@ -3584,7 +3603,8 @@ def create_app() -> Flask:
                 snippet_payload = _truncate_value(exc.details or {"message": exc.message})
                 response_snippets.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "api_page": api_page,
                         "status_code": exc.status_code,
                         "endpoint": endpoint_url,
                         "snippet": snippet_payload,
@@ -3607,7 +3627,6 @@ def create_app() -> Flask:
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                         "caseType": request_body.get("caseType", []),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 else:
                     request_summary = {
@@ -3616,11 +3635,12 @@ def create_app() -> Flask:
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 logs.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "human_display_page": display_page,
+                        "api_page": api_page,
                         "timestamp": datetime.utcnow().isoformat(),
                         "endpoint": endpoint_url,
                         "status_code": exc.status_code,
@@ -3641,7 +3661,6 @@ def create_app() -> Flask:
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                         "caseType": request_body.get("caseType", []),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 else:
                     request_summary = {
@@ -3650,11 +3669,12 @@ def create_app() -> Flask:
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
-                        "pageSize": request_body.get("pageSize"),
                     }
                 logs.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "human_display_page": display_page,
+                        "api_page": api_page,
                         "timestamp": datetime.utcnow().isoformat(),
                         "endpoint": endpoint_url,
                         "status_code": 0,
@@ -3664,7 +3684,8 @@ def create_app() -> Flask:
                 )
                 response_snippets.append(
                     {
-                        "page": page_num,
+                        "page": display_page,
+                        "api_page": api_page,
                         "status_code": 0,
                         "endpoint": endpoint_url,
                         "snippet": {"message": error_message},

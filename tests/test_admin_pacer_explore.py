@@ -130,6 +130,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Run complete", html)
         self.assertIn("1:24-cr-00001", html)
+        self.assertIn("Top-level field coverage", html)
         self.assertIn("caseNumber", html)
         self.assertIn("judgeLastName", html)
         self.assertIn("natureOfSuit", html)
@@ -142,6 +143,43 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["mode"], "cases")
         self.assertIsNone(runs[0]["error_summary"])
+
+    def test_case_search_payload_excludes_page_size(self):
+        self._authorize_pacer()
+        captured: dict = {}
+
+        def _fake_search(page, payload):
+            captured["payload"] = payload
+            return PclJsonResponse(
+                status_code=200,
+                payload={"cases": [], "pageInfo": {"page": 0}},
+                raw_body=b"{}",
+            )
+
+        with patch.object(self.app.pcl_client, "immediate_case_search", side_effect=_fake_search):
+            response = self._post_run()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("pageSize", captured["payload"])
+
+    def test_case_search_uses_zero_based_page_param(self):
+        self._authorize_pacer()
+        pages = []
+
+        def _fake_search(page, payload):
+            pages.append(page)
+            return PclJsonResponse(
+                status_code=200,
+                payload={"cases": [], "pageInfo": {"page": page}},
+                raw_body=b"{}",
+            )
+
+        with patch.object(self.app.pcl_client, "immediate_case_search", side_effect=_fake_search):
+            response = self._post_run()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(pages)
+        self.assertEqual(pages[0], 0)
 
     def test_post_run_handles_401_and_406_errors(self):
         self._authorize_pacer()
