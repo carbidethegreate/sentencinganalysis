@@ -20,7 +20,17 @@
         <div>
           <label for="case-types">Case types</label>
           <div id="case-types" class="small" style="display:flex; gap:12px; margin-top:4px;">
-            <label><input type="checkbox" name="case_types" value="cr" checked> Criminal (cr)</label>
+            {% for case_type in supported_case_types %}
+              <label>
+                <input
+                  type="checkbox"
+                  name="case_types"
+                  value="{{ case_type }}"
+                  {% if case_type == "cr" %}checked{% endif %}
+                >
+                {{ case_type }}
+              </label>
+            {% endfor %}
           </div>
         </div>
       </div>

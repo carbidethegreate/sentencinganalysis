@@ -70,7 +70,7 @@ from pacer_tokens import (
     build_pacer_token_table,
 )
 from docket_enrichment import DocketEnrichmentWorker
-from pcl_batch import PclBatchPlanner, PclBatchWorker
+from pcl_batch import CRIMINAL_CASE_TYPES, PclBatchPlanner, PclBatchWorker
 from pcl_client import PclApiError, PclClient, PclJsonResponse
 from pcl_models import build_pcl_tables
 from sentencing_models import (
@@ -220,6 +220,11 @@ CASE_DATA_ONE_CARD_FIELDS = [
     "party_def_num",
     "pre_judge_name",
     "ref_judge_name",
+]
+PCL_CRIMINAL_CASE_TYPES = [
+    case_type
+    for case_type in ("cr", "crim", "ncrim", "dcrim")
+    if case_type in CRIMINAL_CASE_TYPES
 ]
 
 USER_TYPES = [
@@ -4282,6 +4287,7 @@ def create_app() -> Flask:
             batch_requests=batch_rows,
             segments_by_batch=segments_by_batch,
             court_options=court_options,
+            supported_case_types=PCL_CRIMINAL_CASE_TYPES,
             csrf_token=get_csrf_token(),
             pcl_base_url=pcl_base_url,
         )
