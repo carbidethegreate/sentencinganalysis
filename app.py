@@ -54,6 +54,13 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from pacer_tokens import (
+    DatabaseTokenBackend,
+    InMemoryTokenBackend,
+    PacerTokenStore,
+    build_pacer_token_table,
+)
+
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
 CASE_STAGE1_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 CASE_STAGE1_CHUNK_SIZE = 1000
@@ -631,10 +638,19 @@ def create_app() -> Flask:
         Column("loc_date_end", Date, nullable=True),
     )
 
+    pacer_tokens = build_pacer_token_table(metadata)
+
     # Create the users/newsletter/case_stage1/case_data_one tables if they don't exist.
     try:
         metadata.create_all(
-            engine, tables=[users, newsletter_subscriptions, case_stage1, case_data_one]
+            engine,
+            tables=[
+                users,
+                newsletter_subscriptions,
+                case_stage1,
+                case_data_one,
+                pacer_tokens,
+            ],
         )
     except OperationalError as exc:
         if "already exists" in str(exc).lower():
@@ -694,7 +710,6 @@ def create_app() -> Flask:
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
-    pacer_sessions: Dict[str, Dict[str, Any]] = {}
     pacer_auth_base_url = _normalize_pacer_base_url(
         os.environ.get("PACER_AUTH_BASE_URL", "https://pacer.login.uscourts.gov")
     )
@@ -706,6 +721,18 @@ def create_app() -> Flask:
     pacer_auth_client = PacerAuthClient(
         pacer_auth_base_url, logger=app.logger, redact_flag=pacer_redact_flag
     )
+    pacer_token_store_mode = os.environ.get("PACER_TOKEN_STORE", "").strip().lower()
+    use_db_tokens = pacer_token_store_mode in {
+        "db",
+        "database",
+        "postgres",
+    } or engine.dialect.name == "postgresql"
+    if use_db_tokens:
+        pacer_token_backend = DatabaseTokenBackend(engine, pacer_tokens)
+    else:
+        pacer_token_backend = InMemoryTokenBackend()
+    pacer_token_store = PacerTokenStore(pacer_token_backend, session_accessor=lambda: session)
+    app.pacer_token_store = pacer_token_store
 
     # -----------------
     # Helpers
@@ -766,26 +793,24 @@ def create_app() -> Flask:
         return cleaned.lower() if cleaned else None
 
     def _get_pacer_session() -> Optional[Dict[str, Any]]:
-        session_key = session.get("pacer_session_key")
-        if not session_key:
+        record = pacer_token_store.get_token()
+        if not record:
             return None
-        return pacer_sessions.get(session_key)
+        return {
+            "token": record.token,
+            "authorized_at": record.obtained_at.isoformat(),
+        }
 
     def _set_pacer_session(token: str) -> None:
         session_key = session.get("pacer_session_key")
         if not session_key:
             session_key = secrets.token_urlsafe(16)
             session["pacer_session_key"] = session_key
-        pacer_sessions[session_key] = {
-            # Token is used for future PCL API requests via the X-NEXT-GEN-CSO header.
-            "token": token,
-            "authorized_at": datetime.utcnow().isoformat(),
-        }
+        pacer_token_store.initialize_session(session_key)
+        pacer_token_store.save_token(token, obtained_at=datetime.utcnow())
 
     def _clear_pacer_session() -> None:
-        session_key = session.pop("pacer_session_key", None)
-        if session_key:
-            pacer_sessions.pop(session_key, None)
+        pacer_token_store.clear_token()
 
     def _normalize_party_def_num(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -2430,11 +2455,35 @@ def create_app() -> Flask:
     def admin_federal_data_dashboard_pacer_auth():
         require_csrf()
 
-        manual_mode = request.form.get("manual_mode") == "1"
-        login_id = request.form.get("pacer_login_id", "").strip()
-        password = request.form.get("pacer_login_secret", "")
-        otp_code = request.form.get("pacer_otp_code", "").strip()
-        client_code = request.form.get("pacer_client_code", "").strip()
+        json_payload = request.get_json(silent=True) or {}
+        wants_json = request.is_json or request.accept_mimetypes["application/json"] >= request.accept_mimetypes[
+            "text/html"
+        ]
+
+        manual_mode = request.form.get("manual_mode") == "1" or str(
+            json_payload.get("manual_mode", "")
+        ).lower() in {"1", "true", "yes"}
+        login_id = (
+            json_payload.get("username")
+            or json_payload.get("loginId")
+            or json_payload.get("pacer_login_id")
+            or request.form.get("pacer_login_id", "")
+        ).strip()
+        password = (
+            json_payload.get("password")
+            or json_payload.get("pacer_login_secret")
+            or request.form.get("pacer_login_secret", "")
+        )
+        otp_code = (
+            json_payload.get("otpCode")
+            or json_payload.get("pacer_otp_code")
+            or request.form.get("pacer_otp_code", "")
+        ).strip()
+        client_code = (
+            json_payload.get("clientCode")
+            or json_payload.get("pacer_client_code")
+            or request.form.get("pacer_client_code", "")
+        ).strip()
 
         redirect_target = (
             url_for("admin_federal_data_dashboard_get_pacer_data", manual="1")
@@ -2450,20 +2499,42 @@ def create_app() -> Flask:
             else:
                 session["pacer_needs_otp"] = False
                 session["pacer_client_code_required"] = False
-                flash(
+                message = (
                     "PACER credentials are not configured. Set Render env var puser and "
-                    "secret file ppass, or use manual mode.",
-                    "error",
+                    "secret file ppass, or use manual mode."
                 )
+                if wants_json:
+                    return (
+                        jsonify(
+                            {
+                                "authorized": False,
+                                "timestamp": datetime.utcnow().isoformat(),
+                                "status": "error",
+                            }
+                        ),
+                        400,
+                    )
+                flash(message, "error")
                 return redirect(redirect_target)
 
         if login_id.strip().upper() == "CPDADMIN":
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
-            flash(
-                "Those look like CourtDataPro admin creds. Enter PACER credentials instead.",
-                "error",
+            message = (
+                "Those look like CourtDataPro admin creds. Enter PACER credentials instead."
             )
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "authorized": False,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "status": "error",
+                        }
+                    ),
+                    400,
+                )
+            flash(message, "error")
             return redirect(redirect_target)
 
         otp_code = otp_code or None
@@ -2476,6 +2547,17 @@ def create_app() -> Flask:
         except ValueError as exc:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "authorized": False,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "status": "error",
+                        }
+                    ),
+                    401,
+                )
             flash(str(exc), "error")
             return redirect(redirect_target)
 
@@ -2483,10 +2565,31 @@ def create_app() -> Flask:
             _set_pacer_session(result.token)
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
+            if wants_json:
+                return jsonify(
+                    {
+                        "authorized": True,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "status": "authorized",
+                    }
+                )
             flash("PACER authentication successful.", "success")
         else:
             session["pacer_needs_otp"] = bool(result.needs_otp)
             session["pacer_client_code_required"] = bool(result.needs_client_code)
+            status = "error"
+            if result.needs_otp:
+                status = "needs_otp"
+            elif result.needs_client_code:
+                status = "needs_client_code"
+            if wants_json:
+                return jsonify(
+                    {
+                        "authorized": False,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "status": status,
+                    }
+                )
             error_description = result.error_description or "PACER authentication failed."
             login_result = result.login_result or "unknown"
             flash(f"{error_description} (loginResult: {login_result})", "error")

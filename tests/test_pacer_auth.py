@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app import (
     PacerAuthClient,
+    PacerAuthResult,
     build_pacer_auth_payload,
     create_app,
     interpret_pacer_auth_response,
@@ -150,6 +151,113 @@ class FederalDataDashboardTests(unittest.TestCase):
                 manual_html = manual_response.data.decode("utf-8")
                 self.assertIn("name=\"pacer_login_id\"", manual_html)
                 self.assertIn("name=\"pacer_login_secret\"", manual_html)
+
+    def test_pacer_auth_json_stores_token(self):
+        app = create_app()
+        app.testing = True
+
+        result = PacerAuthResult(
+            token="next-gen-token",
+            error_description="",
+            login_result="0",
+            needs_otp=False,
+            needs_client_code=False,
+            can_proceed=True,
+        )
+
+        with patch("app.PacerAuthClient.authenticate", return_value=result):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["is_admin"] = True
+                    sess["csrf_token"] = "csrf-token"
+
+                response = client.post(
+                    "/admin/federal-data-dashboard/pacer-auth",
+                    json={
+                        "csrf_token": "csrf-token",
+                        "username": "user",
+                        "password": "pass",
+                    },
+                )
+
+                payload = response.get_json()
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(payload["authorized"])
+                self.assertEqual(payload["status"], "authorized")
+                self.assertNotIn("nextGenCSO", response.data.decode("utf-8"))
+
+                with client.session_transaction() as sess:
+                    session_key = sess.get("pacer_session_key")
+
+                record = app.pacer_token_store.get_token_for_key(session_key)
+                self.assertIsNotNone(record)
+                self.assertEqual(record.token, "next-gen-token")
+
+    def test_pacer_auth_json_needs_otp(self):
+        app = create_app()
+        app.testing = True
+
+        result = PacerAuthResult(
+            token="",
+            error_description="One-time passcode required.",
+            login_result="13",
+            needs_otp=True,
+            needs_client_code=False,
+            can_proceed=False,
+        )
+
+        with patch("app.PacerAuthClient.authenticate", return_value=result):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["is_admin"] = True
+                    sess["csrf_token"] = "csrf-token"
+
+                response = client.post(
+                    "/admin/federal-data-dashboard/pacer-auth",
+                    json={
+                        "csrf_token": "csrf-token",
+                        "username": "user",
+                        "password": "pass",
+                    },
+                )
+
+                payload = response.get_json()
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(payload["authorized"])
+                self.assertEqual(payload["status"], "needs_otp")
+
+    def test_pacer_auth_json_needs_client_code(self):
+        app = create_app()
+        app.testing = True
+
+        result = PacerAuthResult(
+            token="",
+            error_description="Required client code not entered.",
+            login_result="0",
+            needs_otp=False,
+            needs_client_code=True,
+            can_proceed=False,
+        )
+
+        with patch("app.PacerAuthClient.authenticate", return_value=result):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["is_admin"] = True
+                    sess["csrf_token"] = "csrf-token"
+
+                response = client.post(
+                    "/admin/federal-data-dashboard/pacer-auth",
+                    json={
+                        "csrf_token": "csrf-token",
+                        "username": "user",
+                        "password": "pass",
+                    },
+                )
+
+                payload = response.get_json()
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(payload["authorized"])
+                self.assertEqual(payload["status"], "needs_client_code")
 
 
 if __name__ == "__main__":

@@ -11,8 +11,8 @@ Provide an implementation map for adding PACER Case Locator (PCL) batch indexing
 ### Admin PACER routes and templates
 - Admin PACER landing flow is implemented in `app.py`:
   - `admin_federal_data_dashboard_get_pacer_data()` renders the PACER auth page and passes PACER state to the template.
-  - `admin_federal_data_dashboard_pacer_auth()` posts to the PACER auth client and stores PACER session data in memory.
-  - `admin_federal_data_dashboard_pacer_logout()` clears the in-memory PACER session.
+  - `admin_federal_data_dashboard_pacer_auth()` posts to the PACER auth client and stores PACER session data server-side.
+  - `admin_federal_data_dashboard_pacer_logout()` clears the server-side PACER session.
   - Placeholder routes exist for `pcl-batch-search` and `expand-existing`.
 - Templates are in `templates/`:
   - `admin_federal_data_get_pacer_data.html` renders the PACER auth form and the “PCL Batch Search” and “Expand Existing PCL Data” links.
@@ -23,7 +23,12 @@ Provide an implementation map for adding PACER Case Locator (PCL) batch indexing
   - `build_pacer_auth_payload()` builds the JSON payload.
   - `PacerAuthClient.authenticate()` uses `urllib.request` to POST to `/services/cso-auth` on the configured PACER auth base URL.
   - `interpret_pacer_auth_response()` interprets auth responses and MFA/client-code requirements.
-- PACER session token (`nextGenCSO`) is stored in the in-memory `pacer_sessions` dict and used for subsequent PCL API calls (comment in `_set_pacer_session()`).
+- PACER session token (`nextGenCSO`) is stored server-side via the PACER token store (session-keyed) and used for subsequent PCL API calls.
+
+### PACER token storage & shared HTTP wrapper
+- PACER tokens are stored server-side via `pacer_tokens.py` with a session-keyed token store and optional database table (`pacer_tokens`).
+- `pacer_http.py` provides a shared HTTP wrapper that injects `X-NEXT-GEN-CSO`, captures refreshed tokens, and raises `TokenExpired` on 401 responses.
+- Logging uses a lightweight redaction helper in `pacer_logging.py` to strip token-like values from log messages.
 
 ### Existing DB models and schema management
 - Database schema is defined inline in `app.py` using `sqlalchemy.Table` definitions: `users`, `newsletter_subscriptions`, `case_stage1`, and `case_data_one`.
@@ -78,7 +83,7 @@ Provide an implementation map for adding PACER Case Locator (PCL) batch indexing
 
 1. **Add structured PCL client & config**
    - Create a dedicated PCL client module (e.g., `pcl_client.py`) to wrap PCL endpoints from `PCL-API-Document_4.md`.
-   - Update `app.py` to initialize the client using existing PACER token flow (`PacerAuthClient` + `pacer_sessions`).
+   - Update `app.py` to initialize the client using existing PACER token flow (`PacerAuthClient` + PACER token store).
    - Files: `app.py`, `PCL-API-Document_4.md` (reference only), new `pcl_client.py`.
 
 2. **Add database tables for PCL jobs and receipts**
@@ -113,3 +118,6 @@ Provide an implementation map for adding PACER Case Locator (PCL) batch indexing
    - Extend `readme.md` with environment variables for PCL and operational guidance for batch jobs.
    - Add a short runbook for PACER/PCL credential handling and redaction expectations.
    - Files: `readme.md`, `docs/pacer_pcl_pipeline_plan.md` (update as needed).
+
+## Configuration additions
+- `PACER_TOKEN_STORE`: Optional. Set to `database` to persist PACER tokens in the database instead of in-memory storage (default uses in-memory storage, keyed by session).
