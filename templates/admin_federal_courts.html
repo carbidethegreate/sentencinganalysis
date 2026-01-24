@@ -1,0 +1,243 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Federal Courts{% endblock %}
+
+{% block federal_content %}
+  <section class="card federal-courts-shell">
+    <div class="federal-courts-shell__header">
+      <div>
+        <h2>Federal courts</h2>
+        <p class="small">Browse every PACER CM/ECF court with fast search and on-demand JSON details.</p>
+      </div>
+      <div class="federal-courts-shell__summary">
+        <strong>{{ total_courts }}</strong>
+        <span class="small">courts indexed</span>
+      </div>
+    </div>
+
+    <div class="federal-courts-shell__meta small">
+      <span>Source: <a href="https://pacer.uscourts.gov/file-case/court-cmecf-lookup/data.json" target="_blank" rel="noopener">PACER court lookup JSON</a></span>
+      <span>Meta last updated: {{ last_source_updated or "—" }}</span>
+      <span>Last fetched: {{ last_fetched_at_display or "—" }}</span>
+    </div>
+
+    <form method="get" class="federal-courts-controls" aria-label="Search federal courts">
+      <div class="grid two">
+        <div>
+          <label for="federal-courts-server-search">Server search</label>
+          <input
+            id="federal-courts-server-search"
+            name="q"
+            value="{{ query }}"
+            placeholder="Court ID, title, name, type, circuit, state"
+          >
+        </div>
+        <div>
+          <label for="federal-courts-client-search">Instant filter</label>
+          <input
+            id="federal-courts-client-search"
+            data-role="client-filter"
+            placeholder="Filter rendered cards instantly"
+            autocomplete="off"
+          >
+        </div>
+      </div>
+
+      <div class="actions federal-courts-controls__actions">
+        <button class="primary" type="submit">Search</button>
+        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_federal_courts') }}">Reset</a>
+      </div>
+    </form>
+
+    <form method="post" action="{{ url_for('admin_federal_data_dashboard_federal_courts_sync') }}" class="federal-courts-sync-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="secondary" type="submit">Sync from PACER</button>
+    </form>
+  </section>
+
+  <section class="federal-courts-grid" aria-live="polite">
+    {% if courts %}
+      {% for court in courts %}
+        {% set states = court.states or [] %}
+        {% set states_preview = states[:4] %}
+        {% set states_remaining = (states|length) - (states_preview|length) %}
+        {% set search_blob = (
+          (court.title or "") ~ " " ~
+          (court.court_id or "") ~ " " ~
+          (court.court_name or "") ~ " " ~
+          (court.court_type or "") ~ " " ~
+          (court.circuit or "") ~ " " ~
+          (states|join(" "))
+        )|lower %}
+        <article
+          class="card federal-court-card"
+          data-search="{{ search_blob|e }}"
+          data-court-id="{{ court.court_id }}"
+        >
+          <header class="federal-court-card__header">
+            <div>
+              <h3 class="federal-court-card__title">{{ court.title or "Untitled court" }}</h3>
+              <div class="federal-court-card__subtitle">
+                {% if court.court_name %}
+                  <span>{{ court.court_name }}</span>
+                {% endif %}
+                <span class="federal-court-card__id">{{ court.court_id }}</span>
+              </div>
+            </div>
+            <div class="federal-court-card__badges">
+              {% if court.court_type %}
+                <span class="pcl-badge" data-variant="indexed">{{ court.court_type }}</span>
+              {% endif %}
+              {% if court.circuit %}
+                <span class="pcl-badge" data-variant="stub">{{ court.circuit }}</span>
+              {% endif %}
+            </div>
+          </header>
+
+          <dl class="federal-court-card__meta">
+            <div>
+              <dt>States</dt>
+              <dd>
+                {% if states_preview %}
+                  <div class="federal-court-card__states">
+                    {% for state in states_preview %}
+                      <span class="pcl-badge" data-variant="stub">{{ state }}</span>
+                    {% endfor %}
+                    {% if states_remaining > 0 %}
+                      <span class="pcl-badge" data-variant="stub">+{{ states_remaining }} more</span>
+                    {% endif %}
+                  </div>
+                {% else %}
+                  —
+                {% endif %}
+              </dd>
+            </div>
+            <div>
+              <dt>Counties</dt>
+              <dd>{{ court.counties_count if court.counties_count is not none else "—" }}</dd>
+            </div>
+            <div>
+              <dt>Go live</dt>
+              <dd>{{ court.go_live_date or "—" }}</dd>
+            </div>
+            <div>
+              <dt>Version</dt>
+              <dd>{{ court.software_version or "—" }}</dd>
+            </div>
+          </dl>
+
+          <div class="federal-court-card__links">
+            {% if court.login_url %}
+              <a class="pill" href="{{ court.login_url }}" target="_blank" rel="noopener">Login</a>
+            {% endif %}
+            {% if court.web_url %}
+              <a class="pill" href="{{ court.web_url }}" target="_blank" rel="noopener">Website</a>
+            {% endif %}
+            {% if court.rss_url %}
+              <a class="pill" href="{{ court.rss_url }}" target="_blank" rel="noopener">RSS</a>
+            {% endif %}
+          </div>
+
+          <footer class="federal-court-card__footer">
+            <div class="small federal-court-card__timestamps">
+              <span>Meta last updated: {{ court.source_last_updated or "—" }}</span>
+              <span>Fetched: {{ court.fetched_at_display or "—" }}</span>
+            </div>
+            <button class="secondary federal-court-card__details-toggle" type="button" data-role="details-toggle" data-court-id="{{ court.court_id }}">
+              Details
+            </button>
+          </footer>
+
+          <section class="federal-court-card__details" data-role="details" hidden>
+            <div class="small federal-court-card__details-status" data-role="details-status"></div>
+            <pre class="federal-court-card__details-json" data-role="details-json"></pre>
+          </section>
+        </article>
+      {% endfor %}
+    {% else %}
+      <div class="card">
+        <p>No courts found. Try syncing from PACER or broadening your search.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <script>
+    (function () {
+      const clientFilterInput = document.querySelector('[data-role="client-filter"]');
+      const cards = Array.from(document.querySelectorAll('.federal-court-card'));
+
+      const normalize = (value) => (value || '').toString().trim().toLowerCase();
+
+      const applyClientFilter = () => {
+        const term = normalize(clientFilterInput && clientFilterInput.value);
+        cards.forEach((card) => {
+          const haystack = normalize(card.dataset.search);
+          const matches = !term || haystack.includes(term);
+          card.style.display = matches ? '' : 'none';
+        });
+      };
+
+      if (clientFilterInput) {
+        clientFilterInput.addEventListener('input', applyClientFilter);
+      }
+
+      const toggleButtons = Array.from(document.querySelectorAll('[data-role="details-toggle"]'));
+
+      const csrfToken = {{ csrf_token|tojson }};
+
+      const renderJson = (element, payload) => {
+        element.textContent = JSON.stringify(payload, null, 2);
+      };
+
+      toggleButtons.forEach((button) => {
+        button.addEventListener('click', async () => {
+          const card = button.closest('.federal-court-card');
+          if (!card) return;
+          const detailsSection = card.querySelector('[data-role="details"]');
+          const status = card.querySelector('[data-role="details-status"]');
+          const jsonPre = card.querySelector('[data-role="details-json"]');
+          if (!detailsSection || !status || !jsonPre) return;
+
+          const isOpen = !detailsSection.hasAttribute('hidden');
+          if (isOpen) {
+            detailsSection.setAttribute('hidden', 'hidden');
+            button.textContent = 'Details';
+            return;
+          }
+
+          detailsSection.removeAttribute('hidden');
+          button.textContent = 'Hide details';
+
+          if (card.dataset.detailsLoaded === '1') {
+            return;
+          }
+
+          status.textContent = 'Loading full court JSON…';
+          jsonPre.textContent = '';
+
+          try {
+            const courtId = button.dataset.courtId;
+            const response = await fetch(
+              `/admin/federal-data-dashboard/federal-courts/${encodeURIComponent(courtId)}/json`,
+              {
+                headers: {
+                  'X-CSRF-Token': csrfToken,
+                },
+              }
+            );
+            if (!response.ok) {
+              throw new Error(`Request failed with status ${response.status}`);
+            }
+            const payload = await response.json();
+            renderJson(jsonPre, payload.raw_json);
+            status.textContent = `Meta last updated: ${payload.source_last_updated || '—'}`;
+            card.dataset.detailsLoaded = '1';
+          } catch (error) {
+            status.textContent = 'Unable to load court JSON.';
+            jsonPre.textContent = error instanceof Error ? error.message : String(error);
+          }
+        });
+      });
+    })();
+  </script>
+{% endblock %}
