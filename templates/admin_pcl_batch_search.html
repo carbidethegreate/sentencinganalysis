@@ -1,0 +1,91 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block federal_content %}
+  <div class="card" style="margin-bottom: 24px;">
+    <h2>PCL Batch Search</h2>
+    <p class="small">Create and run batch searches for criminal cases. Results are downloaded and the remote report is deleted after ingestion.</p>
+    <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_batch_search_create') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid two">
+        <div>
+          <label for="court-id">Court ID</label>
+          <input id="court-id" name="court_id" placeholder="akd" required>
+        </div>
+        <div>
+          <label for="case-types">Case types</label>
+          <div id="case-types" class="small" style="display:flex; gap:12px; margin-top:4px;">
+            <label><input type="checkbox" name="case_types" value="cr" checked> Criminal (cr)</label>
+          </div>
+        </div>
+      </div>
+      <div class="grid two" style="margin-top: 12px;">
+        <div>
+          <label for="date-from">Date filed from</label>
+          <input id="date-from" name="date_filed_from" type="date" required>
+        </div>
+        <div>
+          <label for="date-to">Date filed to</label>
+          <input id="date-to" name="date_filed_to" type="date" required>
+        </div>
+      </div>
+      <div class="actions" style="margin-top: 16px;">
+        <button class="primary" type="submit">Create batch</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="margin-bottom: 24px;">
+    <h3>Run worker</h3>
+    <p class="small">Starts a single worker cycle. Use a cron or worker service for continuous runs.</p>
+    <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_batch_search_run') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="max-segments">Segments to process</label>
+      <input id="max-segments" name="max_segments" type="number" min="1" value="1">
+      <div class="actions" style="margin-top: 12px;">
+        <button class="secondary" type="submit">Start run</button>
+      </div>
+    </form>
+    <p class="small" style="margin-top: 12px;">PCL API base URL: {{ pcl_base_url }}</p>
+  </div>
+
+  <div class="card">
+    <h3>Status timeline</h3>
+    {% if batch_requests %}
+      {% for batch in batch_requests %}
+        <div style="border-top: 1px solid #e5e7eb; padding-top: 12px; margin-top: 12px;">
+          <p><strong>Batch {{ batch.id }}</strong> — {{ batch.court_id }} ({{ batch.date_filed_from }} → {{ batch.date_filed_to }})</p>
+          <p class="small">Status: {{ batch.status }} · Case types: {{ batch.case_types }}</p>
+          {% set segments = segments_by_batch.get(batch.id, []) %}
+          {% if segments %}
+            <table style="width:100%; margin-top: 8px;">
+              <thead>
+                <tr>
+                  <th align="left">Segment</th>
+                  <th align="left">Range</th>
+                  <th align="left">Status</th>
+                  <th align="left">Report</th>
+                  <th align="left">Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for segment in segments %}
+                  <tr>
+                    <td>#{{ segment.id }}</td>
+                    <td>{{ segment.date_filed_from }} → {{ segment.date_filed_to }}</td>
+                    <td>{{ segment.status }}</td>
+                    <td>{{ segment.report_id or "-" }}</td>
+                    <td class="small">{{ segment.remote_status_message or segment.error_message or "-" }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% else %}
+            <p class="small">No segments yet.</p>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="small">No batch requests created yet.</p>
+    {% endif %}
+  </div>
+{% endblock %}
