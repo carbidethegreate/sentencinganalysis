@@ -75,6 +75,24 @@ class PacerAuthTests(unittest.TestCase):
         self.assertEqual(request_payload, {"loginId": "user", "password": "pass"})
         self.assertTrue(result.can_proceed)
 
+    def test_client_redaction_error_sets_redaction_requirement(self):
+        def fake_urlopen(request, timeout=30):
+            response_payload = json.dumps(
+                {
+                    "loginResult": "1",
+                    "nextGenCSO": "",
+                    "errorDescription": "All filers must redact: Social Security or taxpayer identification numbers.",
+                }
+            ).encode("utf-8")
+            return DummyResponse(response_payload)
+
+        with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+            client = PacerAuthClient("https://qa-login.uscourts.gov")
+            result = client.authenticate("user", "pass", redact_flag=False)
+
+        self.assertFalse(result.can_proceed)
+        self.assertTrue(result.needs_redaction_ack)
+
     def test_interpret_success_response(self):
         response = interpret_pacer_auth_response(
             {"loginResult": "0", "nextGenCSO": "token", "errorDescription": ""},
@@ -93,7 +111,9 @@ class PacerAuthTests(unittest.TestCase):
             None,
         )
         self.assertFalse(response.can_proceed)
-        self.assertEqual(response.error_description, "Invalid username, password, or one-time passcode.")
+        self.assertEqual(
+            response.error_description, "Invalid username, password, or one-time passcode."
+        )
         self.assertTrue(response.needs_otp)
 
     def test_interpret_required_client_code(self):
@@ -121,17 +141,20 @@ class PacerAuthTests(unittest.TestCase):
 
 
 class FederalDataDashboardTests(unittest.TestCase):
-    def test_get_pacer_data_hides_manual_creds_when_server_creds_present(self):
-        def fake_first_env_or_secret_file(*names):
-            if names == ("puser",):
-                return "pacer-user"
-            if names == ("ppass",):
-                return "pacer-pass"
-            if names == ("SECRET_KEY", "Secrets", "SECRETS"):
-                return "test-secret"
-            return None
+    @staticmethod
+    def _fake_env_with_pacer_creds(*names):
+        if names == ("puser",):
+            return "pacer-user"
+        if names == ("ppass",):
+            return "pacer-pass"
+        if names == ("SECRET_KEY", "Secrets", "SECRETS"):
+            return "test-secret"
+        return None
 
-        with patch("app._first_env_or_secret_file", side_effect=fake_first_env_or_secret_file):
+    def test_get_pacer_data_hides_manual_creds_when_server_creds_present(self):
+        with patch(
+            "app._first_env_or_secret_file", side_effect=self._fake_env_with_pacer_creds
+        ):
             app = create_app()
             app.testing = True
 
@@ -144,6 +167,7 @@ class FederalDataDashboardTests(unittest.TestCase):
                 self.assertIn("name=\"pacer_otp_code\"", html)
                 self.assertNotIn("name=\"pacer_login_id\"", html)
                 self.assertNotIn("name=\"pacer_login_secret\"", html)
+                self.assertIn("name=\"pacer_redaction_ack\"", html)
 
                 manual_response = client.get(
                     "/admin/federal-data-dashboard/get-pacer-data?manual=1"
@@ -162,6 +186,7 @@ class FederalDataDashboardTests(unittest.TestCase):
             login_result="0",
             needs_otp=False,
             needs_client_code=False,
+            needs_redaction_ack=False,
             can_proceed=True,
         )
 
@@ -177,6 +202,7 @@ class FederalDataDashboardTests(unittest.TestCase):
                         "csrf_token": "csrf-token",
                         "username": "user",
                         "password": "pass",
+                        "pacer_redaction_ack": True,
                     },
                 )
 
@@ -203,6 +229,7 @@ class FederalDataDashboardTests(unittest.TestCase):
             login_result="13",
             needs_otp=True,
             needs_client_code=False,
+            needs_redaction_ack=False,
             can_proceed=False,
         )
 
@@ -218,6 +245,7 @@ class FederalDataDashboardTests(unittest.TestCase):
                         "csrf_token": "csrf-token",
                         "username": "user",
                         "password": "pass",
+                        "pacer_redaction_ack": True,
                     },
                 )
 
@@ -236,6 +264,7 @@ class FederalDataDashboardTests(unittest.TestCase):
             login_result="0",
             needs_otp=False,
             needs_client_code=True,
+            needs_redaction_ack=False,
             can_proceed=False,
         )
 
@@ -251,6 +280,7 @@ class FederalDataDashboardTests(unittest.TestCase):
                         "csrf_token": "csrf-token",
                         "username": "user",
                         "password": "pass",
+                        "pacer_redaction_ack": True,
                     },
                 )
 
@@ -258,6 +288,128 @@ class FederalDataDashboardTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertFalse(payload["authorized"])
                 self.assertEqual(payload["status"], "needs_client_code")
+
+    def test_pacer_auth_requires_redaction_acknowledgement(self):
+        with patch(
+            "app._first_env_or_secret_file", side_effect=self._fake_env_with_pacer_creds
+        ):
+            app = create_app()
+            app.testing = True
+
+            with patch("app.PacerAuthClient.authenticate") as auth_mock:
+                with app.test_client() as client:
+                    with client.session_transaction() as sess:
+                        sess["is_admin"] = True
+                        sess["csrf_token"] = "csrf-token"
+
+                    response = client.post(
+                        "/admin/federal-data-dashboard/pacer-auth",
+                        data={"csrf_token": "csrf-token"},
+                        headers={"Accept": "text/html"},
+                        follow_redirects=True,
+                    )
+
+                    html = response.data.decode("utf-8")
+                    self.assertIn("acknowledge the PACER redaction rules", html)
+                    self.assertIn("require this acknowledgement", html)
+                    auth_mock.assert_not_called()
+
+    def test_pacer_auth_redaction_failure_shows_guidance(self):
+        app = create_app()
+        app.testing = True
+
+        result = PacerAuthResult(
+            token="",
+            error_description="All filers must redact: Social Security or taxpayer identification numbers.",
+            login_result="1",
+            needs_otp=False,
+            needs_client_code=False,
+            needs_redaction_ack=True,
+            can_proceed=False,
+        )
+
+        with patch("app.PacerAuthClient.authenticate", return_value=result):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["is_admin"] = True
+                    sess["csrf_token"] = "csrf-token"
+
+                response = client.post(
+                    "/admin/federal-data-dashboard/pacer-auth",
+                    data={
+                        "csrf_token": "csrf-token",
+                        "pacer_login_id": "user",
+                        "pacer_login_secret": "pass",
+                        "pacer_redaction_ack": "1",
+                    },
+                    headers={"Accept": "text/html"},
+                    follow_redirects=True,
+                )
+
+                html = response.data.decode("utf-8")
+                self.assertIn("All filers must redact", html)
+                self.assertIn("acknowledge the redaction rules", html)
+
+    def test_pacer_auth_with_acknowledgement_sets_redact_flag_and_stores_token(self):
+        app = create_app()
+        app.testing = True
+
+        captured = {}
+
+        def fake_authenticate(
+            login_id, password, otp_code=None, client_code=None, redact_flag=None
+        ):
+            captured["redact_flag"] = redact_flag
+            return PacerAuthResult(
+                token="next-gen-token",
+                error_description="",
+                login_result="0",
+                needs_otp=False,
+                needs_client_code=False,
+                needs_redaction_ack=False,
+                can_proceed=True,
+            )
+
+        with patch("app.PacerAuthClient.authenticate", side_effect=fake_authenticate):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["is_admin"] = True
+                    sess["csrf_token"] = "csrf-token"
+
+                response = client.post(
+                    "/admin/federal-data-dashboard/pacer-auth",
+                    json={
+                        "csrf_token": "csrf-token",
+                        "username": "user",
+                        "password": "pass",
+                        "pacer_redaction_ack": True,
+                    },
+                )
+
+                payload = response.get_json()
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(payload["authorized"])
+                self.assertEqual(captured["redact_flag"], True)
+                self.assertNotIn("nextGenCSO", response.data.decode("utf-8"))
+
+                with client.session_transaction() as sess:
+                    session_key = sess.get("pacer_session_key")
+
+                record = app.pacer_token_store.get_token_for_key(session_key)
+                self.assertIsNotNone(record)
+                self.assertEqual(record.token, "next-gen-token")
+
+    def test_pacer_auth_logging_never_includes_next_gen_cso_value(self):
+        messages = []
+
+        class CaptureLogger:
+            def info(self, message, *args):
+                messages.append(message % args if args else message)
+
+        client = PacerAuthClient("https://qa-login.uscourts.gov", logger=CaptureLogger())
+        client._log_response(200, {"loginResult": "0", "nextGenCSO": "secret-token"})
+        combined = " ".join(messages)
+        self.assertNotIn("secret-token", combined)
 
 
 if __name__ == "__main__":
