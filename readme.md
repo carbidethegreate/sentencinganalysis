@@ -23,6 +23,7 @@ Required for production
 
 Federal data dashboard
 - `PACER_AUTH_BASE_URL`: PACER authentication base URL (use `https://qa-login.uscourts.gov` for QA or `https://pacer.login.uscourts.gov` for Production)
+- `PCL_BASE_URL`: PACER Case Locator API base URL (default `https://qa-pcl.uscourts.gov/pcl-public-api/rest`)
 
 Database
 The app will try these, in order:
@@ -42,6 +43,12 @@ For safety, the `users` table is blocked from these endpoints.
 ## Planning docs
 
 - PACER/PCL pipeline implementation plan: [`docs/pacer_pcl_pipeline_plan.md`](docs/pacer_pcl_pipeline_plan.md)
+
+## PCL batch indexing
+
+- Create batch searches from the Federal Data Dashboard → "PCL Batch Search".
+- Run the worker via the "Start run" button or by calling `PclBatchWorker.run_once(...)` from a cron/Render worker.
+- The worker downloads completed reports, ingests raw + normalized cases, and deletes the remote report after ingestion.
 
 ## Local development
 

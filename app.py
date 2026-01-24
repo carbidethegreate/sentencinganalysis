@@ -54,12 +54,16 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from pacer_http import PacerHttpClient
 from pacer_tokens import (
     DatabaseTokenBackend,
     InMemoryTokenBackend,
     PacerTokenStore,
     build_pacer_token_table,
 )
+from pcl_batch import PclBatchPlanner, PclBatchWorker
+from pcl_client import PclClient
+from pcl_models import build_pcl_tables
 
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
 CASE_STAGE1_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -639,6 +643,7 @@ def create_app() -> Flask:
     )
 
     pacer_tokens = build_pacer_token_table(metadata)
+    pcl_tables = build_pcl_tables(metadata)
 
     # Create the users/newsletter/case_stage1/case_data_one tables if they don't exist.
     try:
@@ -650,6 +655,7 @@ def create_app() -> Flask:
                 case_stage1,
                 case_data_one,
                 pacer_tokens,
+                *pcl_tables.values(),
             ],
         )
     except OperationalError as exc:
@@ -733,6 +739,14 @@ def create_app() -> Flask:
         pacer_token_backend = InMemoryTokenBackend()
     pacer_token_store = PacerTokenStore(pacer_token_backend, session_accessor=lambda: session)
     app.pacer_token_store = pacer_token_store
+    app.pcl_tables = pcl_tables
+
+    pcl_base_url = _normalize_pacer_base_url(
+        os.environ.get("PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest")
+    )
+    pcl_http_client = PacerHttpClient(pacer_token_store, logger=app.logger)
+    pcl_client = PclClient(pcl_http_client, pcl_base_url, logger=app.logger)
+    app.pcl_client = pcl_client
 
     # -----------------
     # Helpers
@@ -2644,7 +2658,82 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard/pcl-batch-search")
     @admin_required
     def admin_federal_data_dashboard_pcl_batch_search():
-        return _render_federal_data_placeholder("PCL Batch Search")
+        pcl_batch_requests = pcl_tables["pcl_batch_requests"]
+        pcl_batch_segments = pcl_tables["pcl_batch_segments"]
+        with engine.connect() as conn:
+            batch_rows = (
+                conn.execute(select(pcl_batch_requests).order_by(pcl_batch_requests.c.id.desc()))
+                .mappings()
+                .all()
+            )
+            segment_rows = (
+                conn.execute(select(pcl_batch_segments).order_by(pcl_batch_segments.c.id.asc()))
+                .mappings()
+                .all()
+            )
+        segments_by_batch: Dict[int, List[Dict[str, Any]]] = {}
+        for row in segment_rows:
+            segments_by_batch.setdefault(row["batch_request_id"], []).append(row)
+        return render_template(
+            "admin_pcl_batch_search.html",
+            active_page="federal_data_dashboard",
+            active_subnav="get_pacer_data",
+            batch_requests=batch_rows,
+            segments_by_batch=segments_by_batch,
+            csrf_token=get_csrf_token(),
+            pcl_base_url=pcl_base_url,
+        )
+
+    @app.post("/admin/federal-data-dashboard/pcl-batch-search/create")
+    @admin_required
+    def admin_federal_data_dashboard_pcl_batch_search_create():
+        require_csrf()
+        court_id = (request.form.get("court_id") or "").strip()
+        date_from = (request.form.get("date_filed_from") or "").strip()
+        date_to = (request.form.get("date_filed_to") or "").strip()
+        case_types = request.form.getlist("case_types")
+        if not court_id or not date_from or not date_to:
+            flash("Court ID and date range are required.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
+        try:
+            date_filed_from = datetime.fromisoformat(date_from).date()
+            date_filed_to = datetime.fromisoformat(date_to).date()
+        except ValueError:
+            flash("Invalid date format. Use YYYY-MM-DD.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
+        planner = PclBatchPlanner(engine, pcl_tables)
+        batch_id = planner.create_batch_request(
+            court_id=court_id,
+            date_filed_from=date_filed_from,
+            date_filed_to=date_filed_to,
+            case_types=case_types or ["cr"],
+        )
+        flash(f"PCL batch request {batch_id} created.", "success")
+        return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
+
+    @app.post("/admin/federal-data-dashboard/pcl-batch-search/run")
+    @admin_required
+    def admin_federal_data_dashboard_pcl_batch_search_run():
+        require_csrf()
+        max_segments = request.form.get("max_segments", "1").strip()
+        try:
+            max_segments_int = max(1, int(max_segments))
+        except ValueError:
+            max_segments_int = 1
+
+        def _run_worker() -> None:
+            worker = PclBatchWorker(
+                engine,
+                pcl_tables,
+                pcl_client,
+                logger=app.logger,
+                sleep_fn=time.sleep,
+            )
+            worker.run_once(max_segments=max_segments_int)
+
+        threading.Thread(target=_run_worker, daemon=True).start()
+        flash("PCL batch worker started.", "success")
+        return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
 
     @app.get("/admin/federal-data-dashboard/expand-existing")
     @admin_required
