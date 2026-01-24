@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -91,8 +92,11 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
             nullable=False,
         ),
         Column("report_id", String(120), nullable=True),
+        Column("court_id", String(50), nullable=True),
+        Column("case_number", Text, nullable=True),
         Column("record_hash", String(128), nullable=False, unique=True, index=True),
         Column("payload_json", Text, nullable=False),
+        Index("ix_pcl_case_result_raw_court_case", "court_id", "case_number"),
     )
 
     pcl_cases = Table(
@@ -109,11 +113,25 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         ),
         Column("court_id", String(50), nullable=False),
         Column("case_number", Text, nullable=False),
+        Column("case_number_full", Text, nullable=True),
         Column("case_type", String(20), nullable=True),
         Column("date_filed", Date, nullable=True),
+        Column("date_closed", Date, nullable=True),
         Column("short_title", Text, nullable=True),
+        Column("case_title", Text, nullable=True),
+        Column("judge_last_name", String(80), nullable=True),
+        Column("record_hash", String(128), nullable=True),
+        Column(
+            "last_segment_id",
+            Integer,
+            ForeignKey("pcl_batch_segments.id"),
+            nullable=True,
+        ),
         Column("data_json", Text, nullable=False),
         UniqueConstraint("court_id", "case_number", name="uq_pcl_cases_court_case"),
+        Index("ix_pcl_cases_court_date", "court_id", "date_filed"),
+        Index("ix_pcl_cases_case_type", "case_type"),
+        Index("ix_pcl_cases_judge_last_name", "judge_last_name"),
     )
 
     pcl_batch_receipts = Table(

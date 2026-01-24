@@ -91,6 +91,13 @@ class PclBatchWorkerTests(unittest.TestCase):
         self.assertEqual(segments[0]["status"], "completed")
         self.assertIn(("delete", "r1"), client.calls)
 
+        case = cases[0]
+        raw_row = raw[0]
+        self.assertEqual(case["case_number_full"], "1:24-cr-00001")
+        self.assertEqual(case["last_segment_id"], segments[0]["id"])
+        self.assertEqual(raw_row["court_id"], "akd")
+        self.assertEqual(raw_row["case_number"], "1:24-cr-00001")
+
     def test_token_expired_marks_failed(self):
         planner = PclBatchPlanner(self.engine, self.tables)
         planner.create_batch_request(

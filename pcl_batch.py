@@ -175,7 +175,7 @@ class PclBatchWorker:
                 .mappings()
                 .all()
             )
-            segments.extend(rows)
+            segments.extend(dict(row) for row in rows)
         return segments
 
     def _process_segment(self, segment: Dict[str, Any]) -> None:
@@ -272,12 +272,21 @@ class PclBatchWorker:
         records = _extract_case_records(payload)
         with self._engine.begin() as conn:
             for record in records:
-                record_hash = _record_hash(record)
-                raw_payload = json.dumps(record, sort_keys=True)
-                self._insert_raw_record(conn, segment, report_id, record_hash, raw_payload)
                 normalized = _normalize_case_record(record, segment["court_id"])
-                if normalized:
-                    self._upsert_case(conn, normalized)
+                if not normalized:
+                    continue
+                normalized["last_segment_id"] = segment["id"]
+                record_hash = normalized["record_hash"]
+                raw_payload = json.dumps(record, sort_keys=True)
+                self._insert_raw_record(
+                    conn,
+                    segment,
+                    report_id,
+                    record_hash,
+                    raw_payload,
+                    normalized,
+                )
+                self._upsert_case(conn, normalized)
 
         delete_error = None
         try:
@@ -302,11 +311,14 @@ class PclBatchWorker:
         report_id: str,
         record_hash: str,
         payload_json: str,
+        normalized: Dict[str, Any],
     ) -> None:
         raw_table = self._tables["pcl_case_result_raw"]
         insert_stmt = insert(raw_table).values(
             segment_id=segment["id"],
             report_id=report_id,
+            court_id=normalized.get("court_id"),
+            case_number=normalized.get("case_number"),
             record_hash=record_hash,
             payload_json=payload_json,
         )
@@ -327,9 +339,15 @@ class PclBatchWorker:
             stmt = stmt.on_conflict_do_update(
                 index_elements=["court_id", "case_number"],
                 set_={
+                    "case_number_full": stmt.excluded.case_number_full,
                     "case_type": stmt.excluded.case_type,
                     "date_filed": stmt.excluded.date_filed,
+                    "date_closed": stmt.excluded.date_closed,
                     "short_title": stmt.excluded.short_title,
+                    "case_title": stmt.excluded.case_title,
+                    "judge_last_name": stmt.excluded.judge_last_name,
+                    "record_hash": stmt.excluded.record_hash,
+                    "last_segment_id": stmt.excluded.last_segment_id,
                     "data_json": stmt.excluded.data_json,
                     "updated_at": datetime.utcnow(),
                 },
@@ -347,9 +365,15 @@ class PclBatchWorker:
                 update(case_table)
                 .where(case_table.c.id == existing.id)
                 .values(
+                    case_number_full=normalized["case_number_full"],
                     case_type=normalized["case_type"],
                     date_filed=normalized["date_filed"],
+                    date_closed=normalized["date_closed"],
                     short_title=normalized["short_title"],
+                    case_title=normalized["case_title"],
+                    judge_last_name=normalized["judge_last_name"],
+                    record_hash=normalized["record_hash"],
+                    last_segment_id=normalized["last_segment_id"],
                     data_json=normalized["data_json"],
                     updated_at=datetime.utcnow(),
                 )
@@ -456,26 +480,79 @@ def _normalize_case_record(record: Dict[str, Any], default_court_id: str) -> Dic
     if not case_number:
         return {}
     court_id = record.get("courtId") or record.get("court_id") or default_court_id
-    date_filed = record.get("dateFiled") or record.get("date_filed")
-    if isinstance(date_filed, str):
-        try:
-            date_filed = datetime.fromisoformat(date_filed).date()
-        except ValueError:
-            date_filed = None
+    date_filed = _parse_date(record.get("dateFiled") or record.get("date_filed"))
+    date_closed = _parse_date(record.get("dateClosed") or record.get("date_closed"))
     case_type = record.get("caseType") or record.get("case_type")
     short_title = (
         record.get("shortTitle")
         or record.get("short_title")
         or record.get("cs_short_title")
     )
+    case_title = (
+        record.get("caseTitle")
+        or record.get("case_title")
+        or record.get("title")
+        or record.get("cs_case_title")
+    )
+    case_number_full = (
+        record.get("caseNumberFull")
+        or record.get("case_number_full")
+        or record.get("fullCaseNumber")
+        or case_number
+    )
+    judge_last_name = _normalize_judge_last_name(
+        record.get("judgeLastName")
+        or record.get("judge_last_name")
+        or record.get("assignedTo")
+        or record.get("assigned_to")
+    )
+    record_hash = _record_hash(record)
     return {
         "court_id": court_id,
         "case_number": str(case_number),
+        "case_number_full": str(case_number_full),
         "case_type": case_type,
         "date_filed": date_filed,
+        "date_closed": date_closed,
         "short_title": short_title,
+        "case_title": case_title,
+        "judge_last_name": judge_last_name,
+        "record_hash": record_hash,
+        "last_segment_id": None,
         "data_json": json.dumps(record, sort_keys=True, default=str),
     }
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value).date()
+        except ValueError:
+            try:
+                return datetime.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                return None
+    return None
+
+
+def _normalize_judge_last_name(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    tokens = [token for token in re.split(r"\s+", cleaned) if token]
+    if not tokens:
+        return None
+    last = tokens[-1].strip(",.")
+    return last or None
 
 
 def _looks_like_too_many_results(message: str) -> bool:

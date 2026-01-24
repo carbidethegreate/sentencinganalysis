@@ -1,0 +1,90 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | PCL Case {{ case_detail.case_number_full or case_detail.case_number }}{% endblock %}
+
+{% block federal_content %}
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <p class="pcl-case-card__number">{{ case_detail.case_number_full or case_detail.case_number }}</p>
+        <h2>{{ case_detail.short_title or case_detail.case_title or "Untitled case" }}</h2>
+        <p class="small">Court {{ case_detail.court_id }}{% if case_detail.case_type %} • Type {{ case_detail.case_type }}{% endif %}</p>
+      </div>
+      <div class="actions">
+        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Back to cases</a>
+      </div>
+    </div>
+
+    <div class="grid two pcl-detail-grid">
+      <article class="pcl-detail-card">
+        <h3>Normalized fields</h3>
+        <dl class="pcl-detail-list">
+          <div><dt>Case number</dt><dd>{{ case_detail.case_number }}</dd></div>
+          <div><dt>Case number full</dt><dd>{{ case_detail.case_number_full or "—" }}</dd></div>
+          <div><dt>Date filed</dt><dd>{{ case_detail.date_filed.isoformat() if case_detail.date_filed else "—" }}</dd></div>
+          <div><dt>Date closed</dt><dd>{{ case_detail.date_closed.isoformat() if case_detail.date_closed else "—" }}</dd></div>
+          <div><dt>Judge last name</dt><dd>{{ case_detail.judge_last_name or "—" }}</dd></div>
+          <div><dt>Record hash</dt><dd class="pcl-mono">{{ case_detail.record_hash or "—" }}</dd></div>
+          <div><dt>Last updated</dt><dd>{{ case_detail.updated_at.isoformat() if case_detail.updated_at else "—" }}</dd></div>
+        </dl>
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Batch segment provenance</h3>
+        <dl class="pcl-detail-list">
+          <div><dt>Segment ID</dt><dd>{{ case_detail.last_segment_id or "—" }}</dd></div>
+          <div><dt>Status</dt><dd>{{ case_detail.segment_status or "—" }}</dd></div>
+          <div><dt>Date window</dt><dd>
+            {% if case_detail.segment_date_from or case_detail.segment_date_to %}
+              {{ case_detail.segment_date_from.isoformat() if case_detail.segment_date_from else "?" }} → {{ case_detail.segment_date_to.isoformat() if case_detail.segment_date_to else "?" }}
+            {% else %}
+              —
+            {% endif %}
+          </dd></div>
+          <div><dt>Report ID</dt><dd class="pcl-mono">{{ case_detail.segment_report_id or "—" }}</dd></div>
+          <div><dt>Remote status</dt><dd>{{ case_detail.segment_remote_status or "—" }}</dd></div>
+          <div><dt>Remote message</dt><dd>{{ case_detail.segment_remote_status_message or "—" }}</dd></div>
+          <div><dt>Completed at</dt><dd>{{ case_detail.segment_completed_at.isoformat() if case_detail.segment_completed_at else "—" }}</dd></div>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <section class="card pcl-detail-shell">
+    <h3>Receipts</h3>
+    {% if case_detail.receipts %}
+      <div class="pcl-json-list">
+        {% for receipt in case_detail.receipts %}
+          <article class="pcl-json-item">
+            <header>
+              <strong>Receipt {{ receipt.id }}</strong>
+              <span class="small">{{ receipt.created_at.isoformat() if receipt.created_at else "—" }}</span>
+            </header>
+            <pre>{{ receipt.receipt_json }}</pre>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="small">No receipts stored for this segment yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="card pcl-detail-shell">
+    <h3>Raw payloads</h3>
+    {% if case_detail.raw_payloads %}
+      <div class="pcl-json-list">
+        {% for payload in case_detail.raw_payloads %}
+          <article class="pcl-json-item">
+            <header>
+              <strong>Raw record {{ payload.id }}</strong>
+              <span class="small">Segment {{ payload.segment_id }} • {{ payload.created_at.isoformat() if payload.created_at else "—" }}</span>
+            </header>
+            <pre>{{ payload.payload_json }}</pre>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="small">No raw payloads stored for this case.</p>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -1,0 +1,137 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Indexed PCL Cases{% endblock %}
+
+{% block federal_content %}
+  <section class="card pcl-cases-shell">
+    <div class="pcl-cases-header">
+      <div>
+        <h2>Indexed PCL cases</h2>
+        <p class="small">Fast search over normalized case metadata with indexed filters.</p>
+      </div>
+      <div class="pcl-cases-summary">
+        <strong>{{ pagination.total }}</strong>
+        <span class="small">total cases</span>
+      </div>
+    </div>
+
+    <form method="get" class="pcl-filter-form" aria-label="Filter indexed cases">
+      <div class="grid two">
+        <div>
+          <label for="pcl-court">Court ID</label>
+          <select id="pcl-court" name="court_id">
+            <option value="">All courts</option>
+            {% for court in available_courts %}
+              <option value="{{ court }}" {% if filters.court_id == court %}selected{% endif %}>{{ court }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="pcl-case-type">Case type</label>
+          <select id="pcl-case-type" name="case_type">
+            <option value="">All case types</option>
+            {% for case_type in available_case_types %}
+              <option value="{{ case_type }}" {% if filters.case_type == case_type %}selected{% endif %}>{{ case_type }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="pcl-date-from">Date filed from</label>
+          <input id="pcl-date-from" type="date" name="date_filed_from" value="{{ filters.date_filed_from.isoformat() if filters.date_filed_from else '' }}">
+        </div>
+        <div>
+          <label for="pcl-date-to">Date filed to</label>
+          <input id="pcl-date-to" type="date" name="date_filed_to" value="{{ filters.date_filed_to.isoformat() if filters.date_filed_to else '' }}">
+        </div>
+        <div>
+          <label for="pcl-judge">Judge last name</label>
+          <input id="pcl-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., Jackson">
+        </div>
+        <div>
+          <label for="pcl-search">Search</label>
+          <input id="pcl-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
+        </div>
+      </div>
+
+      <fieldset class="pcl-flag-fieldset">
+        <legend>Status flags</legend>
+        <label class="pcl-flag-option">
+          <input type="checkbox" name="indexed_only" value="1" {% if filters.indexed_only %}checked{% endif %}>
+          Indexed only
+        </label>
+        <label class="pcl-flag-option">
+          <input type="checkbox" name="enriched_only" value="1" {% if filters.enriched_only %}checked{% endif %}>
+          Enriched
+        </label>
+        <label class="pcl-flag-option">
+          <input type="checkbox" name="sentencing_only" value="1" {% if filters.sentencing_only %}checked{% endif %}>
+          Sentencing facts present
+        </label>
+      </fieldset>
+
+      <div class="actions pcl-filter-actions">
+        <button class="primary" type="submit">Apply filters</button>
+        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Reset</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="pcl-card-grid" aria-live="polite">
+    {% if cases %}
+      {% for case in cases %}
+        <article class="card pcl-case-card">
+          <header class="pcl-case-card__header">
+            <div>
+              <p class="pcl-case-card__number">{{ case.case_number_full or case.case_number }}</p>
+              <h3 class="pcl-case-card__title">{{ case.short_title or case.case_title or "Untitled case" }}</h3>
+            </div>
+            <div class="pcl-case-card__badges">
+              <span class="pcl-badge" data-variant="indexed">Indexed</span>
+              <span class="pcl-badge" data-variant="stub">Enriched</span>
+              <span class="pcl-badge" data-variant="stub">Sentencing</span>
+            </div>
+          </header>
+
+          <dl class="pcl-case-meta">
+            <div>
+              <dt>Date filed</dt>
+              <dd>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</dd>
+            </div>
+            <div>
+              <dt>Date closed</dt>
+              <dd>{{ case.date_closed.isoformat() if case.date_closed else "—" }}</dd>
+            </div>
+            <div>
+              <dt>Court</dt>
+              <dd>{{ case.court_id }}</dd>
+            </div>
+            <div>
+              <dt>Judge</dt>
+              <dd>{{ case.judge_last_name or "—" }}</dd>
+            </div>
+          </dl>
+
+          <footer class="pcl-case-card__footer">
+            <span class="small">Segment status: {{ case.segment_status or "unknown" }}</span>
+            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View details</a>
+          </footer>
+        </article>
+      {% endfor %}
+    {% else %}
+      <div class="card pcl-empty-state">
+        <h3>No cases match those filters</h3>
+        <p class="small">Try widening the date range or clearing a filter.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <nav class="pcl-pagination" aria-label="Indexed case pagination">
+    {% set total_pages = pagination.total_pages %}
+    {% set current_page = pagination.page %}
+    <span class="small">Page {{ current_page }} of {{ total_pages }}</span>
+    <div class="pcl-pagination__actions">
+      <a class="pill {% if current_page <= 1 %}disabled{% endif %}" href="{{ page_url(current_page - 1) if current_page > 1 else '#' }}" aria-disabled="{{ 'true' if current_page <= 1 else 'false' }}">Previous</a>
+      <a class="pill {% if current_page >= total_pages %}disabled{% endif %}" href="{{ page_url(current_page + 1) if current_page < total_pages else '#' }}" aria-disabled="{{ 'true' if current_page >= total_pages else 'false' }}">Next</a>
+    </div>
+  </nav>
+{% endblock %}

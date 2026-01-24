@@ -64,6 +64,7 @@ from pacer_tokens import (
 from pcl_batch import PclBatchPlanner, PclBatchWorker
 from pcl_client import PclClient
 from pcl_models import build_pcl_tables
+from pcl_queries import get_case_detail, list_cases, parse_filters
 
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
 CASE_STAGE1_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -713,6 +714,44 @@ def create_app() -> Flask:
         },
         label="case_data_one",
     )
+    _ensure_table_columns(
+        "pcl_cases",
+        {
+            "case_number_full": "TEXT",
+            "date_closed": "DATE",
+            "case_title": "TEXT",
+            "judge_last_name": "VARCHAR(80)",
+            "record_hash": "VARCHAR(128)",
+            "last_segment_id": "INTEGER",
+        },
+        label="pcl_cases",
+    )
+    _ensure_table_columns(
+        "pcl_case_result_raw",
+        {
+            "court_id": "VARCHAR(50)",
+            "case_number": "TEXT",
+        },
+        label="pcl_case_result_raw",
+    )
+
+    def _ensure_indexes(statements: Dict[str, str]) -> None:
+        try:
+            with engine.begin() as conn:
+                for statement in statements.values():
+                    conn.execute(sa_text(statement))
+        except Exception:
+            app.logger.exception("Unable to ensure PCL indexes.")
+
+    if engine.dialect.name == "sqlite":
+        _ensure_indexes(
+            {
+                "ix_pcl_cases_court_date": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_court_date ON pcl_cases (court_id, date_filed)",
+                "ix_pcl_cases_case_type": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_case_type ON pcl_cases (case_type)",
+                "ix_pcl_cases_judge_last_name": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_judge_last_name ON pcl_cases (judge_last_name)",
+                "ix_pcl_case_result_raw_court_case": "CREATE INDEX IF NOT EXISTS ix_pcl_case_result_raw_court_case ON pcl_case_result_raw (court_id, case_number)",
+            }
+        )
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
@@ -740,6 +779,7 @@ def create_app() -> Flask:
     pacer_token_store = PacerTokenStore(pacer_token_backend, session_accessor=lambda: session)
     app.pacer_token_store = pacer_token_store
     app.pcl_tables = pcl_tables
+    app.engine = engine
 
     pcl_base_url = _normalize_pacer_base_url(
         os.environ.get("PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest")
@@ -2734,6 +2774,44 @@ def create_app() -> Flask:
         threading.Thread(target=_run_worker, daemon=True).start()
         flash("PCL batch worker started.", "success")
         return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
+
+    @app.get("/admin/pcl/cases")
+    @admin_required
+    def admin_pcl_cases():
+        filters, page, page_size = parse_filters(request.args.to_dict(flat=True))
+        result = list_cases(engine, pcl_tables, filters, page=page, page_size=page_size)
+
+        params = request.args.to_dict(flat=True)
+
+        def page_url(target_page: int) -> str:
+            next_params = dict(params)
+            next_params["page"] = target_page
+            return url_for("admin_pcl_cases", **next_params)
+
+        return render_template(
+            "admin_pcl_cases.html",
+            active_page="federal_data_dashboard",
+            active_subnav="pcl_cases",
+            cases=result.rows,
+            pagination=result.pagination,
+            filters=filters,
+            page_url=page_url,
+            available_courts=result.available_courts,
+            available_case_types=result.available_case_types,
+        )
+
+    @app.get("/admin/pcl/cases/<int:case_id>")
+    @admin_required
+    def admin_pcl_case_detail(case_id: int):
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+        return render_template(
+            "admin_pcl_case_detail.html",
+            active_page="federal_data_dashboard",
+            active_subnav="pcl_cases",
+            case_detail=detail,
+        )
 
     @app.get("/admin/federal-data-dashboard/expand-existing")
     @admin_required

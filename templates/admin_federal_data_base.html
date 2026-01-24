@@ -9,6 +9,7 @@
 
   <nav class="subnav" aria-label="Federal data sections">
     <a href="{{ url_for('admin_federal_data_dashboard_get_pacer_data') }}" class="{% if active_subnav == 'get_pacer_data' %}active{% endif %}">Get PACER Data</a>
+    <a href="{{ url_for('admin_pcl_cases') }}" class="{% if active_subnav == 'pcl_cases' %}active{% endif %}">Indexed Cases</a>
     <a href="{{ url_for('admin_federal_data_dashboard_case_cards') }}" class="{% if active_subnav == 'case_cards' %}active{% endif %}">Case Cards</a>
     <a href="{{ url_for('admin_federal_data_dashboard_logs') }}" class="{% if active_subnav == 'logs' %}active{% endif %}">Logs</a>
     <a href="{{ url_for('admin_federal_data_dashboard_health_checks') }}" class="{% if active_subnav == 'health_checks' %}active{% endif %}">Health Checks</a>
