@@ -27,10 +27,12 @@ class PacerHttpClient:
         token_store: PacerTokenStore,
         logger: Optional[Any] = None,
         token_cookie_name: str = "NextGenCSO",
+        expected_environment: Optional[str] = None,
     ) -> None:
         self._token_store = token_store
         self._logger = logger
         self._token_cookie_name = token_cookie_name
+        self._expected_environment = expected_environment
 
     def request(
         self,
@@ -42,7 +44,9 @@ class PacerHttpClient:
         timeout: int = 30,
         include_cookie: bool = False,
     ) -> PacerHttpResponse:
-        token_record = self._token_store.get_token()
+        token_record = self._token_store.get_token(
+            expected_environment=self._expected_environment
+        )
         if not token_record or not token_record.token:
             raise TokenExpired("PACER token missing or expired.")
 
@@ -88,4 +92,8 @@ class PacerHttpClient:
                 refreshed = value
                 break
         if refreshed:
-            self._token_store.save_token(refreshed, obtained_at=datetime.utcnow())
+            self._token_store.save_token(
+                refreshed,
+                obtained_at=datetime.utcnow(),
+                environment=self._expected_environment,
+            )

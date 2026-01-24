@@ -69,6 +69,13 @@ from pacer_tokens import (
     PacerTokenStore,
     build_pacer_token_table,
 )
+from pacer_env import (
+    build_pacer_environment_config,
+    infer_pacer_env,
+    pacer_env_billable,
+    pacer_env_host,
+    pacer_env_label,
+)
 from docket_enrichment import DocketEnrichmentWorker
 from pcl_batch import CRIMINAL_CASE_TYPES, PclBatchPlanner, PclBatchWorker
 from pcl_client import PclApiError, PclClient, PclJsonResponse
@@ -382,19 +389,16 @@ def get_configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
 
 
 def pacer_environment_label(base_url: str) -> str:
-    if "qa-login.uscourts.gov" in base_url:
-        return "QA"
-    if "pacer.login.uscourts.gov" in base_url:
-        return "Production"
-    return "Custom"
+    return pacer_env_label(infer_pacer_env(base_url))
 
 
 def pacer_environment_notice(base_url: str) -> Optional[str]:
-    if "qa-login.uscourts.gov" in base_url:
+    env = infer_pacer_env(base_url)
+    if env == "qa":
         return "QA environment selected, requires a QA PACER account."
-    if "pacer.login.uscourts.gov" in base_url:
+    if env == "prod":
         return "Production environment selected, billable searches may apply."
-    return None
+    return "Custom PACER environment configured; verify credentials and billing details."
 
 
 def _pacer_mentions_otp(error_description: str) -> bool:
@@ -810,6 +814,11 @@ def create_app() -> Flask:
         label="case_data_one",
     )
     _ensure_table_columns(
+        "pacer_tokens",
+        {"environment": "VARCHAR(20)"},
+        label="pacer_tokens",
+    )
+    _ensure_table_columns(
         "pcl_cases",
         {
             "case_id": "VARCHAR(120)",
@@ -914,6 +923,15 @@ def create_app() -> Flask:
     pacer_auth_base_url = _normalize_pacer_base_url(
         os.environ.get("PACER_AUTH_BASE_URL", "https://pacer.login.uscourts.gov")
     )
+    pacer_env_config = build_pacer_environment_config(
+        pacer_auth_base_url,
+        _normalize_pacer_base_url(
+            os.environ.get(
+                "PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest"
+            )
+        ),
+    )
+    pacer_auth_env = pacer_env_config.auth_env
     pacer_auth_client = PacerAuthClient(
         pacer_auth_base_url, logger=app.logger, redact_flag=False
     )
@@ -933,10 +951,15 @@ def create_app() -> Flask:
     app.engine = engine
     app.federal_courts_table = federal_courts
 
-    pcl_base_url = _normalize_pacer_base_url(
-        os.environ.get("PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest")
+    pcl_base_url = pacer_env_config.pcl_base_url
+    app.config["PACER_ENV_CONFIG"] = pacer_env_config.as_dict()
+    app.config["PACER_ENV_MISMATCH"] = pacer_env_config.mismatch
+    app.config["PACER_ENV_MISMATCH_REASON"] = pacer_env_config.mismatch_reason
+    pcl_http_client = PacerHttpClient(
+        pacer_token_store,
+        logger=app.logger,
+        expected_environment=pacer_env_config.pcl_env,
     )
-    pcl_http_client = PacerHttpClient(pacer_token_store, logger=app.logger)
     pcl_client = PclClient(pcl_http_client, pcl_base_url, logger=app.logger)
     app.pcl_client = pcl_client
 
@@ -1158,6 +1181,7 @@ def create_app() -> Flask:
         return {
             "token": record.token,
             "authorized_at": record.obtained_at.isoformat(),
+            "environment": record.environment,
         }
 
     def _set_pacer_session(token: str) -> None:
@@ -1166,10 +1190,35 @@ def create_app() -> Flask:
             session_key = secrets.token_urlsafe(16)
             session["pacer_session_key"] = session_key
         pacer_token_store.initialize_session(session_key)
-        pacer_token_store.save_token(token, obtained_at=datetime.utcnow())
+        pacer_token_store.save_token(
+            token, obtained_at=datetime.utcnow(), environment=pacer_auth_env
+        )
 
     def _clear_pacer_session() -> None:
         pacer_token_store.clear_token()
+
+    def _pacer_token_matches_pcl() -> bool:
+        record = pacer_token_store.get_token()
+        if not record:
+            return False
+        expected_env = pacer_env_config.pcl_env
+        if expected_env:
+            return record.environment == expected_env
+        return True
+
+    def _pacer_token_mismatch_message(record_env: Optional[str]) -> str:
+        expected_env = pacer_env_config.pcl_env
+        expected_label = pacer_env_label(expected_env)
+        record_label = pacer_env_label(record_env or "unknown")
+        if record_env:
+            return (
+                f"PACER token is scoped to {record_label} but PCL is configured for "
+                f"{expected_label}. Re-authorize in the correct environment."
+            )
+        return (
+            f"PACER token environment is unknown while PCL is configured for {expected_label}. "
+            "Re-authorize in the correct environment."
+        )
 
     # Immediate PCL searches always return 54 records per page; pageSize is not valid in /cases/find.
     PCL_PAGE_SIZE = 54
@@ -1316,6 +1365,7 @@ def create_app() -> Flask:
         truncated_notice: Optional[str],
         error_message: Optional[str],
         response_snippets: Sequence[Dict[str, Any]],
+        environment: Optional[Dict[str, Any]] = None,
     ) -> str:
         preamble_lines = [
             "courtdatapro admin debug bundle",
@@ -1346,6 +1396,7 @@ def create_app() -> Flask:
             "error_message": error_message,
             "response_snippets": list(response_snippets),
             "record_samples": [_truncate_value(record) for record in list(records)[:3]],
+            "environment": environment,
         }
         preamble = "\n".join(preamble_lines)
         return f"{preamble}\n\n{json.dumps(bundle, indent=2, sort_keys=True, default=str)}"
@@ -3105,6 +3156,13 @@ def create_app() -> Flask:
         pacer_server_creds_available = bool(
             _first_env_or_secret_file("puser") and _first_env_or_secret_file("ppass")
         )
+        env_config = app.config.get("PACER_ENV_CONFIG") or {}
+        auth_env = env_config.get("auth_env", "unknown")
+        pcl_env = env_config.get("pcl_env", "unknown")
+        billable_flag = pacer_env_billable(str(pcl_env))
+        billable_label = (
+            "Yes" if billable_flag is True else "No" if billable_flag is False else "Unknown"
+        )
         manual_mode = request.args.get("manual") == "1"
         return render_template(
             "admin_federal_data_get_pacer_data.html",
@@ -3119,6 +3177,13 @@ def create_app() -> Flask:
             pacer_base_url=pacer_auth_base_url,
             pacer_env_notice=pacer_environment_notice(pacer_auth_base_url),
             pacer_server_creds_available=pacer_server_creds_available,
+            pacer_auth_env_label=pacer_env_label(str(auth_env)),
+            pcl_env_label=pacer_env_label(str(pcl_env)),
+            pacer_auth_host=pacer_env_host(pacer_auth_base_url),
+            pcl_host=pacer_env_host(pcl_base_url),
+            pacer_env_billable_label=billable_label,
+            pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
+            pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
             manual_mode=manual_mode,
         )
 
@@ -3126,6 +3191,13 @@ def create_app() -> Flask:
     @admin_required
     def admin_pacer_explore():
         pacer_session = _get_pacer_session()
+        env_config = app.config.get("PACER_ENV_CONFIG") or {}
+        auth_env = env_config.get("auth_env", "unknown")
+        pcl_env = env_config.get("pcl_env", "unknown")
+        billable_flag = pacer_env_billable(str(pcl_env))
+        billable_label = (
+            "Yes" if billable_flag is True else "No" if billable_flag is False else "Unknown"
+        )
         mode = (request.args.get("mode") or "cases").strip().lower()
         if mode not in {"cases", "parties"}:
             mode = "cases"
@@ -3149,9 +3221,16 @@ def create_app() -> Flask:
             active_page="federal_data_dashboard",
             active_subnav="explore_pacer",
             csrf_token=get_csrf_token(),
-            pacer_authorized=bool(pacer_session),
+            pacer_authorized=_pacer_token_matches_pcl(),
             pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
             pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+            pacer_auth_env_label=pacer_env_label(str(auth_env)),
+            pcl_env_label=pacer_env_label(str(pcl_env)),
+            pacer_auth_host=pacer_env_host(pacer_auth_base_url),
+            pcl_host=pacer_env_host(pcl_base_url),
+            pacer_env_billable_label=billable_label,
+            pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
+            pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
             courts=_load_court_choices(),
             case_type_choices=PCL_CASE_TYPES,
             mode=mode,
@@ -3171,6 +3250,13 @@ def create_app() -> Flask:
     def admin_pacer_explore_run():
         require_csrf()
         pacer_session = _get_pacer_session()
+        env_config = app.config.get("PACER_ENV_CONFIG") or {}
+        auth_env = env_config.get("auth_env", "unknown")
+        pcl_env = env_config.get("pcl_env", "unknown")
+        billable_flag = pacer_env_billable(str(pcl_env))
+        billable_label = (
+            "Yes" if billable_flag is True else "No" if billable_flag is False else "Unknown"
+        )
         courts = _load_court_choices()
         court_ids = {row["court_id"] for row in courts}
         mode = (request.form.get("mode") or "cases").strip().lower()
@@ -3269,6 +3355,13 @@ def create_app() -> Flask:
                 pacer_authorized=pacer_authorized,
                 pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
                 pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+                pacer_auth_env_label=pacer_env_label(str(auth_env)),
+                pcl_env_label=pacer_env_label(str(pcl_env)),
+                pacer_auth_host=pacer_env_host(pacer_auth_base_url),
+                pcl_host=pacer_env_host(pcl_base_url),
+                pacer_env_billable_label=billable_label,
+                pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
+                pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
                 courts=courts,
                 case_type_choices=PCL_CASE_TYPES,
                 mode=mode,
@@ -3308,6 +3401,7 @@ def create_app() -> Flask:
                 truncated_notice=None,
                 error_message=run_result["errors"][0],
                 response_snippets=[],
+                environment=app.config.get("PACER_ENV_CONFIG"),
             )
             request_params = {
                 "mode": mode,
@@ -3335,6 +3429,104 @@ def create_app() -> Flask:
                         "date_filed_to": party_values["date_filed_to"],
                     }
                 )
+            _store_pacer_explore_run(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id"),
+                date_from=None,
+                date_to=None,
+                request_params=request_params,
+                pages_fetched=0,
+                receipts=[],
+                observed_fields=None,
+                error_summary=run_result["errors"][0],
+            )
+            return render_response(False)
+
+        if app.config.get("PACER_ENV_MISMATCH"):
+            mismatch_reason = app.config.get("PACER_ENV_MISMATCH_REASON") or (
+                "PACER auth and PCL environments do not match."
+            )
+            run_result["errors"].append(
+                f"PACER environments mismatch. {mismatch_reason}"
+            )
+            run_result["debug_bundle"] = _build_debug_bundle(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id", ""),
+                date_filed_from=(case_values or party_values or {}).get(
+                    "date_filed_from", ""
+                ),
+                date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                first_name=party_values.get("first_name") if party_values else None,
+                max_records=max_records,
+                unexpected_input_keys=unexpected_input_keys,
+                pages_requested=0,
+                pages_fetched=0,
+                request_body={},
+                request_urls=[],
+                status_codes=[],
+                records=[],
+                page_infos=[],
+                truncated_notice=None,
+                error_message=run_result["errors"][0],
+                response_snippets=[],
+                environment=app.config.get("PACER_ENV_CONFIG"),
+            )
+            request_params = {
+                "mode": mode,
+                "max_records": max_records,
+                "page_size": PCL_PAGE_SIZE,
+                "request_body": {},
+                "response_samples": [],
+            }
+            _store_pacer_explore_run(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id"),
+                date_from=None,
+                date_to=None,
+                request_params=request_params,
+                pages_fetched=0,
+                receipts=[],
+                observed_fields=None,
+                error_summary=run_result["errors"][0],
+            )
+            return render_response(False)
+
+        token_record = pacer_token_store.get_token()
+        if token_record and not _pacer_token_matches_pcl():
+            run_result["errors"].append(
+                _pacer_token_mismatch_message(token_record.environment)
+            )
+            run_result["debug_bundle"] = _build_debug_bundle(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id", ""),
+                date_filed_from=(case_values or party_values or {}).get(
+                    "date_filed_from", ""
+                ),
+                date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                first_name=party_values.get("first_name") if party_values else None,
+                max_records=max_records,
+                unexpected_input_keys=unexpected_input_keys,
+                pages_requested=0,
+                pages_fetched=0,
+                request_body={},
+                request_urls=[],
+                status_codes=[],
+                records=[],
+                page_infos=[],
+                truncated_notice=None,
+                error_message=run_result["errors"][0],
+                response_snippets=[],
+                environment=app.config.get("PACER_ENV_CONFIG"),
+            )
+            request_params = {
+                "mode": mode,
+                "max_records": max_records,
+                "page_size": PCL_PAGE_SIZE,
+                "request_body": {},
+                "response_samples": [],
+            }
             _store_pacer_explore_run(
                 mode=mode,
                 court_id=(case_values or party_values or {}).get("court_id"),
@@ -3452,6 +3644,7 @@ def create_app() -> Flask:
                 truncated_notice=truncated_notice,
                 error_message="; ".join(run_result["errors"]),
                 response_snippets=[],
+                environment=app.config.get("PACER_ENV_CONFIG"),
             )
             request_params = {
                 "mode": mode,
@@ -3491,7 +3684,7 @@ def create_app() -> Flask:
                 observed_fields=None,
                 error_summary="; ".join(run_result["errors"]),
             )
-            return render_response(True)
+            return render_response(_pacer_token_matches_pcl())
         status_codes: List[int] = []
         response_snippets: List[Dict[str, Any]] = []
         all_records: List[Dict[str, Any]] = []
@@ -3806,6 +3999,7 @@ def create_app() -> Flask:
             truncated_notice=truncated_notice,
             error_message="\n".join(run_result["errors"]) if run_result["errors"] else None,
             response_snippets=response_snippets,
+            environment=app.config.get("PACER_ENV_CONFIG"),
         )
         if trace_text and run_result["errors"]:
             run_result["debug_bundle"] += f"\n\ntraceback:\n{trace_text}"
@@ -3867,7 +4061,7 @@ def create_app() -> Flask:
             error_summary="\n".join(run_result["errors"]) if run_result["errors"] else None,
         )
 
-        return render_response(True)
+        return render_response(_pacer_token_matches_pcl())
 
     @app.post("/admin/pacer/explore/runs/<int:run_id>/delete")
     @admin_required
