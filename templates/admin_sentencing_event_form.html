@@ -1,0 +1,147 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Add sentencing event{% endblock %}
+
+{% block federal_content %}
+  {% set evidence_types = form_values.get('evidence_source_type', []) if form_values else [] %}
+  {% set evidence_ids = form_values.get('evidence_source_id', []) if form_values else [] %}
+  {% set evidence_refs = form_values.get('evidence_reference', []) if form_values else [] %}
+  {% if evidence_types is string %}{% set evidence_types = [evidence_types] %}{% endif %}
+  {% if evidence_ids is string %}{% set evidence_ids = [evidence_ids] %}{% endif %}
+  {% if evidence_refs is string %}{% set evidence_refs = [evidence_refs] %}{% endif %}
+
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <p class="pcl-case-card__number">{{ case_detail.case_number_full or case_detail.case_number }}</p>
+        <h2>Add sentencing event</h2>
+        <p class="small">Court {{ case_detail.court_id }}{% if case_detail.case_type %} • Type {{ case_detail.case_type }}{% endif %}</p>
+      </div>
+      <div class="actions">
+        <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case_detail.id) }}">Back to case</a>
+      </div>
+    </div>
+
+    <form method="post" action="{{ url_for('admin_sentencing_event_create', case_id=case_detail.id) }}" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="grid two pcl-detail-grid">
+        <article class="pcl-detail-card">
+          <h3>Structured fields</h3>
+          <div class="stack">
+            <label>
+              <span>Defendant identifier</span>
+              <input type="text" name="defendant_identifier" value="{{ form_values.get('defendant_identifier', '') if form_values else '' }}" placeholder="e.g., Defendant 1 / John Doe">
+            </label>
+            <label>
+              <span>Sentencing date *</span>
+              <input type="date" name="sentencing_date" value="{{ form_values.get('sentencing_date', '') if form_values else '' }}" required>
+            </label>
+            <label>
+              <span>Sentence (months) *</span>
+              <input type="number" min="0" step="1" name="sentence_months" value="{{ form_values.get('sentence_months', '') if form_values else '' }}" required>
+            </label>
+            <div class="grid two">
+              <label>
+                <span>Guideline range low</span>
+                <input type="number" min="0" step="1" name="guideline_range_low" value="{{ form_values.get('guideline_range_low', '') if form_values else '' }}">
+              </label>
+              <label>
+                <span>Guideline range high</span>
+                <input type="number" min="0" step="1" name="guideline_range_high" value="{{ form_values.get('guideline_range_high', '') if form_values else '' }}">
+              </label>
+            </div>
+            <div class="grid two">
+              <label>
+                <span>Offense level</span>
+                <input type="number" min="0" step="1" name="offense_level" value="{{ form_values.get('offense_level', '') if form_values else '' }}">
+              </label>
+              <label>
+                <span>Criminal history category</span>
+                <input type="text" name="criminal_history_category" value="{{ form_values.get('criminal_history_category', '') if form_values else '' }}" placeholder="I-VI">
+              </label>
+            </div>
+            <label>
+              <span>Variance type</span>
+              <select name="variance_type">
+                <option value="">Select</option>
+                {% for variance in variance_types %}
+                  {% set selected = form_values.get('variance_type') == variance if form_values else False %}
+                  <option value="{{ variance }}" {% if selected %}selected{% endif %}>{{ variance|capitalize }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              <span>Notes</span>
+              <textarea name="notes" rows="4" placeholder="Context, sentencing memo details, departures, etc.">{{ form_values.get('notes', '') if form_values else '' }}</textarea>
+            </label>
+          </div>
+        </article>
+
+        <article class="pcl-detail-card">
+          <h3>Sentencing judge</h3>
+          <div class="stack">
+            <label>
+              <span>Select existing judge</span>
+              <select name="judge_id">
+                <option value="">Select</option>
+                {% for judge in judge_choices %}
+                  {% set selected = form_values.get('judge_id')|int == judge.id if form_values and form_values.get('judge_id') else False %}
+                  <option value="{{ judge.id }}" {% if selected %}selected{% endif %}>
+                    {{ judge.name_full }}{% if judge.court_id %} ({{ judge.court_id }}){% endif %}
+                  </option>
+                {% endfor %}
+              </select>
+            </label>
+            <p class="small">Or add a new judge name below. Existing selection takes precedence.</p>
+            <label>
+              <span>New judge name</span>
+              <input type="text" name="judge_name" value="{{ form_values.get('judge_name', '') if form_values else '' }}" placeholder="e.g., Jane Q. Smith">
+            </label>
+            <label>
+              <span>Judge confidence (0-1)</span>
+              <input type="number" min="0" max="1" step="0.01" name="judge_confidence" value="{{ form_values.get('judge_confidence', '') if form_values else '' }}" placeholder="1.0">
+            </label>
+            <p class="small">A judge is required so sentencing events can be reported by judge.</p>
+          </div>
+        </article>
+      </div>
+
+      <article class="pcl-detail-card">
+        <h3>Evidence references *</h3>
+        <p class="small">Add at least one provenance reference. Docket entry and document sources require a source id.</p>
+        <div class="stack">
+          {% set row_count = [evidence_types|length, evidence_ids|length, evidence_refs|length]|max %}
+          {% set row_count = row_count if row_count > 0 else 3 %}
+          {% for idx in range(row_count) %}
+            <div class="grid three">
+              <label>
+                <span>Source type</span>
+                <select name="evidence_source_type">
+                  <option value="">Select</option>
+                  {% set current_type = evidence_types[idx] if idx < evidence_types|length else '' %}
+                  {% for source_type in evidence_source_types %}
+                    <option value="{{ source_type }}" {% if current_type == source_type %}selected{% endif %}>{{ source_type.replace('_', ' ')|title }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>
+                <span>Source id</span>
+                <input type="text" name="evidence_source_id" value="{{ evidence_ids[idx] if idx < evidence_ids|length else '' }}" placeholder="e.g., docket #45">
+              </label>
+              <label>
+                <span>Excerpt / reference</span>
+                <input type="text" name="evidence_reference" value="{{ evidence_refs[idx] if idx < evidence_refs|length else '' }}" placeholder="Quote or pointer">
+              </label>
+            </div>
+          {% endfor %}
+        </div>
+      </article>
+
+      <div class="actions">
+        <button class="primary" type="submit">Save sentencing event</button>
+        <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case_detail.id) }}">Cancel</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

@@ -66,7 +66,13 @@ from docket_enrichment import DocketEnrichmentWorker
 from pcl_batch import PclBatchPlanner, PclBatchWorker
 from pcl_client import PclClient
 from pcl_models import build_pcl_tables
+from sentencing_models import (
+    VALID_EVIDENCE_SOURCE_TYPES,
+    VALID_VARIANCE_TYPES,
+    build_sentencing_tables,
+)
 from pcl_queries import get_case_detail, list_cases, parse_filters
+from sentencing_queries import list_sentencing_events_by_judge, parse_sentencing_filters
 
 DEFAULT_DB_FILENAME = "case_filed_rpt.sqlite"
 CASE_STAGE1_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -647,6 +653,8 @@ def create_app() -> Flask:
 
     pacer_tokens = build_pacer_token_table(metadata)
     pcl_tables = build_pcl_tables(metadata)
+    sentencing_tables = build_sentencing_tables(metadata)
+    pcl_tables.update(sentencing_tables)
 
     # Create the users/newsletter/case_stage1/case_data_one tables if they don't exist.
     try:
@@ -737,13 +745,13 @@ def create_app() -> Flask:
         label="pcl_case_result_raw",
     )
 
-    def _ensure_indexes(statements: Dict[str, str]) -> None:
+    def _ensure_indexes(statements: Dict[str, str], *, label: str) -> None:
         try:
             with engine.begin() as conn:
                 for statement in statements.values():
                     conn.execute(sa_text(statement))
         except Exception:
-            app.logger.exception("Unable to ensure PCL indexes.")
+            app.logger.exception("Unable to ensure %s indexes.", label)
 
     if engine.dialect.name == "sqlite":
         _ensure_indexes(
@@ -752,7 +760,19 @@ def create_app() -> Flask:
                 "ix_pcl_cases_case_type": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_case_type ON pcl_cases (case_type)",
                 "ix_pcl_cases_judge_last_name": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_judge_last_name ON pcl_cases (judge_last_name)",
                 "ix_pcl_case_result_raw_court_case": "CREATE INDEX IF NOT EXISTS ix_pcl_case_result_raw_court_case ON pcl_case_result_raw (court_id, case_number)",
-            }
+            },
+            label="pcl",
+        )
+        _ensure_indexes(
+            {
+                "ix_judges_name_last": "CREATE INDEX IF NOT EXISTS ix_judges_name_last ON judges (name_last)",
+                "ix_judges_court_id": "CREATE INDEX IF NOT EXISTS ix_judges_court_id ON judges (court_id)",
+                "ix_case_judges_case_id": "CREATE INDEX IF NOT EXISTS ix_case_judges_case_id ON case_judges (case_id)",
+                "ix_case_judges_judge_id": "CREATE INDEX IF NOT EXISTS ix_case_judges_judge_id ON case_judges (judge_id)",
+                "ix_sentencing_events_case_date": "CREATE INDEX IF NOT EXISTS ix_sentencing_events_case_date ON sentencing_events (case_id, sentencing_date)",
+                "ix_sentencing_evidence_event_source": "CREATE INDEX IF NOT EXISTS ix_sentencing_evidence_event_source ON sentencing_evidence (sentencing_event_id, source_type)",
+            },
+            label="sentencing",
         )
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
@@ -841,6 +861,149 @@ def create_app() -> Flask:
             return datetime.strptime(value.strip(), "%m/%d/%Y").date()
         except ValueError:
             return None
+
+    def _parse_iso_date(value: Optional[str]) -> Optional[Any]:
+        if not value:
+            return None
+        try:
+            return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+    def _parse_optional_int(value: Optional[str]) -> Optional[int]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return int(cleaned)
+        except ValueError:
+            return None
+
+    def _parse_optional_float(value: Optional[str]) -> Optional[float]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+
+    def _normalize_variance_type(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        cleaned = value.strip().lower()
+        return cleaned if cleaned in VALID_VARIANCE_TYPES else None
+
+    def _collect_evidence_rows(form_data) -> List[Dict[str, Optional[str]]]:
+        source_types = form_data.getlist("evidence_source_type")
+        source_ids = form_data.getlist("evidence_source_id")
+        references = form_data.getlist("evidence_reference")
+
+        rows: List[Dict[str, Optional[str]]] = []
+        total = max(len(source_types), len(source_ids), len(references))
+        for idx in range(total):
+            source_type = (source_types[idx] if idx < len(source_types) else "").strip()
+            source_id = (source_ids[idx] if idx < len(source_ids) else "").strip()
+            reference_text = (references[idx] if idx < len(references) else "").strip()
+            if not source_type and not source_id and not reference_text:
+                continue
+            rows.append(
+                {
+                    "source_type": source_type.lower() if source_type else "",
+                    "source_id": source_id or None,
+                    "reference_text": reference_text,
+                }
+            )
+        return rows
+
+    def _validate_evidence_rows(rows: List[Dict[str, Optional[str]]]) -> Optional[str]:
+        if not rows:
+            return "At least one evidence reference is required."
+        for row in rows:
+            source_type = row.get("source_type") or ""
+            reference_text = (row.get("reference_text") or "").strip()
+            if source_type not in VALID_EVIDENCE_SOURCE_TYPES:
+                return "Evidence source type must be docket entry, document, or manual."
+            if not reference_text:
+                return "Each evidence reference needs an excerpt or description."
+            if source_type in {"docket_entry", "document"} and not (row.get("source_id") or "").strip():
+                return "Docket entry and document evidence must include a source id."
+        return None
+
+    def _ensure_case_sentencing_judge(case_id: int, judge_id: int, confidence: Optional[float]) -> None:
+        case_judges = pcl_tables["case_judges"]
+        confidence_value = confidence if confidence is not None else 1.0
+        with engine.begin() as conn:
+            existing_id = conn.execute(
+                select(case_judges.c.id).where(
+                    case_judges.c.case_id == case_id,
+                    case_judges.c.judge_id == judge_id,
+                    case_judges.c.role == "sentencing",
+                )
+            ).scalar_one_or_none()
+            if existing_id:
+                conn.execute(
+                    update(case_judges)
+                    .where(case_judges.c.id == existing_id)
+                    .values(confidence=confidence_value)
+                )
+            else:
+                conn.execute(
+                    insert(case_judges).values(
+                        case_id=case_id,
+                        judge_id=judge_id,
+                        role="sentencing",
+                        confidence=confidence_value,
+                        source_system="admin",
+                    )
+                )
+
+    def _get_or_create_judge_id(judge_id_value: Optional[str], judge_name: Optional[str], court_id: Optional[str]) -> Optional[int]:
+        judges = pcl_tables["judges"]
+        parsed_id = _parse_optional_int(judge_id_value)
+        if parsed_id:
+            return parsed_id
+        if not judge_name:
+            return None
+        name_full = judge_name.strip()
+        if not name_full:
+            return None
+        name_parts = [part for part in name_full.replace(",", " ").split() if part]
+        name_first = name_parts[0] if len(name_parts) > 1 else None
+        name_last = name_parts[-1] if name_parts else None
+        normalized_court = (court_id or "").strip().lower() or None
+        with engine.begin() as conn:
+            existing_id = conn.execute(
+                select(judges.c.id).where(
+                    func.lower(judges.c.name_full) == name_full.lower(),
+                    judges.c.court_id == normalized_court,
+                )
+            ).scalar_one_or_none()
+            if existing_id:
+                return int(existing_id)
+            result = conn.execute(
+                insert(judges).values(
+                    name_full=name_full,
+                    name_first=name_first,
+                    name_last=name_last,
+                    court_id=normalized_court,
+                    source_system="admin",
+                )
+            )
+            return int(result.inserted_primary_key[0])
+
+    def _load_sentencing_judge_choices() -> List[Dict[str, Any]]:
+        judges = pcl_tables["judges"]
+        stmt = select(judges.c.id, judges.c.name_full, judges.c.court_id).order_by(
+            judges.c.name_last.asc(), judges.c.name_full.asc()
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [dict(row) for row in rows]
 
     def _normalize_text(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -2914,6 +3077,139 @@ def create_app() -> Flask:
             active_page="federal_data_dashboard",
             active_subnav="pcl_cases",
             case_detail=detail,
+        )
+
+    @app.get("/admin/pcl/cases/<int:case_id>/sentencing-events/new")
+    @admin_required
+    def admin_sentencing_event_new(case_id: int):
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+        judge_choices = _load_sentencing_judge_choices()
+        return render_template(
+            "admin_sentencing_event_form.html",
+            active_page="federal_data_dashboard",
+            active_subnav="sentencing_events",
+            case_detail=detail,
+            judge_choices=judge_choices,
+            variance_types=VALID_VARIANCE_TYPES,
+            evidence_source_types=VALID_EVIDENCE_SOURCE_TYPES,
+            form_values={},
+        )
+
+    @app.post("/admin/pcl/cases/<int:case_id>/sentencing-events")
+    @admin_required
+    def admin_sentencing_event_create(case_id: int):
+        require_csrf()
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+
+        sentencing_events = pcl_tables["sentencing_events"]
+        sentencing_evidence = pcl_tables["sentencing_evidence"]
+
+        sentencing_date = _parse_iso_date(request.form.get("sentencing_date"))
+        sentence_months = _parse_optional_int(request.form.get("sentence_months"))
+        guideline_low = _parse_optional_int(request.form.get("guideline_range_low"))
+        guideline_high = _parse_optional_int(request.form.get("guideline_range_high"))
+        offense_level = _parse_optional_int(request.form.get("offense_level"))
+        criminal_history_category = (request.form.get("criminal_history_category") or "").strip() or None
+        variance_type = _normalize_variance_type(request.form.get("variance_type"))
+        notes = (request.form.get("notes") or "").strip() or None
+        defendant_identifier = (request.form.get("defendant_identifier") or "").strip() or None
+        judge_confidence = _parse_optional_float(request.form.get("judge_confidence"))
+
+        evidence_rows = _collect_evidence_rows(request.form)
+
+        errors: List[str] = []
+        if not sentencing_date:
+            errors.append("Sentencing date is required.")
+        if sentence_months is None:
+            errors.append("Sentence (months) is required.")
+        if guideline_low is not None and guideline_high is not None and guideline_low > guideline_high:
+            errors.append("Guideline range low must be less than or equal to guideline range high.")
+        if request.form.get("variance_type") and not variance_type:
+            errors.append("Variance type must be one of the provided options.")
+        evidence_error = _validate_evidence_rows(evidence_rows)
+        if evidence_error:
+            errors.append(evidence_error)
+
+        judge_id = _get_or_create_judge_id(
+            request.form.get("judge_id"),
+            request.form.get("judge_name"),
+            detail.get("court_id"),
+        )
+        if not judge_id:
+            errors.append("A sentencing judge is required. Select an existing judge or enter a name.")
+        if judge_confidence is not None and not (0 <= judge_confidence <= 1.0):
+            errors.append("Judge confidence must be between 0 and 1.")
+
+        if errors:
+            for message in errors:
+                flash(message, "error")
+            judge_choices = _load_sentencing_judge_choices()
+            form_values = {key: request.form.getlist(key) if key.startswith("evidence_") else request.form.get(key) for key in request.form.keys()}
+            return render_template(
+                "admin_sentencing_event_form.html",
+                active_page="federal_data_dashboard",
+                active_subnav="sentencing_events",
+                case_detail=detail,
+                judge_choices=judge_choices,
+                variance_types=VALID_VARIANCE_TYPES,
+                evidence_source_types=VALID_EVIDENCE_SOURCE_TYPES,
+                form_values=form_values,
+            )
+
+        with engine.begin() as conn:
+            result = conn.execute(
+                insert(sentencing_events).values(
+                    case_id=case_id,
+                    defendant_identifier=defendant_identifier,
+                    sentencing_date=sentencing_date,
+                    guideline_range_low=guideline_low,
+                    guideline_range_high=guideline_high,
+                    offense_level=offense_level,
+                    criminal_history_category=criminal_history_category,
+                    sentence_months=sentence_months,
+                    variance_type=variance_type,
+                    notes=notes,
+                )
+            )
+            sentencing_event_id = int(result.inserted_primary_key[0])
+            conn.execute(
+                insert(sentencing_evidence),
+                [
+                    {
+                        "sentencing_event_id": sentencing_event_id,
+                        "source_type": row["source_type"],
+                        "source_id": row["source_id"],
+                        "reference_text": row["reference_text"],
+                    }
+                    for row in evidence_rows
+                ],
+            )
+
+        _ensure_case_sentencing_judge(case_id, judge_id, judge_confidence)
+        flash("Sentencing event saved.", "success")
+        return redirect(url_for("admin_pcl_case_detail", case_id=case_id))
+
+    @app.get("/admin/sentencing-events")
+    @admin_required
+    def admin_sentencing_events_report():
+        filters = parse_sentencing_filters(request.args)
+        rows, available_courts, available_case_types = list_sentencing_events_by_judge(
+            engine, pcl_tables, filters
+        )
+        judge_choices = _load_sentencing_judge_choices()
+        return render_template(
+            "admin_sentencing_events_report.html",
+            active_page="federal_data_dashboard",
+            active_subnav="sentencing_events",
+            rows=rows,
+            filters=filters,
+            judge_choices=judge_choices,
+            available_courts=available_courts,
+            available_case_types=available_case_types,
         )
 
     @app.get("/admin/docket-enrichment")
