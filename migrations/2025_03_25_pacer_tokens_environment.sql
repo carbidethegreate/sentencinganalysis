@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE pacer_tokens
+    ADD COLUMN IF NOT EXISTS environment VARCHAR(20);
+
+COMMIT;

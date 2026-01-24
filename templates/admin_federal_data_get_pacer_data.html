@@ -2,6 +2,26 @@
 
 {% block federal_content %}
   <section class="pacer-page">
+    <div class="card pacer-status-card">
+      <div class="pacer-status-card__header">
+        <div>
+          <p class="pacer-eyebrow">PACER environments</p>
+          <h2 class="pacer-status-card__title">Environment: {{ pcl_env_label }}</h2>
+          <p class="small pacer-status-card__lead">
+            PACER Auth: {{ pacer_auth_env_label }} · PCL: {{ pcl_env_label }} · Billable searches: {{ pacer_env_billable_label }}
+          </p>
+          <p class="small pacer-status-card__meta">
+            PACER_AUTH_BASE_URL host: {{ pacer_auth_host }}<br>
+            PCL_BASE_URL host: {{ pcl_host }}
+          </p>
+        </div>
+      </div>
+      {% if pacer_env_mismatch and pacer_env_mismatch_reason %}
+        <div class="flash error">
+          <strong>Environment mismatch:</strong> {{ pacer_env_mismatch_reason }}
+        </div>
+      {% endif %}
+    </div>
     {% if pacer_authorized %}
       <div class="card pacer-status-card">
         <div class="pacer-status-card__header">

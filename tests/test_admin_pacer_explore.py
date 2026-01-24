@@ -15,10 +15,20 @@ from pcl_client import PclApiError, PclJsonResponse
 
 class AdminPacerExploreTests(unittest.TestCase):
     def setUp(self):
-        self._env_backup = {key: os.environ.get(key) for key in ("DB_PATH", "SECRET_KEY_PATH")}
+        self._env_backup = {
+            key: os.environ.get(key)
+            for key in (
+                "DB_PATH",
+                "SECRET_KEY_PATH",
+                "PACER_AUTH_BASE_URL",
+                "PCL_BASE_URL",
+            )
+        }
         self._tmpdir = tempfile.TemporaryDirectory()
         os.environ["DB_PATH"] = os.path.join(self._tmpdir.name, "test.sqlite")
         os.environ["SECRET_KEY_PATH"] = os.path.join(self._tmpdir.name, ".secret_key")
+        os.environ["PACER_AUTH_BASE_URL"] = "https://qa-login.uscourts.gov"
+        os.environ["PCL_BASE_URL"] = "https://qa-pcl.uscourts.gov/pcl-public-api/rest"
         self.app = create_app()
         self.app.testing = True
         self.client = self.app.test_client()
@@ -56,8 +66,33 @@ class AdminPacerExploreTests(unittest.TestCase):
                 ],
             )
 
+    def _seed_courts_for_app(self, app):
+        with app.engine.begin() as conn:
+            conn.execute(
+                insert(app.federal_courts_table),
+                [
+                    {
+                        "court_id": "akd",
+                        "court_name": "District of Alaska",
+                        "title": "U.S. District Court for the District of Alaska",
+                        "raw_json": {},
+                    },
+                    {
+                        "court_id": "cand",
+                        "court_name": "Northern District of California",
+                        "title": "U.S. District Court for the Northern District of California",
+                        "raw_json": {},
+                    },
+                ],
+            )
+
     def _login_admin(self):
         with self.client.session_transaction() as sess:
+            sess["is_admin"] = True
+            sess["csrf_token"] = "csrf-token"
+
+    def _login_admin_for_client(self, client):
+        with client.session_transaction() as sess:
             sess["is_admin"] = True
             sess["csrf_token"] = "csrf-token"
 
@@ -65,7 +100,11 @@ class AdminPacerExploreTests(unittest.TestCase):
         with self.client.session_transaction() as sess:
             session_key = sess.get("pacer_session_key") or "session-key"
             sess["pacer_session_key"] = session_key
-        record = PacerTokenRecord(token="server-side-token", obtained_at=datetime.utcnow())
+        record = PacerTokenRecord(
+            token="server-side-token",
+            obtained_at=datetime.utcnow(),
+            environment="qa",
+        )
         self.app.pacer_token_store._backend.save_token(session_key, record)
 
     def _post_run(self, **overrides):
@@ -98,6 +137,80 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.assertIn("Copy debug bundle", html)
         self.assertNotIn("server-side-token", html)
         mock_search.assert_not_called()
+
+    def test_post_run_blocks_on_env_mismatch(self):
+        env_backup = {key: os.environ.get(key) for key in os.environ.keys()}
+        tmpdir = tempfile.TemporaryDirectory()
+        try:
+            os.environ["DB_PATH"] = os.path.join(tmpdir.name, "mismatch.sqlite")
+            os.environ["SECRET_KEY_PATH"] = os.path.join(tmpdir.name, ".secret_key")
+            os.environ["PACER_AUTH_BASE_URL"] = "https://pacer.login.uscourts.gov"
+            os.environ["PCL_BASE_URL"] = "https://qa-pcl.uscourts.gov/pcl-public-api/rest"
+            app = create_app()
+            app.testing = True
+            client = app.test_client()
+            self._seed_courts_for_app(app)
+            self._login_admin_for_client(client)
+            with client.session_transaction() as sess:
+                sess["pacer_session_key"] = "session-key"
+            app.pacer_token_store._backend.save_token(
+                "session-key",
+                PacerTokenRecord(
+                    token="server-side-token",
+                    obtained_at=datetime.utcnow(),
+                    environment="prod",
+                ),
+            )
+            with patch.object(app.pcl_client, "immediate_case_search") as mock_search:
+                response = client.post(
+                    "/admin/pacer/explore/run",
+                    data={
+                        "csrf_token": "csrf-token",
+                        "mode": "cases",
+                        "court_id": "akd",
+                        "date_filed_from": "2024-01-01",
+                        "date_filed_to": "2024-01-31",
+                        "max_records": "54",
+                    },
+                )
+            html = response.data.decode("utf-8")
+            self.assertIn("PACER environments mismatch", html)
+            self.assertIn("PACER_AUTH_BASE_URL", html)
+            mock_search.assert_not_called()
+        finally:
+            tmpdir.cleanup()
+            os.environ.clear()
+            os.environ.update(env_backup)
+
+    def test_post_run_blocks_on_token_environment_mismatch(self):
+        with self.client.session_transaction() as sess:
+            sess["pacer_session_key"] = "session-key"
+        self.app.pacer_token_store._backend.save_token(
+            "session-key",
+            PacerTokenRecord(
+                token="server-side-token",
+                obtained_at=datetime.utcnow(),
+                environment="prod",
+            ),
+        )
+        with patch.object(self.app.pcl_client, "immediate_case_search") as mock_search:
+            response = self._post_run()
+        html = response.data.decode("utf-8")
+        self.assertIn("Re-authorize in the correct environment", html)
+        mock_search.assert_not_called()
+
+    def test_post_run_allows_matching_environment(self):
+        self._authorize_pacer()
+        payload = {
+            "cases": [],
+            "receipt": {"billablePages": 0},
+            "pageInfo": {"page": 1, "totalPages": 1, "totalRecords": 0},
+        }
+        fake_response = PclJsonResponse(status_code=200, payload=payload, raw_body=b"{}")
+        with patch.object(self.app.pcl_client, "immediate_case_search", return_value=fake_response) as mock_search:
+            response = self._post_run()
+        self.assertEqual(response.status_code, 200)
+        mock_search.assert_called()
 
     def test_post_run_success_shows_results_and_observed_fields(self):
         self._authorize_pacer()

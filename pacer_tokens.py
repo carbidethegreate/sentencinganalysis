@@ -13,6 +13,7 @@ class PacerTokenRecord:
     token: str
     obtained_at: datetime
     expires_at: Optional[datetime] = None
+    environment: Optional[str] = None
 
 
 def build_pacer_token_table(metadata: MetaData) -> Table:
@@ -23,6 +24,7 @@ def build_pacer_token_table(metadata: MetaData) -> Table:
         Column("token", Text, nullable=False),
         Column("obtained_at", DateTime(timezone=True), nullable=False),
         Column("expires_at", DateTime(timezone=True), nullable=True),
+        Column("environment", String(20), nullable=True),
     )
 
 
@@ -54,6 +56,7 @@ class DatabaseTokenBackend:
                     token=record.token,
                     obtained_at=record.obtained_at,
                     expires_at=record.expires_at,
+                    environment=record.environment,
                 )
             )
 
@@ -64,6 +67,7 @@ class DatabaseTokenBackend:
                     self._table.c.token,
                     self._table.c.obtained_at,
                     self._table.c.expires_at,
+                    self._table.c.environment,
                 ).where(self._table.c.session_key == session_key)
             ).first()
         if not row:
@@ -72,6 +76,7 @@ class DatabaseTokenBackend:
             token=row.token,
             obtained_at=row.obtained_at,
             expires_at=row.expires_at,
+            environment=row.environment,
         )
 
     def clear_token(self, session_key: str) -> None:
@@ -112,20 +117,47 @@ class PacerTokenStore:
         token: str,
         obtained_at: datetime,
         expires_at: Optional[datetime] = None,
+        environment: Optional[str] = None,
     ) -> PacerTokenRecord:
         session_key = self._ensure_session_key()
-        record = PacerTokenRecord(token=token, obtained_at=obtained_at, expires_at=expires_at)
+        if environment is None:
+            existing = self._backend.get_token(session_key)
+            environment = existing.environment if existing else None
+        record = PacerTokenRecord(
+            token=token,
+            obtained_at=obtained_at,
+            expires_at=expires_at,
+            environment=environment,
+        )
         self._backend.save_token(session_key, record)
         return record
 
-    def get_token(self) -> Optional[PacerTokenRecord]:
+    def get_token(self, expected_environment: Optional[str] = None) -> Optional[PacerTokenRecord]:
         session_key = self._get_session_key()
         if not session_key:
             return None
-        return self._backend.get_token(session_key)
+        record = self._backend.get_token(session_key)
+        if not record:
+            return None
+        if expected_environment:
+            if not record.environment:
+                return None
+            if record.environment != expected_environment:
+                return None
+        return record
 
-    def get_token_for_key(self, session_key: str) -> Optional[PacerTokenRecord]:
-        return self._backend.get_token(session_key)
+    def get_token_for_key(
+        self, session_key: str, expected_environment: Optional[str] = None
+    ) -> Optional[PacerTokenRecord]:
+        record = self._backend.get_token(session_key)
+        if not record:
+            return None
+        if expected_environment:
+            if not record.environment:
+                return None
+            if record.environment != expected_environment:
+                return None
+        return record
 
     def clear_token(self) -> None:
         session = self._session()
