@@ -124,10 +124,46 @@
             data-bwignore="true"
           >
         </div>
+        <div style="margin-top: 16px;">
+          <label style="display: flex; gap: 8px; align-items: flex-start;">
+            <input
+              id="pacer-redaction-ack"
+              name="pacer_redaction_ack"
+              type="checkbox"
+              value="1"
+              required
+              {% if pacer_redaction_acknowledged %}checked{% endif %}
+            >
+            <span>
+              I have read the PACER redaction requirements and will comply by redacting all required sensitive information before filing.
+            </span>
+          </label>
+          {% if pacer_redaction_required %}
+            <p class="small" style="color: var(--danger); margin-top: 6px;">
+              PACER filer accounts require this acknowledgement. Check the box above and retry.
+            </p>
+          {% endif %}
+        </div>
         <div class="actions" style="margin-top: 16px;">
-          <button class="primary" type="submit">Authorize</button>
+          <button class="primary" type="submit" id="pacer-authorize-button" disabled>Authorize</button>
         </div>
       </form>
+      <script>
+        (function () {
+          const form = document.querySelector(
+            'form[action="{{ url_for("admin_federal_data_dashboard_pacer_auth") }}"]'
+          );
+          if (!form) return;
+          const checkbox = form.querySelector("#pacer-redaction-ack");
+          const submitButton = form.querySelector("#pacer-authorize-button");
+          if (!checkbox || !submitButton) return;
+          const toggleSubmit = function () {
+            submitButton.disabled = !checkbox.checked;
+          };
+          checkbox.addEventListener("change", toggleSubmit);
+          toggleSubmit();
+        })();
+      </script>
       <p class="small" style="margin-top: 16px;">
         PACER authentication endpoint: {{ pacer_base_url }} (set <code>PACER_AUTH_BASE_URL</code> to switch environments).
       </p>

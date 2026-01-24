@@ -341,6 +341,7 @@ class PacerAuthResult:
     login_result: str
     needs_otp: bool
     needs_client_code: bool
+    needs_redaction_ack: bool
     can_proceed: bool
 
 
@@ -378,6 +379,12 @@ def _pacer_mentions_otp(error_description: str) -> bool:
     if "one-time passcode" in message or "one time passcode" in message:
         return True
     return re.search(r"\botp\b", message) is not None
+
+
+def _pacer_mentions_redaction(error_description: str) -> bool:
+    if not error_description:
+        return False
+    return "all filers must redact" in error_description.lower()
 
 
 def _safe_json_loads(payload: str) -> Dict[str, Any]:
@@ -436,6 +443,9 @@ def interpret_pacer_auth_response(
     error_description = (response_payload.get("errorDescription") or "").strip()
     needs_otp = _pacer_requires_otp(error_description, otp_code)
     needs_client_code = _pacer_requires_client_code(error_description)
+    needs_redaction_ack = bool(
+        login_result == "1" and _pacer_mentions_redaction(error_description)
+    )
     can_proceed = bool(login_result == "0" and token and not error_description)
     return PacerAuthResult(
         token=token if can_proceed else "",
@@ -443,6 +453,7 @@ def interpret_pacer_auth_response(
         login_result=login_result,
         needs_otp=needs_otp,
         needs_client_code=needs_client_code,
+        needs_redaction_ack=needs_redaction_ack,
         can_proceed=can_proceed,
     )
 
@@ -459,13 +470,15 @@ class PacerAuthClient:
         password: str,
         otp_code: Optional[str] = None,
         client_code: Optional[str] = None,
+        redact_flag: Optional[bool] = None,
     ) -> PacerAuthResult:
+        use_redact_flag = self.redact_flag if redact_flag is None else bool(redact_flag)
         payload = build_pacer_auth_payload(
             login_id,
             password,
             otp_code=otp_code,
             client_code=client_code,
-            redact_flag=self.redact_flag,
+            redact_flag=use_redact_flag,
         )
         request_data = json.dumps(payload).encode("utf-8")
         request_obj = urllib.request.Request(
@@ -780,13 +793,8 @@ def create_app() -> Flask:
     pacer_auth_base_url = _normalize_pacer_base_url(
         os.environ.get("PACER_AUTH_BASE_URL", "https://pacer.login.uscourts.gov")
     )
-    pacer_redact_flag = os.environ.get("PACER_REDACT_FLAG", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
     pacer_auth_client = PacerAuthClient(
-        pacer_auth_base_url, logger=app.logger, redact_flag=pacer_redact_flag
+        pacer_auth_base_url, logger=app.logger, redact_flag=False
     )
     pacer_token_store_mode = os.environ.get("PACER_TOKEN_STORE", "").strip().lower()
     use_db_tokens = pacer_token_store_mode in {
@@ -2663,6 +2671,8 @@ def create_app() -> Flask:
             pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
             pacer_needs_otp=bool(session.get("pacer_needs_otp")),
             pacer_client_code_required=bool(session.get("pacer_client_code_required")),
+            pacer_redaction_required=bool(session.get("pacer_redaction_required")),
+            pacer_redaction_acknowledged=bool(session.get("pacer_redaction_acknowledged")),
             pacer_base_url=pacer_auth_base_url,
             pacer_env_notice=pacer_environment_notice(pacer_auth_base_url),
             pacer_server_creds_available=pacer_server_creds_available,
@@ -2703,6 +2713,9 @@ def create_app() -> Flask:
             or json_payload.get("pacer_client_code")
             or request.form.get("pacer_client_code", "")
         ).strip()
+        redaction_ack = request.form.get("pacer_redaction_ack") == "1" or str(
+            json_payload.get("pacer_redaction_ack", "")
+        ).lower() in {"1", "true", "yes", "on"}
 
         redirect_target = (
             url_for("admin_federal_data_dashboard_get_pacer_data", manual="1")
@@ -2718,6 +2731,7 @@ def create_app() -> Flask:
             else:
                 session["pacer_needs_otp"] = False
                 session["pacer_client_code_required"] = False
+                session["pacer_redaction_required"] = False
                 message = (
                     "PACER credentials are not configured. Set Render env var puser and "
                     "secret file ppass, or use manual mode."
@@ -2739,6 +2753,7 @@ def create_app() -> Flask:
         if login_id.strip().upper() == "CPDADMIN":
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
+            session["pacer_redaction_required"] = False
             message = (
                 "Those look like CourtDataPro admin creds. Enter PACER credentials instead."
             )
@@ -2758,14 +2773,41 @@ def create_app() -> Flask:
 
         otp_code = otp_code or None
         client_code = client_code or None
+        session["pacer_redaction_acknowledged"] = bool(redaction_ack)
+
+        if not redaction_ack:
+            session["pacer_needs_otp"] = False
+            session["pacer_client_code_required"] = False
+            session["pacer_redaction_required"] = True
+            message = (
+                "You must acknowledge the PACER redaction rules before authorizing a filer account."
+            )
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "authorized": False,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "status": "redaction_required",
+                        }
+                    ),
+                    400,
+                )
+            flash(message, "error")
+            return redirect(redirect_target)
 
         try:
             result = pacer_auth_client.authenticate(
-                login_id, password, otp_code=otp_code, client_code=client_code
+                login_id,
+                password,
+                otp_code=otp_code,
+                client_code=client_code,
+                redact_flag=redaction_ack,
             )
         except ValueError as exc:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
+            session["pacer_redaction_required"] = False
             if wants_json:
                 return (
                     jsonify(
@@ -2784,6 +2826,7 @@ def create_app() -> Flask:
             _set_pacer_session(result.token)
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
+            session["pacer_redaction_required"] = False
             if wants_json:
                 return jsonify(
                     {
@@ -2796,11 +2839,14 @@ def create_app() -> Flask:
         else:
             session["pacer_needs_otp"] = bool(result.needs_otp)
             session["pacer_client_code_required"] = bool(result.needs_client_code)
+            session["pacer_redaction_required"] = bool(result.needs_redaction_ack)
             status = "error"
             if result.needs_otp:
                 status = "needs_otp"
             elif result.needs_client_code:
                 status = "needs_client_code"
+            elif result.needs_redaction_ack:
+                status = "redaction_required"
             if wants_json:
                 return jsonify(
                     {
@@ -2817,6 +2863,11 @@ def create_app() -> Flask:
                     "If your PACER account is enrolled in MFA, a one time passcode (2FA code) is required.",
                     "error",
                 )
+            if result.needs_redaction_ack:
+                flash(
+                    "PACER requires filer accounts to acknowledge the redaction rules. Confirm the acknowledgement and try again.",
+                    "error",
+                )
 
         return redirect(redirect_target)
 
@@ -2827,6 +2878,8 @@ def create_app() -> Flask:
         _clear_pacer_session()
         session["pacer_needs_otp"] = False
         session["pacer_client_code_required"] = False
+        session["pacer_redaction_required"] = False
+        session["pacer_redaction_acknowledged"] = False
         flash("PACER session cleared.", "success")
         return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 
