@@ -4246,6 +4246,9 @@ def create_app() -> Flask:
     def admin_federal_data_dashboard_pcl_batch_search():
         pcl_batch_requests = pcl_tables["pcl_batch_requests"]
         pcl_batch_segments = pcl_tables["pcl_batch_segments"]
+        court_stmt = select(federal_courts.c.court_id, federal_courts.c.title).order_by(
+            federal_courts.c.court_id.asc()
+        )
         with engine.connect() as conn:
             batch_rows = (
                 conn.execute(select(pcl_batch_requests).order_by(pcl_batch_requests.c.id.desc()))
@@ -4257,15 +4260,28 @@ def create_app() -> Flask:
                 .mappings()
                 .all()
             )
+            court_rows = conn.execute(court_stmt).mappings().all()
         segments_by_batch: Dict[int, List[Dict[str, Any]]] = {}
         for row in segment_rows:
             segments_by_batch.setdefault(row["batch_request_id"], []).append(row)
+        court_options: List[Dict[str, str]] = []
+        for row in court_rows:
+            title = row.get("title") or ""
+            label = f"{row['court_id']} — {title}" if title else row["court_id"]
+            court_options.append(
+                {
+                    "court_id": row["court_id"],
+                    "title": title,
+                    "label": label,
+                }
+            )
         return render_template(
             "admin_pcl_batch_search.html",
             active_page="federal_data_dashboard",
             active_subnav="get_pacer_data",
             batch_requests=batch_rows,
             segments_by_batch=segments_by_batch,
+            court_options=court_options,
             csrf_token=get_csrf_token(),
             pcl_base_url=pcl_base_url,
         )
@@ -4280,6 +4296,18 @@ def create_app() -> Flask:
         case_types = request.form.getlist("case_types")
         if not court_id or not date_from or not date_to:
             flash("Court ID and date range are required.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
+        with engine.connect() as conn:
+            court_exists = (
+                conn.execute(
+                    select(func.count())
+                    .select_from(federal_courts)
+                    .where(federal_courts.c.court_id == court_id)
+                ).scalar_one()
+                > 0
+            )
+        if not court_exists:
+            flash("Court ID is not recognized. Please select a valid court.", "error")
             return redirect(url_for("admin_federal_data_dashboard_pcl_batch_search"))
         try:
             date_filed_from = datetime.fromisoformat(date_from).date()
