@@ -50,6 +50,99 @@
     </div>
   </section>
 
+
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <h3>Sentencing events</h3>
+        <p class="small">Admin-entered sentencing facts with provenance references.</p>
+      </div>
+      <div class="actions">
+        <a class="pill" href="{{ url_for('admin_sentencing_events_report') }}">View report</a>
+        <a class="primary" href="{{ url_for('admin_sentencing_event_new', case_id=case_detail.id) }}">Add sentencing event</a>
+      </div>
+    </div>
+
+    <div class="grid two pcl-detail-grid">
+      <article class="pcl-detail-card">
+        <h3>Sentencing judges</h3>
+        {% if case_detail.sentencing_judges %}
+          <ul class="pcl-list">
+            {% for judge in case_detail.sentencing_judges %}
+              <li>
+                <strong>{{ judge.judge_name }}</strong>
+                {% if judge.confidence is not none %}<span class="small">confidence {{ '%.2f'|format(judge.confidence) }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% elif case_detail.case_judges %}
+          <p class="small">Case judges are recorded but none are marked as sentencing judges yet.</p>
+        {% else %}
+          <p class="small">No judges linked to this case yet.</p>
+        {% endif %}
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Sentencing summary</h3>
+        <dl class="pcl-detail-list">
+          <div><dt>Events recorded</dt><dd>{{ case_detail.sentencing_events|length }}</dd></div>
+          <div><dt>Latest sentencing date</dt><dd>
+            {% if case_detail.sentencing_events %}
+              {{ case_detail.sentencing_events[0].sentencing_date.isoformat() if case_detail.sentencing_events[0].sentencing_date else '—' }}
+            {% else %}
+              —
+            {% endif %}
+          </dd></div>
+        </dl>
+      </article>
+    </div>
+
+    {% if case_detail.sentencing_events %}
+      <div class="pcl-json-list">
+        {% for event in case_detail.sentencing_events %}
+          <article class="pcl-json-item">
+            <header>
+              <strong>Sentencing {{ event.sentencing_date.isoformat() if event.sentencing_date else '—' }}</strong>
+              <span class="small">Sentence {{ event.sentence_months }} months</span>
+            </header>
+            <dl class="pcl-detail-list">
+              <div><dt>Defendant</dt><dd>{{ event.defendant_identifier or '—' }}</dd></div>
+              <div><dt>Guideline range</dt><dd>
+                {% if event.guideline_range_low is not none or event.guideline_range_high is not none %}
+                  {{ event.guideline_range_low if event.guideline_range_low is not none else '?' }}–{{ event.guideline_range_high if event.guideline_range_high is not none else '?' }}
+                {% else %}
+                  —
+                {% endif %}
+              </dd></div>
+              <div><dt>Offense level</dt><dd>{{ event.offense_level if event.offense_level is not none else '—' }}</dd></div>
+              <div><dt>Criminal history</dt><dd>{{ event.criminal_history_category or '—' }}</dd></div>
+              <div><dt>Variance</dt><dd>{{ event.variance_type or '—' }}</dd></div>
+              <div><dt>Notes</dt><dd>{{ event.notes or '—' }}</dd></div>
+            </dl>
+            <div class="stack" style="margin-top: 12px;">
+              <strong>Evidence</strong>
+              {% if event.evidence %}
+                <ul class="pcl-list">
+                  {% for evidence in event.evidence %}
+                    <li>
+                      <span class="pill small" style="margin-right: 6px;">{{ evidence.source_type.replace('_', ' ')|title }}</span>
+                      {% if evidence.source_id %}<span class="small">#{{ evidence.source_id }}</span>{% endif %}
+                      <div>{{ evidence.reference_text }}</div>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="small">No evidence references recorded.</p>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="small">No sentencing events recorded for this case.</p>
+    {% endif %}
+  </section>
+
   <section class="card pcl-detail-shell">
     <div class="pcl-detail-header">
       <div>

@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, desc, exists, func, or_, select
+
+from sentencing_queries import has_sentencing_event_clause
 
 
 DEFAULT_PAGE_SIZE = 25
@@ -165,11 +167,13 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
         receipts = _load_receipts(conn, tables, detail)
         docket_jobs = _load_docket_jobs(conn, tables, detail)
         docket_estimate = _estimate_docket_cost(conn, tables, detail)
+        sentencing_detail = _load_sentencing_detail(conn, tables, detail)
 
     detail["raw_payloads"] = raw_payloads
     detail["receipts"] = receipts
     detail["docket_jobs"] = docket_jobs
     detail["docket_estimate"] = docket_estimate
+    detail.update(sentencing_detail)
     return detail
 
 
@@ -197,6 +201,9 @@ def _build_where_clauses(pcl_cases, filters: PclCaseFilters) -> List[Any]:
         )
     if filters.indexed_only:
         clauses.append(pcl_cases.c.record_hash.is_not(None))
+    if filters.sentencing_only and "sentencing_events" in pcl_cases.metadata.tables:
+        sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
+        clauses.append(exists(has_sentencing_event_clause(pcl_cases, sentencing_events)))
     # Enrichment flags are not yet modeled; keep filters as no-ops.
     return clauses
 
@@ -369,3 +376,76 @@ def _parse_int(value: Optional[str], *, default: int, minimum: int) -> int:
     except ValueError:
         return default
     return max(minimum, parsed)
+
+
+def _load_sentencing_detail(conn, tables, detail: Dict[str, Any]) -> Dict[str, Any]:
+    if "sentencing_events" not in tables:
+        return {"sentencing_events": [], "case_judges": [], "sentencing_judges": []}
+
+    sentencing_events = tables["sentencing_events"]
+    sentencing_evidence = tables["sentencing_evidence"]
+    case_judges = tables["case_judges"]
+    judges = tables["judges"]
+    case_id = detail.get("id")
+    if not case_id:
+        return {"sentencing_events": [], "case_judges": [], "sentencing_judges": []}
+
+    judge_stmt = (
+        select(
+            case_judges.c.id,
+            case_judges.c.case_id,
+            case_judges.c.judge_id,
+            case_judges.c.role,
+            case_judges.c.confidence,
+            case_judges.c.source_system,
+            case_judges.c.source_ref,
+            judges.c.name_full.label("judge_name"),
+            judges.c.court_id.label("judge_court_id"),
+        )
+        .select_from(case_judges.join(judges, judges.c.id == case_judges.c.judge_id))
+        .where(case_judges.c.case_id == case_id)
+        .order_by(case_judges.c.role.asc(), case_judges.c.confidence.desc())
+    )
+
+    event_stmt = (
+        select(sentencing_events)
+        .where(sentencing_events.c.case_id == case_id)
+        .order_by(sentencing_events.c.sentencing_date.desc(), sentencing_events.c.id.desc())
+    )
+
+    evidence_stmt = (
+        select(
+            sentencing_evidence.c.id,
+            sentencing_evidence.c.sentencing_event_id,
+            sentencing_evidence.c.source_type,
+            sentencing_evidence.c.source_id,
+            sentencing_evidence.c.reference_text,
+            sentencing_evidence.c.created_at,
+        )
+        .join(
+            sentencing_events,
+            sentencing_events.c.id == sentencing_evidence.c.sentencing_event_id,
+        )
+        .where(sentencing_events.c.case_id == case_id)
+        .order_by(sentencing_evidence.c.id.asc())
+    )
+
+    judge_rows = [dict(row) for row in conn.execute(judge_stmt).mappings().all()]
+    event_rows = [dict(row) for row in conn.execute(event_stmt).mappings().all()]
+    evidence_rows = [dict(row) for row in conn.execute(evidence_stmt).mappings().all()]
+
+    evidence_by_event: Dict[int, List[Dict[str, Any]]] = {}
+    for evidence in evidence_rows:
+        evidence_by_event.setdefault(int(evidence["sentencing_event_id"]), []).append(evidence)
+
+    for event in event_rows:
+        event_id = int(event["id"])
+        event["evidence"] = evidence_by_event.get(event_id, [])
+
+    sentencing_judges = [row for row in judge_rows if row.get("role") == "sentencing"]
+
+    return {
+        "sentencing_events": event_rows,
+        "case_judges": judge_rows,
+        "sentencing_judges": sentencing_judges,
+    }

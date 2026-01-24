@@ -1,0 +1,119 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Sentencing events{% endblock %}
+
+{% block federal_content %}
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <h2>Sentencing events by judge</h2>
+        <p class="small">Filter sentencing outcomes using manually entered structured data with provenance.</p>
+      </div>
+    </div>
+
+    <form method="get" action="{{ url_for('admin_sentencing_events_report') }}" class="stack">
+      <div class="grid three">
+        <label>
+          <span>Judge</span>
+          <select name="judge_id">
+            <option value="">All judges</option>
+            {% for judge in judge_choices %}
+              <option value="{{ judge.id }}" {% if filters.judge_id == judge.id %}selected{% endif %}>
+                {{ judge.name_full }}{% if judge.court_id %} ({{ judge.court_id }}){% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Court</span>
+          <select name="court_id">
+            <option value="">All courts</option>
+            {% for court in available_courts %}
+              <option value="{{ court }}" {% if filters.court_id == court %}selected{% endif %}>{{ court }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Case type</span>
+          <select name="case_type">
+            <option value="">All types</option>
+            {% for case_type in available_case_types %}
+              <option value="{{ case_type }}" {% if filters.case_type == case_type %}selected{% endif %}>{{ case_type }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="grid two">
+        <label>
+          <span>Sentencing date from</span>
+          <input type="date" name="sentencing_date_from" value="{{ filters.sentencing_date_from.isoformat() if filters.sentencing_date_from else '' }}">
+        </label>
+        <label>
+          <span>Sentencing date to</span>
+          <input type="date" name="sentencing_date_to" value="{{ filters.sentencing_date_to.isoformat() if filters.sentencing_date_to else '' }}">
+        </label>
+      </div>
+      <div class="actions">
+        <button class="primary" type="submit">Apply filters</button>
+        <a class="pill" href="{{ url_for('admin_sentencing_events_report') }}">Reset</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <h3>Results</h3>
+        <p class="small">{{ rows|length }} sentencing event{{ '' if rows|length == 1 else 's' }}</p>
+      </div>
+    </div>
+
+    {% if rows %}
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Sentencing date</th>
+              <th>Judge</th>
+              <th>Court</th>
+              <th>Case</th>
+              <th>Type</th>
+              <th>Sentence (months)</th>
+              <th>Guideline range</th>
+              <th>Variance</th>
+              <th>Defendant</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td>{{ row.sentencing_date.isoformat() if row.sentencing_date else '—' }}</td>
+                <td>{{ row.judge_name }}{% if row.judge_confidence is not none %} <span class="small">({{ '%.2f'|format(row.judge_confidence) }})</span>{% endif %}</td>
+                <td>{{ row.court_id }}</td>
+                <td>
+                  <a href="{{ url_for('admin_pcl_case_detail', case_id=row.case_id) }}">
+                    {{ row.case_number_full or row.case_number }}
+                  </a>
+                  <div class="small">{{ row.short_title or 'Untitled case' }}</div>
+                </td>
+                <td>{{ row.case_type or '—' }}</td>
+                <td>{{ row.sentence_months }}</td>
+                <td>
+                  {% if row.guideline_range_low is not none or row.guideline_range_high is not none %}
+                    {{ row.guideline_range_low if row.guideline_range_low is not none else '?' }}–{{ row.guideline_range_high if row.guideline_range_high is not none else '?' }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>{{ row.variance_type or '—' }}</td>
+                <td>{{ row.defendant_identifier or '—' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="small">No sentencing events match the selected filters.</p>
+    {% endif %}
+  </section>
+{% endblock %}
