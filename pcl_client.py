@@ -56,6 +56,10 @@ class PclClient:
         page_num = max(1, int(page))
         return self._request_json_with_meta("POST", f"/cases/find?page={page_num}", payload)
 
+    def immediate_party_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
+        page_num = max(1, int(page))
+        return self._request_json_with_meta("POST", f"/parties/find?page={page_num}", payload)
+
     def _request_json(
         self, method: str, path: str, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:

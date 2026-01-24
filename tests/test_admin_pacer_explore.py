@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 
 from app import create_app
 from pacer_http import TokenExpired
@@ -23,6 +23,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.client = self.app.test_client()
         self.engine = self.app.engine
         self.courts_table = self.app.federal_courts_table
+        self.explore_runs_table = self.app.pcl_tables["pacer_explore_runs"]
         self._seed_courts()
         self._login_admin()
 
@@ -69,6 +70,7 @@ class AdminPacerExploreTests(unittest.TestCase):
     def _post_run(self, **overrides):
         payload = {
             "csrf_token": "csrf-token",
+            "mode": "cases",
             "court_id": "akd",
             "date_filed_from": "2024-01-01",
             "date_filed_to": "2024-01-31",
@@ -135,6 +137,12 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.assertIn("status_codes", html)
         self.assertNotIn("server-side-token", html)
 
+        with self.engine.begin() as conn:
+            runs = conn.execute(select(self.explore_runs_table)).mappings().all()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["mode"], "cases")
+        self.assertIsNone(runs[0]["error_summary"])
+
     def test_post_run_handles_401_and_406_errors(self):
         self._authorize_pacer()
 
@@ -157,6 +165,86 @@ class AdminPacerExploreTests(unittest.TestCase):
             self.assertIn("Copy debug bundle", html)
             self.assertIn("bad filter", html)
             self.assertNotIn("server-side-token", html)
+
+        with self.engine.begin() as conn:
+            runs = conn.execute(select(self.explore_runs_table)).mappings().all()
+        self.assertEqual(len(runs), 2)
+        self.assertTrue(any(run["error_summary"] for run in runs))
+
+    def test_post_run_creates_history_on_failed_run(self):
+        self._authorize_pacer()
+        error = PclApiError(406, "Invalid search", details={"message": "bad filter"})
+        with patch.object(self.app.pcl_client, "immediate_case_search", side_effect=error):
+            response = self._post_run(case_types=["cr"])
+        self.assertEqual(response.status_code, 200)
+
+        with self.engine.begin() as conn:
+            run = conn.execute(
+                select(self.explore_runs_table).order_by(self.explore_runs_table.c.id.desc())
+            ).mappings().first()
+        self.assertIsNotNone(run)
+        self.assertIn("Invalid search parameter", run["error_summary"])
+
+    def test_party_mode_renders_results_and_nested_fields(self):
+        self._authorize_pacer()
+        payload = {
+            "parties": [
+                {
+                    "lastName": "Doe",
+                    "firstName": "Jane",
+                    "partyType": "defendant",
+                    "courtCase": {
+                        "caseNumber": "1:24-cr-00003",
+                        "courtId": "akd",
+                        "judgeLastName": "Smith",
+                    },
+                }
+            ],
+            "receipt": {"billablePages": 1, "searchFee": 0.1},
+            "pageInfo": {"page": 1, "totalPages": 1, "totalRecords": 1},
+        }
+        fake_response = PclJsonResponse(status_code=200, payload=payload, raw_body=b"{}")
+
+        with patch.object(self.app.pcl_client, "immediate_party_search", return_value=fake_response):
+            response = self._post_run(
+                mode="parties",
+                last_name_prefix="doe",
+                first_name="jane",
+                court_id="akd",
+            )
+
+        html = response.data.decode("utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Returned parties", html)
+        self.assertIn("Doe", html)
+        self.assertIn("courtCase", html)
+        self.assertIn("judgeLastName", html)
+
+    def test_run_delete_is_admin_only(self):
+        with self.engine.begin() as conn:
+            run_id = conn.execute(
+                insert(self.explore_runs_table).values(
+                    mode="cases",
+                    court_id="akd",
+                    request_params={},
+                    pages_fetched=1,
+                )
+            ).inserted_primary_key[0]
+
+        anon_client = self.app.test_client()
+        response = anon_client.post(f"/admin/pacer/explore/runs/{run_id}/delete")
+        self.assertEqual(response.status_code, 302)
+
+        response = self.client.post(
+            f"/admin/pacer/explore/runs/{run_id}/delete",
+            data={"csrf_token": "csrf-token", "mode": "cases"},
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.engine.begin() as conn:
+            remaining = conn.execute(
+                select(self.explore_runs_table).where(self.explore_runs_table.c.id == run_id)
+            ).mappings().all()
+        self.assertEqual(remaining, [])
 
 
 if __name__ == "__main__":

@@ -1163,6 +1163,7 @@ def create_app() -> Flask:
     PCL_EXPLORE_DEFAULT_MAX_RECORDS = 54
     PCL_EXPLORE_MAX_PAGES = max(1, int(os.environ.get("PCL_EXPLORE_MAX_PAGES", "5")))
     PCL_EXPLORE_MAX_RECORDS = PCL_PAGE_SIZE * PCL_EXPLORE_MAX_PAGES
+    PCL_EXPLORE_RUN_RETENTION = 200
     PCL_CASE_TYPES = [
         ("cv", "Civil (cv)"),
         ("cr", "Criminal (cr)"),
@@ -1221,6 +1222,13 @@ def create_app() -> Flask:
                 return [item for item in value if isinstance(item, dict)]
         return []
 
+    def _extract_party_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        for key in ("parties", "partyList", "partyResults", "results", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
     def _is_non_empty(value: Any) -> bool:
         if value is None:
             return False
@@ -1249,6 +1257,16 @@ def create_app() -> Flask:
         observed.sort(key=lambda item: (-item["non_empty_count"], item["field"]))
         return observed
 
+    def _observed_party_fields(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        party_fields = _observed_fields(records)
+        court_cases = [
+            record.get("courtCase")
+            for record in records
+            if isinstance(record.get("courtCase"), dict)
+        ]
+        court_case_fields = _observed_fields(court_cases)
+        return {"party": party_fields, "court_case": court_case_fields}
+
     def _truncate_value(value: Any, max_len: int = 240) -> Any:
         if isinstance(value, str):
             cleaned = redact_tokens(value)
@@ -1267,15 +1285,18 @@ def create_app() -> Flask:
 
     def _build_debug_bundle(
         *,
+        mode: str,
         court_id: str,
         date_filed_from: str,
         date_filed_to: str,
+        last_name_prefix: Optional[str],
+        first_name: Optional[str],
         max_records: int,
         pages_requested: int,
         pages_fetched: int,
         request_body: Dict[str, Any],
         status_codes: Sequence[int],
-        cases: Sequence[Dict[str, Any]],
+        records: Sequence[Dict[str, Any]],
         page_infos: Sequence[Dict[str, Any]],
         truncated_notice: Optional[str],
         error_message: Optional[str],
@@ -1283,9 +1304,12 @@ def create_app() -> Flask:
     ) -> str:
         bundle = {
             "inputs": {
+                "mode": mode,
                 "court_id": court_id,
                 "date_filed_from": date_filed_from,
                 "date_filed_to": date_filed_to,
+                "last_name_prefix": last_name_prefix,
+                "first_name": first_name,
                 "max_records": max_records,
                 "page_size": PCL_PAGE_SIZE,
                 "pages_requested": pages_requested,
@@ -1297,10 +1321,125 @@ def create_app() -> Flask:
             "truncated_notice": truncated_notice,
             "error_message": error_message,
             "response_snippets": list(response_snippets),
-            "case_samples": [_truncate_value(case) for case in list(cases)[:3]],
+            "record_samples": [_truncate_value(record) for record in list(records)[:3]],
         }
         return json.dumps(bundle, indent=2, sort_keys=True, default=str)
 
+    def _apply_pacer_explore_run_retention(conn) -> None:
+        pacer_explore_runs = pcl_tables["pacer_explore_runs"]
+        stale_ids = (
+            select(pacer_explore_runs.c.id)
+            .order_by(
+                pacer_explore_runs.c.created_at.desc(),
+                pacer_explore_runs.c.id.desc(),
+            )
+            .offset(PCL_EXPLORE_RUN_RETENTION)
+        )
+        conn.execute(
+            delete(pacer_explore_runs).where(pacer_explore_runs.c.id.in_(stale_ids))
+        )
+
+    def _store_pacer_explore_run(
+        *,
+        mode: str,
+        court_id: Optional[str],
+        date_from: Optional[datetime.date],
+        date_to: Optional[datetime.date],
+        request_params: Dict[str, Any],
+        pages_fetched: int,
+        receipts: Sequence[Dict[str, Any]],
+        observed_fields: Optional[Any],
+        error_summary: Optional[str],
+    ) -> None:
+        pacer_explore_runs = pcl_tables["pacer_explore_runs"]
+        sanitized_request_params = _truncate_value(request_params)
+        sanitized_receipts = _truncate_value(list(receipts)) if receipts else []
+        payload = {
+            "created_by": None,
+            "mode": mode,
+            "court_id": court_id,
+            "date_from": date_from,
+            "date_to": date_to,
+            "request_params": sanitized_request_params,
+            "pages_fetched": pages_fetched,
+            "receipts": sanitized_receipts,
+            "observed_fields": observed_fields,
+            "error_summary": error_summary,
+        }
+        with engine.begin() as conn:
+            conn.execute(insert(pacer_explore_runs).values(payload))
+            _apply_pacer_explore_run_retention(conn)
+
+    def _load_pacer_explore_runs(limit: int = 12) -> List[Dict[str, Any]]:
+        pacer_explore_runs = pcl_tables["pacer_explore_runs"]
+        stmt = (
+            select(pacer_explore_runs)
+            .order_by(
+                pacer_explore_runs.c.created_at.desc(),
+                pacer_explore_runs.c.id.desc(),
+            )
+            .limit(limit)
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        runs = []
+        for row in rows:
+            created_at = row.get("created_at")
+            runs.append(
+                {
+                    **row,
+                    "created_at_display": (
+                        created_at.isoformat().replace("T", " ")
+                        if isinstance(created_at, datetime)
+                        else str(created_at or "")
+                    ),
+                }
+            )
+        return runs
+
+    def _build_next_steps(
+        *,
+        status_codes: Sequence[int],
+        observed_fields: Sequence[Dict[str, Any]],
+        nested_observed_fields: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        def coverage_for(field: str, fields: Sequence[Dict[str, Any]]) -> float:
+            for row in fields:
+                if row.get("field") == field:
+                    return float(row.get("coverage") or 0.0)
+            return 0.0
+
+        combined_fields = list(observed_fields)
+        if nested_observed_fields:
+            combined_fields.extend(nested_observed_fields)
+
+        judge_coverage = max(
+            coverage_for("judgeLastName", combined_fields),
+            coverage_for("judge_last_name", combined_fields),
+        )
+        sparse_fields = False
+        if combined_fields:
+            low_coverage = sum(1 for row in combined_fields if (row.get("coverage") or 0) < 0.2)
+            sparse_fields = (low_coverage / len(combined_fields)) >= 0.4
+
+        return [
+            {
+                "label": "If judgeLastName is present and non-empty in many records, plan a judge normalization strategy.",
+                "active": judge_coverage >= 0.5,
+            },
+            {
+                "label": "If fields are frequently empty, consider court system enrichment for docket-level data.",
+                "active": sparse_fields,
+            },
+            {
+                "label": "If 401 occurs, re-authorize before retrying.",
+                "active": 401 in status_codes,
+            },
+            {
+                "label": "If 406 occurs, copy the debug bundle and open a fix request.",
+                "active": 406 in status_codes,
+            },
+        ]
     def _normalize_party_def_num(value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
@@ -2962,6 +3101,24 @@ def create_app() -> Flask:
     @admin_required
     def admin_pacer_explore():
         pacer_session = _get_pacer_session()
+        mode = (request.args.get("mode") or "cases").strip().lower()
+        if mode not in {"cases", "parties"}:
+            mode = "cases"
+        case_defaults = {
+            "date_filed_from": "",
+            "date_filed_to": "",
+            "court_id": "",
+            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+            "case_types": [],
+        }
+        party_defaults = {
+            "last_name_prefix": "",
+            "first_name": "",
+            "date_filed_from": "",
+            "date_filed_to": "",
+            "court_id": "",
+            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+        }
         return render_template(
             "admin_pacer_explore.html",
             active_page="federal_data_dashboard",
@@ -2972,18 +3129,16 @@ def create_app() -> Flask:
             pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
             courts=_load_court_choices(),
             case_type_choices=PCL_CASE_TYPES,
-            defaults={
-                "date_filed_from": "",
-                "date_filed_to": "",
-                "court_id": "",
-                "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
-                "case_types": [],
-            },
+            mode=mode,
+            case_defaults=case_defaults,
+            party_defaults=party_defaults,
             explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
             explore_page_size=PCL_PAGE_SIZE,
             explore_max_records=PCL_EXPLORE_MAX_RECORDS,
             run_result=None,
-            form_values=None,
+            case_values=None,
+            party_values=None,
+            run_history=_load_pacer_explore_runs(),
         )
 
     @app.post("/admin/pacer/explore/run")
@@ -2993,24 +3148,65 @@ def create_app() -> Flask:
         pacer_session = _get_pacer_session()
         courts = _load_court_choices()
         court_ids = {row["court_id"] for row in courts}
-        form_values = {
-            "court_id": (request.form.get("court_id") or "").strip(),
-            "date_filed_from": (request.form.get("date_filed_from") or "").strip(),
-            "date_filed_to": (request.form.get("date_filed_to") or "").strip(),
-            "max_records": (request.form.get("max_records") or "").strip(),
-            "case_types": request.form.getlist("case_types"),
+        mode = (request.form.get("mode") or "cases").strip().lower()
+        if mode not in {"cases", "parties"}:
+            mode = "cases"
+
+        case_defaults = {
+            "date_filed_from": "",
+            "date_filed_to": "",
+            "court_id": "",
+            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+            "case_types": [],
         }
-        max_records, max_records_warning = _clamp_max_records(form_values["max_records"])
+        party_defaults = {
+            "last_name_prefix": "",
+            "first_name": "",
+            "date_filed_from": "",
+            "date_filed_to": "",
+            "court_id": "",
+            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+        }
+
+        case_values = None
+        party_values = None
+        if mode == "cases":
+            case_values = {
+                "court_id": (request.form.get("court_id") or "").strip(),
+                "date_filed_from": (request.form.get("date_filed_from") or "").strip(),
+                "date_filed_to": (request.form.get("date_filed_to") or "").strip(),
+                "max_records": (request.form.get("max_records") or "").strip(),
+                "case_types": request.form.getlist("case_types"),
+            }
+            max_records, max_records_warning = _clamp_max_records(
+                case_values["max_records"]
+            )
+        else:
+            party_values = {
+                "last_name_prefix": (request.form.get("last_name_prefix") or "").strip(),
+                "first_name": (request.form.get("first_name") or "").strip(),
+                "date_filed_from": (request.form.get("date_filed_from") or "").strip(),
+                "date_filed_to": (request.form.get("date_filed_to") or "").strip(),
+                "court_id": (request.form.get("court_id") or "").strip(),
+                "max_records": (request.form.get("max_records") or "").strip(),
+            }
+            max_records, max_records_warning = _clamp_max_records(
+                party_values["max_records"]
+            )
 
         run_result: Dict[str, Any] = {
             "status": "error",
+            "mode": mode,
             "errors": [],
             "warnings": [],
             "logs": [],
             "receipts": [],
             "page_infos": [],
             "cases": [],
+            "parties": [],
             "observed_fields": [],
+            "party_observed_fields": [],
+            "court_case_observed_fields": [],
             "cost_summary": {"billable_pages": 0, "fee_totals": {}},
             "debug_bundle": "",
             "response_snippets": [],
@@ -3018,61 +3214,138 @@ def create_app() -> Flask:
             "pages_fetched": 0,
             "truncated_notice": None,
             "endpoint": "",
+            "next_steps": [],
         }
+
+        request_body: Dict[str, Any] = {}
+        pages_requested = 0
+        pages_to_fetch = 0
+        truncated_notice = None
+        date_from: Optional[datetime.date] = None
+        date_to: Optional[datetime.date] = None
+
+        def render_response(pacer_authorized: bool) -> str:
+            return render_template(
+                "admin_pacer_explore.html",
+                active_page="federal_data_dashboard",
+                active_subnav="explore_pacer",
+                csrf_token=get_csrf_token(),
+                pacer_authorized=pacer_authorized,
+                pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
+                pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+                courts=courts,
+                case_type_choices=PCL_CASE_TYPES,
+                mode=mode,
+                case_defaults=case_defaults,
+                party_defaults=party_defaults,
+                explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
+                explore_page_size=PCL_PAGE_SIZE,
+                explore_max_records=PCL_EXPLORE_MAX_RECORDS,
+                run_result=run_result,
+                case_values=case_values,
+                party_values=party_values,
+                run_history=_load_pacer_explore_runs(),
+            )
 
         if not pacer_session:
             run_result["errors"].append(
                 "PACER authorization is required. Next step: click Authorize on the Get PACER Data page."
             )
             run_result["debug_bundle"] = _build_debug_bundle(
-                court_id=form_values["court_id"],
-                date_filed_from=form_values["date_filed_from"],
-                date_filed_to=form_values["date_filed_to"],
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id", ""),
+                date_filed_from=(case_values or party_values or {}).get(
+                    "date_filed_from", ""
+                ),
+                date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
                 pages_requested=0,
                 pages_fetched=0,
                 request_body={},
                 status_codes=[],
-                cases=[],
+                records=[],
                 page_infos=[],
                 truncated_notice=None,
                 error_message=run_result["errors"][0],
                 response_snippets=[],
             )
-            return render_template(
-                "admin_pacer_explore.html",
-                active_page="federal_data_dashboard",
-                active_subnav="explore_pacer",
-                csrf_token=get_csrf_token(),
-                pacer_authorized=False,
-                pacer_authorized_at=None,
-                pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
-                courts=courts,
-                case_type_choices=PCL_CASE_TYPES,
-                defaults=None,
-                explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
-                explore_page_size=PCL_PAGE_SIZE,
-                explore_max_records=PCL_EXPLORE_MAX_RECORDS,
-                run_result=run_result,
-                form_values=form_values,
+            request_params = {
+                "mode": mode,
+                "max_records": max_records,
+                "page_size": PCL_PAGE_SIZE,
+                "request_body": {},
+                "response_samples": [],
+            }
+            if mode == "cases" and case_values:
+                request_params.update(
+                    {
+                        "court_id": case_values["court_id"],
+                        "date_filed_from": case_values["date_filed_from"],
+                        "date_filed_to": case_values["date_filed_to"],
+                        "case_types": case_values["case_types"],
+                    }
+                )
+            elif party_values:
+                request_params.update(
+                    {
+                        "court_id": party_values["court_id"],
+                        "last_name_prefix": party_values["last_name_prefix"],
+                        "first_name": party_values["first_name"],
+                        "date_filed_from": party_values["date_filed_from"],
+                        "date_filed_to": party_values["date_filed_to"],
+                    }
+                )
+            _store_pacer_explore_run(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id"),
+                date_from=None,
+                date_to=None,
+                request_params=request_params,
+                pages_fetched=0,
+                receipts=[],
+                observed_fields=None,
+                error_summary=run_result["errors"][0],
             )
+            return render_response(False)
 
-        if form_values["court_id"] not in court_ids:
-            run_result["errors"].append("Select a valid court from the list.")
+        if mode == "cases":
+            if case_values["court_id"] not in court_ids:
+                run_result["errors"].append("Select a valid court from the list.")
 
-        date_from = _parse_iso_date(form_values["date_filed_from"])
-        date_to = _parse_iso_date(form_values["date_filed_to"])
-        if not date_from or not date_to:
-            run_result["errors"].append("Enter a valid date filed range using YYYY-MM-DD.")
-        elif date_from > date_to:
-            run_result["errors"].append("Date filed from must be on or before date filed to.")
+            date_from = _parse_iso_date(case_values["date_filed_from"])
+            date_to = _parse_iso_date(case_values["date_filed_to"])
+            if not date_from or not date_to:
+                run_result["errors"].append(
+                    "Enter a valid date filed range using YYYY-MM-DD."
+                )
+            elif date_from > date_to:
+                run_result["errors"].append(
+                    "Date filed from must be on or before date filed to."
+                )
+        else:
+            if party_values["court_id"] and party_values["court_id"] not in court_ids:
+                run_result["errors"].append("Select a valid court from the list.")
+            if not party_values["last_name_prefix"]:
+                run_result["errors"].append("Last name prefix is required.")
+            date_from = _parse_iso_date(party_values["date_filed_from"])
+            date_to = _parse_iso_date(party_values["date_filed_to"])
+            if party_values["date_filed_from"] or party_values["date_filed_to"]:
+                if not date_from or not date_to:
+                    run_result["errors"].append(
+                        "Enter a valid filed date range using YYYY-MM-DD."
+                    )
+                elif date_from > date_to:
+                    run_result["errors"].append(
+                        "Date filed from must be on or before date filed to."
+                    )
 
         if max_records_warning:
             run_result["warnings"].append(max_records_warning)
 
         pages_requested = max(1, math.ceil(max_records / PCL_PAGE_SIZE))
         pages_to_fetch = min(pages_requested, PCL_EXPLORE_MAX_PAGES)
-        truncated_notice = None
         if pages_to_fetch < pages_requested:
             truncated_notice = (
                 f"Requested {pages_requested} pages but safety cap limited the run to "
@@ -3080,65 +3353,119 @@ def create_app() -> Flask:
             )
             run_result["warnings"].append(truncated_notice)
 
-        request_body: Dict[str, Any] = {
-            "courtId": [form_values["court_id"]],
-            "dateFiledFrom": form_values["date_filed_from"],
-            "dateFiledTo": form_values["date_filed_to"],
-            "pageSize": PCL_PAGE_SIZE,
-        }
-        case_types = [value for value in form_values["case_types"] if value]
-        if case_types:
-            request_body["caseType"] = case_types
+        if mode == "cases":
+            request_body = {
+                "courtId": [case_values["court_id"]],
+                "dateFiledFrom": case_values["date_filed_from"],
+                "dateFiledTo": case_values["date_filed_to"],
+                "pageSize": PCL_PAGE_SIZE,
+            }
+            case_types = [value for value in case_values["case_types"] if value]
+            if case_types:
+                request_body["caseType"] = case_types
+        else:
+            request_body = {
+                "lastNamePrefix": party_values["last_name_prefix"],
+                "pageSize": PCL_PAGE_SIZE,
+            }
+            if party_values["first_name"]:
+                request_body["firstName"] = party_values["first_name"]
+            if party_values["court_id"]:
+                request_body["courtId"] = [party_values["court_id"]]
+            if date_from and date_to:
+                request_body["dateFiledFrom"] = party_values["date_filed_from"]
+                request_body["dateFiledTo"] = party_values["date_filed_to"]
 
         if run_result["errors"]:
             run_result["debug_bundle"] = _build_debug_bundle(
-                court_id=form_values["court_id"],
-                date_filed_from=form_values["date_filed_from"],
-                date_filed_to=form_values["date_filed_to"],
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id", ""),
+                date_filed_from=(case_values or party_values or {}).get(
+                    "date_filed_from", ""
+                ),
+                date_filed_to=(case_values or party_values or {}).get(
+                    "date_filed_to", ""
+                ),
+                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
                 pages_requested=pages_requested,
                 pages_fetched=0,
                 request_body=request_body,
                 status_codes=[],
-                cases=[],
+                records=[],
                 page_infos=[],
                 truncated_notice=truncated_notice,
                 error_message="; ".join(run_result["errors"]),
                 response_snippets=[],
             )
-            return render_template(
-                "admin_pacer_explore.html",
-                active_page="federal_data_dashboard",
-                active_subnav="explore_pacer",
-                csrf_token=get_csrf_token(),
-                pacer_authorized=True,
-                pacer_authorized_at=pacer_session.get("authorized_at"),
-                pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
-                courts=courts,
-                case_type_choices=PCL_CASE_TYPES,
-                defaults=None,
-                explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
-                explore_page_size=PCL_PAGE_SIZE,
-                explore_max_records=PCL_EXPLORE_MAX_RECORDS,
-                run_result=run_result,
-                form_values=form_values,
+            request_params = {
+                "mode": mode,
+                "max_records": max_records,
+                "pages_requested": pages_requested,
+                "page_size": PCL_PAGE_SIZE,
+                "request_body": request_body,
+                "response_samples": [],
+            }
+            if mode == "cases":
+                request_params.update(
+                    {
+                        "court_id": case_values["court_id"],
+                        "date_filed_from": case_values["date_filed_from"],
+                        "date_filed_to": case_values["date_filed_to"],
+                        "case_types": case_values["case_types"],
+                    }
+                )
+            else:
+                request_params.update(
+                    {
+                        "court_id": party_values["court_id"],
+                        "last_name_prefix": party_values["last_name_prefix"],
+                        "first_name": party_values["first_name"],
+                        "date_filed_from": party_values["date_filed_from"],
+                        "date_filed_to": party_values["date_filed_to"],
+                    }
+                )
+            _store_pacer_explore_run(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id"),
+                date_from=date_from,
+                date_to=date_to,
+                request_params=request_params,
+                pages_fetched=0,
+                receipts=[],
+                observed_fields=None,
+                error_summary="; ".join(run_result["errors"]),
             )
+            return render_response(True)
 
-        endpoint_base = f"{pcl_base_url}/cases/find"
+        endpoint_base = (
+            f"{pcl_base_url}/cases/find"
+            if mode == "cases"
+            else f"{pcl_base_url}/parties/find"
+        )
         status_codes: List[int] = []
         response_snippets: List[Dict[str, Any]] = []
-        all_cases: List[Dict[str, Any]] = []
+        all_records: List[Dict[str, Any]] = []
         receipts: List[Dict[str, Any]] = []
         page_infos: List[Dict[str, Any]] = []
         logs: List[Dict[str, Any]] = []
 
-        app.logger.info(
-            "PACER explore run court=%s date_from=%s date_to=%s pages=%s",
-            form_values["court_id"],
-            form_values["date_filed_from"],
-            form_values["date_filed_to"],
-            pages_to_fetch,
-        )
+        if mode == "cases":
+            app.logger.info(
+                "PACER explore run mode=cases court=%s date_from=%s date_to=%s pages=%s",
+                case_values["court_id"],
+                case_values["date_filed_from"],
+                case_values["date_filed_to"],
+                pages_to_fetch,
+            )
+        else:
+            app.logger.info(
+                "PACER explore run mode=parties court=%s last_name_prefix=%s pages=%s",
+                party_values["court_id"],
+                party_values["last_name_prefix"],
+                pages_to_fetch,
+            )
 
         error_message: Optional[str] = None
         error_details: Optional[str] = None
@@ -3148,7 +3475,10 @@ def create_app() -> Flask:
             endpoint_url = f"{endpoint_base}?page={page_num}"
             started = time.perf_counter()
             try:
-                response: PclJsonResponse = pcl_client.immediate_case_search(page_num, request_body)
+                if mode == "cases":
+                    response = pcl_client.immediate_case_search(page_num, request_body)
+                else:
+                    response = pcl_client.immediate_party_search(page_num, request_body)
                 elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                 payload = response.payload
                 status_codes.append(response.status_code)
@@ -3160,14 +3490,34 @@ def create_app() -> Flask:
                         "snippet": _truncate_value(payload),
                     }
                 )
-                cases_page = _extract_case_records(payload)
-                all_cases.extend(cases_page)
+                if mode == "cases":
+                    page_records = _extract_case_records(payload)
+                else:
+                    page_records = _extract_party_records(payload)
+                all_records.extend(page_records)
                 receipt = payload.get("receipt") or payload.get("receiptData")
                 if isinstance(receipt, dict):
                     receipts.append({"page": page_num, "receipt": receipt})
                 page_info = payload.get("pageInfo")
                 if isinstance(page_info, dict):
                     page_infos.append({"page": page_num, "page_info": page_info})
+                if mode == "cases":
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "caseType": request_body.get("caseType", []),
+                        "pageSize": request_body.get("pageSize"),
+                    }
+                else:
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "firstName": request_body.get("firstName"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "pageSize": request_body.get("pageSize"),
+                    }
                 logs.append(
                     {
                         "page": page_num,
@@ -3175,13 +3525,7 @@ def create_app() -> Flask:
                         "endpoint": endpoint_url,
                         "status_code": response.status_code,
                         "elapsed_ms": elapsed_ms,
-                        "request_summary": {
-                            "courtId": request_body.get("courtId"),
-                            "dateFiledFrom": request_body.get("dateFiledFrom"),
-                            "dateFiledTo": request_body.get("dateFiledTo"),
-                            "caseType": request_body.get("caseType", []),
-                            "pageSize": request_body.get("pageSize"),
-                        },
+                        "request_summary": request_summary,
                     }
                 )
             except TokenExpired:
@@ -3190,6 +3534,23 @@ def create_app() -> Flask:
                     "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
                 )
                 status_codes.append(401)
+                if mode == "cases":
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "caseType": request_body.get("caseType", []),
+                        "pageSize": request_body.get("pageSize"),
+                    }
+                else:
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "firstName": request_body.get("firstName"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "pageSize": request_body.get("pageSize"),
+                    }
                 logs.append(
                     {
                         "page": page_num,
@@ -3197,13 +3558,7 @@ def create_app() -> Flask:
                         "endpoint": endpoint_url,
                         "status_code": 401,
                         "elapsed_ms": elapsed_ms,
-                        "request_summary": {
-                            "courtId": request_body.get("courtId"),
-                            "dateFiledFrom": request_body.get("dateFiledFrom"),
-                            "dateFiledTo": request_body.get("dateFiledTo"),
-                            "caseType": request_body.get("caseType", []),
-                            "pageSize": request_body.get("pageSize"),
-                        },
+                        "request_summary": request_summary,
                     }
                 )
                 response_snippets.append(
@@ -3238,6 +3593,23 @@ def create_app() -> Flask:
                 else:
                     error_message = f"PCL request failed with status {exc.status_code}."
                 error_details = exc.message
+                if mode == "cases":
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "caseType": request_body.get("caseType", []),
+                        "pageSize": request_body.get("pageSize"),
+                    }
+                else:
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "firstName": request_body.get("firstName"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "pageSize": request_body.get("pageSize"),
+                    }
                 logs.append(
                     {
                         "page": page_num,
@@ -3245,13 +3617,7 @@ def create_app() -> Flask:
                         "endpoint": endpoint_url,
                         "status_code": exc.status_code,
                         "elapsed_ms": elapsed_ms,
-                        "request_summary": {
-                            "courtId": request_body.get("courtId"),
-                            "dateFiledFrom": request_body.get("dateFiledFrom"),
-                            "dateFiledTo": request_body.get("dateFiledTo"),
-                            "caseType": request_body.get("caseType", []),
-                            "pageSize": request_body.get("pageSize"),
-                        },
+                        "request_summary": request_summary,
                     }
                 )
                 break
@@ -3261,6 +3627,23 @@ def create_app() -> Flask:
                 error_details = str(exc)
                 trace_text = traceback.format_exc()
                 status_codes.append(0)
+                if mode == "cases":
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "caseType": request_body.get("caseType", []),
+                        "pageSize": request_body.get("pageSize"),
+                    }
+                else:
+                    request_summary = {
+                        "courtId": request_body.get("courtId"),
+                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "firstName": request_body.get("firstName"),
+                        "dateFiledFrom": request_body.get("dateFiledFrom"),
+                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "pageSize": request_body.get("pageSize"),
+                    }
                 logs.append(
                     {
                         "page": page_num,
@@ -3268,13 +3651,7 @@ def create_app() -> Flask:
                         "endpoint": endpoint_url,
                         "status_code": 0,
                         "elapsed_ms": elapsed_ms,
-                        "request_summary": {
-                            "courtId": request_body.get("courtId"),
-                            "dateFiledFrom": request_body.get("dateFiledFrom"),
-                            "dateFiledTo": request_body.get("dateFiledTo"),
-                            "caseType": request_body.get("caseType", []),
-                            "pageSize": request_body.get("pageSize"),
-                        },
+                        "request_summary": request_summary,
                     }
                 )
                 response_snippets.append(
@@ -3288,8 +3665,16 @@ def create_app() -> Flask:
                 app.logger.exception("Unexpected PACER explore error.")
                 break
 
-        cases_limited = all_cases[:max_records]
-        observed_fields = _observed_fields(cases_limited)
+        records_limited = all_records[:max_records]
+        observed_fields: Sequence[Dict[str, Any]] = []
+        party_observed_fields: Sequence[Dict[str, Any]] = []
+        court_case_observed_fields: Sequence[Dict[str, Any]] = []
+        if mode == "cases":
+            observed_fields = _observed_fields(records_limited)
+        else:
+            party_field_report = _observed_party_fields(records_limited)
+            party_observed_fields = party_field_report["party"]
+            court_case_observed_fields = party_field_report["court_case"]
 
         billable_pages_total = 0
         fee_totals: Dict[str, float] = {}
@@ -3305,9 +3690,9 @@ def create_app() -> Flask:
                     fee_totals[str(key)] = fee_totals.get(str(key), 0.0) + float(value)
 
         pages_fetched = len({log["page"] for log in logs})
-        if pages_fetched and len(all_cases) > max_records and not truncated_notice:
+        if pages_fetched and len(all_records) > max_records and not truncated_notice:
             truncated_notice = (
-                f"Showing the first {max_records} records out of {len(all_cases)} returned."
+                f"Showing the first {max_records} records out of {len(all_records)} returned."
             )
             run_result["warnings"].append(truncated_notice)
 
@@ -3322,8 +3707,11 @@ def create_app() -> Flask:
                 "logs": logs,
                 "receipts": receipts,
                 "page_infos": page_infos,
-                "cases": cases_limited,
+                "cases": records_limited if mode == "cases" else [],
+                "parties": records_limited if mode == "parties" else [],
                 "observed_fields": observed_fields,
+                "party_observed_fields": party_observed_fields,
+                "court_case_observed_fields": court_case_observed_fields,
                 "cost_summary": {
                     "billable_pages": billable_pages_total,
                     "fee_totals": fee_totals,
@@ -3337,15 +3725,18 @@ def create_app() -> Flask:
         )
 
         run_result["debug_bundle"] = _build_debug_bundle(
-            court_id=form_values["court_id"],
-            date_filed_from=form_values["date_filed_from"],
-            date_filed_to=form_values["date_filed_to"],
+            mode=mode,
+            court_id=(case_values or party_values or {}).get("court_id", ""),
+            date_filed_from=(case_values or party_values or {}).get("date_filed_from", ""),
+            date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+            last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+            first_name=party_values.get("first_name") if party_values else None,
             max_records=max_records,
             pages_requested=pages_requested,
             pages_fetched=pages_fetched,
             request_body=request_body,
             status_codes=status_codes,
-            cases=cases_limited,
+            records=records_limited,
             page_infos=page_infos,
             truncated_notice=truncated_notice,
             error_message="\n".join(run_result["errors"]) if run_result["errors"] else None,
@@ -3354,23 +3745,77 @@ def create_app() -> Flask:
         if trace_text and run_result["errors"]:
             run_result["debug_bundle"] += f"\n\ntraceback:\n{trace_text}"
 
-        return render_template(
-            "admin_pacer_explore.html",
-            active_page="federal_data_dashboard",
-            active_subnav="explore_pacer",
-            csrf_token=get_csrf_token(),
-            pacer_authorized=True,
-            pacer_authorized_at=pacer_session.get("authorized_at"),
-            pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
-            courts=courts,
-            case_type_choices=PCL_CASE_TYPES,
-            defaults=None,
-            explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
-            explore_page_size=PCL_PAGE_SIZE,
-            explore_max_records=PCL_EXPLORE_MAX_RECORDS,
-            run_result=run_result,
-            form_values=form_values,
+        if mode == "cases":
+            run_result["next_steps"] = _build_next_steps(
+                status_codes=status_codes,
+                observed_fields=observed_fields,
+            )
+        else:
+            run_result["next_steps"] = _build_next_steps(
+                status_codes=status_codes,
+                observed_fields=party_observed_fields,
+                nested_observed_fields=court_case_observed_fields,
+            )
+
+        request_params = {
+            "mode": mode,
+            "max_records": max_records,
+            "pages_requested": pages_requested,
+            "page_size": PCL_PAGE_SIZE,
+            "request_body": request_body,
+            "response_samples": response_snippets[:3],
+        }
+        if mode == "cases":
+            request_params.update(
+                {
+                    "court_id": case_values["court_id"],
+                    "date_filed_from": case_values["date_filed_from"],
+                    "date_filed_to": case_values["date_filed_to"],
+                    "case_types": case_values["case_types"],
+                }
+            )
+            observed_fields_payload: Optional[Any] = observed_fields
+        else:
+            request_params.update(
+                {
+                    "court_id": party_values["court_id"],
+                    "last_name_prefix": party_values["last_name_prefix"],
+                    "first_name": party_values["first_name"],
+                    "date_filed_from": party_values["date_filed_from"],
+                    "date_filed_to": party_values["date_filed_to"],
+                }
+            )
+            observed_fields_payload = {
+                "party": party_observed_fields,
+                "court_case": court_case_observed_fields,
+            }
+
+        _store_pacer_explore_run(
+            mode=mode,
+            court_id=(case_values or party_values or {}).get("court_id"),
+            date_from=date_from,
+            date_to=date_to,
+            request_params=request_params,
+            pages_fetched=pages_fetched,
+            receipts=receipts,
+            observed_fields=observed_fields_payload,
+            error_summary="\n".join(run_result["errors"]) if run_result["errors"] else None,
         )
+
+        return render_response(True)
+
+    @app.post("/admin/pacer/explore/runs/<int:run_id>/delete")
+    @admin_required
+    def admin_pacer_explore_run_delete(run_id: int):
+        require_csrf()
+        pacer_explore_runs = pcl_tables["pacer_explore_runs"]
+        with engine.begin() as conn:
+            conn.execute(delete(pacer_explore_runs).where(pacer_explore_runs.c.id == run_id))
+        flash("Explore PACER run deleted.", "success")
+        mode = (request.form.get("mode") or "cases").strip().lower()
+        if mode not in {"cases", "parties"}:
+            mode = "cases"
+        return redirect(url_for("admin_pacer_explore", mode=mode))
 
     @app.get("/admin/federal-data-dashboard/federal-courts")
     @admin_required
