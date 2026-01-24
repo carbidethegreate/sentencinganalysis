@@ -6,7 +6,7 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import Table, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from pacer_http import TokenExpired
 from pcl_client import PclApiError, PclClient
 
-CRIMINAL_CASE_TYPES = {"cr"}
+CRIMINAL_CASE_TYPES = {"cr", "crim", "ncrim", "dcrim"}
 PCL_BATCH_CAP = 108000
 
 
@@ -58,6 +58,8 @@ class PclBatchPlanner:
                         "court_id": court_id,
                         "date_filed_from": segment.date_filed_from,
                         "date_filed_to": segment.date_filed_to,
+                        "segment_from": segment.date_filed_from,
+                        "segment_to": segment.date_filed_to,
                         "case_types": payload,
                         "status": "queued",
                     }
@@ -92,6 +94,8 @@ class PclBatchPlanner:
                         court_id=segment_row["court_id"],
                         date_filed_from=segment.date_filed_from,
                         date_filed_to=segment.date_filed_to,
+                        segment_from=segment.date_filed_from,
+                        segment_to=segment.date_filed_to,
                         case_types=segment_row["case_types"],
                         status="queued",
                         error_message=reason,
@@ -277,13 +281,12 @@ class PclBatchWorker:
                     continue
                 normalized["last_segment_id"] = segment["id"]
                 record_hash = normalized["record_hash"]
-                raw_payload = json.dumps(record, sort_keys=True)
                 self._insert_raw_record(
                     conn,
                     segment,
                     report_id,
                     record_hash,
-                    raw_payload,
+                    record,
                     normalized,
                 )
                 self._upsert_case(conn, normalized)
@@ -310,13 +313,14 @@ class PclBatchWorker:
         segment: Dict[str, Any],
         report_id: str,
         record_hash: str,
-        payload_json: str,
+        payload_json: Dict[str, Any],
         normalized: Dict[str, Any],
     ) -> None:
         raw_table = self._tables["pcl_case_result_raw"]
         insert_stmt = insert(raw_table).values(
             segment_id=segment["id"],
             report_id=report_id,
+            ingested_at=self._now(),
             court_id=normalized.get("court_id"),
             case_number=normalized.get("case_number"),
             record_hash=record_hash,
@@ -343,9 +347,15 @@ class PclBatchWorker:
                     "case_type": stmt.excluded.case_type,
                     "date_filed": stmt.excluded.date_filed,
                     "date_closed": stmt.excluded.date_closed,
+                    "effective_date_closed": stmt.excluded.effective_date_closed,
                     "short_title": stmt.excluded.short_title,
                     "case_title": stmt.excluded.case_title,
+                    "case_link": stmt.excluded.case_link,
+                    "case_year": stmt.excluded.case_year,
+                    "case_office": stmt.excluded.case_office,
                     "judge_last_name": stmt.excluded.judge_last_name,
+                    "case_id": stmt.excluded.case_id,
+                    "source_last_seen_at": stmt.excluded.source_last_seen_at,
                     "record_hash": stmt.excluded.record_hash,
                     "last_segment_id": stmt.excluded.last_segment_id,
                     "data_json": stmt.excluded.data_json,
@@ -369,9 +379,15 @@ class PclBatchWorker:
                     case_type=normalized["case_type"],
                     date_filed=normalized["date_filed"],
                     date_closed=normalized["date_closed"],
+                    effective_date_closed=normalized["effective_date_closed"],
                     short_title=normalized["short_title"],
                     case_title=normalized["case_title"],
+                    case_link=normalized["case_link"],
+                    case_year=normalized["case_year"],
+                    case_office=normalized["case_office"],
                     judge_last_name=normalized["judge_last_name"],
+                    case_id=normalized["case_id"],
+                    source_last_seen_at=normalized["source_last_seen_at"],
                     record_hash=normalized["record_hash"],
                     last_segment_id=normalized["last_segment_id"],
                     data_json=normalized["data_json"],
@@ -482,7 +498,10 @@ def _normalize_case_record(record: Dict[str, Any], default_court_id: str) -> Dic
     court_id = record.get("courtId") or record.get("court_id") or default_court_id
     date_filed = _parse_date(record.get("dateFiled") or record.get("date_filed"))
     date_closed = _parse_date(record.get("dateClosed") or record.get("date_closed"))
-    case_type = record.get("caseType") or record.get("case_type")
+    case_type_raw = record.get("caseType") or record.get("case_type")
+    case_type = str(case_type_raw).strip().lower() if case_type_raw else None
+    if case_type and case_type not in CRIMINAL_CASE_TYPES:
+        return {}
     short_title = (
         record.get("shortTitle")
         or record.get("short_title")
@@ -500,6 +519,12 @@ def _normalize_case_record(record: Dict[str, Any], default_court_id: str) -> Dic
         or record.get("fullCaseNumber")
         or case_number
     )
+    case_id = record.get("caseId") or record.get("case_id")
+    case_link = record.get("caseLink") or record.get("case_link")
+    effective_date_closed = _parse_date(
+        record.get("effectiveDateClosed") or record.get("effective_date_closed")
+    )
+    case_office, case_year, _ = _parse_case_number_parts(case_number_full)
     judge_last_name = _normalize_judge_last_name(
         record.get("judgeLastName")
         or record.get("judge_last_name")
@@ -514,13 +539,31 @@ def _normalize_case_record(record: Dict[str, Any], default_court_id: str) -> Dic
         "case_type": case_type,
         "date_filed": date_filed,
         "date_closed": date_closed,
+        "effective_date_closed": effective_date_closed,
         "short_title": short_title,
         "case_title": case_title,
+        "case_link": case_link,
+        "case_year": case_year,
+        "case_office": case_office,
         "judge_last_name": judge_last_name,
+        "case_id": str(case_id) if case_id else None,
+        "source_last_seen_at": datetime.utcnow(),
         "record_hash": record_hash,
         "last_segment_id": None,
         "data_json": json.dumps(record, sort_keys=True, default=str),
     }
+
+
+def _parse_case_number_parts(case_number: Any) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    if not isinstance(case_number, str):
+        return None, None, None
+    cleaned = case_number.strip()
+    if not cleaned:
+        return None, None, None
+    match = re.match(r"^(?P<office>\\d+):(?P<year>\\d{2,4})-[a-z]+-(?P<number>\\d+)", cleaned)
+    if not match:
+        return None, None, None
+    return match.group("office"), match.group("year"), match.group("number")
 
 
 def _parse_date(value: Any) -> Optional[date]:
