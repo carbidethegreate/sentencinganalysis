@@ -1,12 +1,14 @@
 import csv
 import json
 import hmac
+import math
 import os
 import re
 import secrets
 import time
 import tempfile
 import threading
+import traceback
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -59,7 +61,8 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from pacer_http import PacerHttpClient
+from pacer_http import PacerHttpClient, TokenExpired
+from pacer_logging import redact_tokens
 from pacer_tokens import (
     DatabaseTokenBackend,
     InMemoryTokenBackend,
@@ -68,7 +71,7 @@ from pacer_tokens import (
 )
 from docket_enrichment import DocketEnrichmentWorker
 from pcl_batch import PclBatchPlanner, PclBatchWorker
-from pcl_client import PclClient
+from pcl_client import PclApiError, PclClient, PclJsonResponse
 from pcl_models import build_pcl_tables
 from sentencing_models import (
     VALID_EVIDENCE_SOURCE_TYPES,
@@ -1121,6 +1124,148 @@ def create_app() -> Flask:
 
     def _clear_pacer_session() -> None:
         pacer_token_store.clear_token()
+
+    PCL_PAGE_SIZE = 54
+    PCL_EXPLORE_DEFAULT_MAX_RECORDS = 54
+    PCL_EXPLORE_MAX_PAGES = max(1, int(os.environ.get("PCL_EXPLORE_MAX_PAGES", "5")))
+    PCL_EXPLORE_MAX_RECORDS = PCL_PAGE_SIZE * PCL_EXPLORE_MAX_PAGES
+    PCL_CASE_TYPES = [
+        ("cv", "Civil (cv)"),
+        ("cr", "Criminal (cr)"),
+        ("bk", "Bankruptcy (bk)"),
+        ("ap", "Appellate (ap)"),
+    ]
+
+    def _load_court_choices() -> List[Dict[str, Any]]:
+        stmt = (
+            select(
+                federal_courts.c.court_id,
+                federal_courts.c.court_name,
+                federal_courts.c.title,
+            )
+            .order_by(federal_courts.c.court_id.asc())
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        choices: List[Dict[str, Any]] = []
+        for row in rows:
+            name = row.get("court_name") or row.get("title") or ""
+            label = f"{row['court_id']}, {name}".strip().rstrip(",")
+            choices.append({"court_id": row["court_id"], "name": name, "label": label})
+        return choices
+
+    def _parse_iso_date(value: str) -> Optional[datetime.date]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value).date()
+        except ValueError:
+            return None
+
+    def _clamp_max_records(value: str) -> Tuple[int, Optional[str]]:
+        warning = None
+        try:
+            parsed = int(str(value).strip() or PCL_EXPLORE_DEFAULT_MAX_RECORDS)
+        except ValueError:
+            parsed = PCL_EXPLORE_DEFAULT_MAX_RECORDS
+            warning = "Max records must be an integer. Using the safe default of 54."
+        if parsed < 1:
+            parsed = PCL_EXPLORE_DEFAULT_MAX_RECORDS
+            warning = "Max records must be at least 1. Using the safe default of 54."
+        if parsed > PCL_EXPLORE_MAX_RECORDS:
+            warning = (
+                f"Max records capped at {PCL_EXPLORE_MAX_RECORDS} "
+                f"({PCL_EXPLORE_MAX_PAGES} pages)."
+            )
+            parsed = PCL_EXPLORE_MAX_RECORDS
+        return parsed, warning
+
+    def _extract_case_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        for key in ("cases", "caseList", "caseResults", "results", "data"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    def _is_non_empty(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, dict, tuple, set)):
+            return len(value) > 0
+        return True
+
+    def _observed_fields(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        counts: Dict[str, int] = {}
+        for record in records:
+            for key, value in record.items():
+                counts.setdefault(str(key), 0)
+                if _is_non_empty(value):
+                    counts[str(key)] += 1
+        total = len(records)
+        observed = [
+            {
+                "field": field,
+                "non_empty_count": count,
+                "coverage": (count / total) if total else 0.0,
+            }
+            for field, count in counts.items()
+        ]
+        observed.sort(key=lambda item: (-item["non_empty_count"], item["field"]))
+        return observed
+
+    def _truncate_value(value: Any, max_len: int = 240) -> Any:
+        if isinstance(value, str):
+            cleaned = redact_tokens(value)
+            return cleaned if len(cleaned) <= max_len else f"{cleaned[:max_len]}…"
+        if isinstance(value, list):
+            return [_truncate_value(item, max_len=max_len) for item in value[:5]]
+        if isinstance(value, dict):
+            truncated: Dict[str, Any] = {}
+            for idx, (key, item) in enumerate(value.items()):
+                if idx >= 30:
+                    truncated["…"] = "truncated"
+                    break
+                truncated[str(key)] = _truncate_value(item, max_len=max_len)
+            return truncated
+        return value
+
+    def _build_debug_bundle(
+        *,
+        court_id: str,
+        date_filed_from: str,
+        date_filed_to: str,
+        max_records: int,
+        pages_requested: int,
+        pages_fetched: int,
+        request_body: Dict[str, Any],
+        status_codes: Sequence[int],
+        cases: Sequence[Dict[str, Any]],
+        page_infos: Sequence[Dict[str, Any]],
+        truncated_notice: Optional[str],
+        error_message: Optional[str],
+        response_snippets: Sequence[Dict[str, Any]],
+    ) -> str:
+        bundle = {
+            "inputs": {
+                "court_id": court_id,
+                "date_filed_from": date_filed_from,
+                "date_filed_to": date_filed_to,
+                "max_records": max_records,
+                "page_size": PCL_PAGE_SIZE,
+                "pages_requested": pages_requested,
+                "pages_fetched": pages_fetched,
+            },
+            "request_body": request_body,
+            "status_codes": list(status_codes),
+            "page_info": list(page_infos),
+            "truncated_notice": truncated_notice,
+            "error_message": error_message,
+            "response_snippets": list(response_snippets),
+            "case_samples": [_truncate_value(case) for case in list(cases)[:3]],
+        }
+        return json.dumps(bundle, indent=2, sort_keys=True, default=str)
 
     def _normalize_party_def_num(value: Optional[str]) -> Optional[str]:
         if value is None:
@@ -2777,6 +2922,420 @@ def create_app() -> Flask:
             pacer_env_notice=pacer_environment_notice(pacer_auth_base_url),
             pacer_server_creds_available=pacer_server_creds_available,
             manual_mode=manual_mode,
+        )
+
+    @app.get("/admin/pacer/explore")
+    @admin_required
+    def admin_pacer_explore():
+        pacer_session = _get_pacer_session()
+        return render_template(
+            "admin_pacer_explore.html",
+            active_page="federal_data_dashboard",
+            active_subnav="explore_pacer",
+            csrf_token=get_csrf_token(),
+            pacer_authorized=bool(pacer_session),
+            pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
+            pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+            courts=_load_court_choices(),
+            case_type_choices=PCL_CASE_TYPES,
+            defaults={
+                "date_filed_from": "",
+                "date_filed_to": "",
+                "court_id": "",
+                "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+                "case_types": [],
+            },
+            explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
+            explore_page_size=PCL_PAGE_SIZE,
+            explore_max_records=PCL_EXPLORE_MAX_RECORDS,
+            run_result=None,
+            form_values=None,
+        )
+
+    @app.post("/admin/pacer/explore/run")
+    @admin_required
+    def admin_pacer_explore_run():
+        require_csrf()
+        pacer_session = _get_pacer_session()
+        courts = _load_court_choices()
+        court_ids = {row["court_id"] for row in courts}
+        form_values = {
+            "court_id": (request.form.get("court_id") or "").strip(),
+            "date_filed_from": (request.form.get("date_filed_from") or "").strip(),
+            "date_filed_to": (request.form.get("date_filed_to") or "").strip(),
+            "max_records": (request.form.get("max_records") or "").strip(),
+            "case_types": request.form.getlist("case_types"),
+        }
+        max_records, max_records_warning = _clamp_max_records(form_values["max_records"])
+
+        run_result: Dict[str, Any] = {
+            "status": "error",
+            "errors": [],
+            "warnings": [],
+            "logs": [],
+            "receipts": [],
+            "page_infos": [],
+            "cases": [],
+            "observed_fields": [],
+            "cost_summary": {"billable_pages": 0, "fee_totals": {}},
+            "debug_bundle": "",
+            "response_snippets": [],
+            "pages_requested": 0,
+            "pages_fetched": 0,
+            "truncated_notice": None,
+            "endpoint": "",
+        }
+
+        if not pacer_session:
+            run_result["errors"].append(
+                "PACER authorization is required. Next step: click Authorize on the Get PACER Data page."
+            )
+            run_result["debug_bundle"] = _build_debug_bundle(
+                court_id=form_values["court_id"],
+                date_filed_from=form_values["date_filed_from"],
+                date_filed_to=form_values["date_filed_to"],
+                max_records=max_records,
+                pages_requested=0,
+                pages_fetched=0,
+                request_body={},
+                status_codes=[],
+                cases=[],
+                page_infos=[],
+                truncated_notice=None,
+                error_message=run_result["errors"][0],
+                response_snippets=[],
+            )
+            return render_template(
+                "admin_pacer_explore.html",
+                active_page="federal_data_dashboard",
+                active_subnav="explore_pacer",
+                csrf_token=get_csrf_token(),
+                pacer_authorized=False,
+                pacer_authorized_at=None,
+                pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+                courts=courts,
+                case_type_choices=PCL_CASE_TYPES,
+                defaults=None,
+                explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
+                explore_page_size=PCL_PAGE_SIZE,
+                explore_max_records=PCL_EXPLORE_MAX_RECORDS,
+                run_result=run_result,
+                form_values=form_values,
+            )
+
+        if form_values["court_id"] not in court_ids:
+            run_result["errors"].append("Select a valid court from the list.")
+
+        date_from = _parse_iso_date(form_values["date_filed_from"])
+        date_to = _parse_iso_date(form_values["date_filed_to"])
+        if not date_from or not date_to:
+            run_result["errors"].append("Enter a valid date filed range using YYYY-MM-DD.")
+        elif date_from > date_to:
+            run_result["errors"].append("Date filed from must be on or before date filed to.")
+
+        if max_records_warning:
+            run_result["warnings"].append(max_records_warning)
+
+        pages_requested = max(1, math.ceil(max_records / PCL_PAGE_SIZE))
+        pages_to_fetch = min(pages_requested, PCL_EXPLORE_MAX_PAGES)
+        truncated_notice = None
+        if pages_to_fetch < pages_requested:
+            truncated_notice = (
+                f"Requested {pages_requested} pages but safety cap limited the run to "
+                f"{pages_to_fetch} pages ({pages_to_fetch * PCL_PAGE_SIZE} records max)."
+            )
+            run_result["warnings"].append(truncated_notice)
+
+        request_body: Dict[str, Any] = {
+            "courtId": [form_values["court_id"]],
+            "dateFiledFrom": form_values["date_filed_from"],
+            "dateFiledTo": form_values["date_filed_to"],
+            "pageSize": PCL_PAGE_SIZE,
+        }
+        case_types = [value for value in form_values["case_types"] if value]
+        if case_types:
+            request_body["caseType"] = case_types
+
+        if run_result["errors"]:
+            run_result["debug_bundle"] = _build_debug_bundle(
+                court_id=form_values["court_id"],
+                date_filed_from=form_values["date_filed_from"],
+                date_filed_to=form_values["date_filed_to"],
+                max_records=max_records,
+                pages_requested=pages_requested,
+                pages_fetched=0,
+                request_body=request_body,
+                status_codes=[],
+                cases=[],
+                page_infos=[],
+                truncated_notice=truncated_notice,
+                error_message="; ".join(run_result["errors"]),
+                response_snippets=[],
+            )
+            return render_template(
+                "admin_pacer_explore.html",
+                active_page="federal_data_dashboard",
+                active_subnav="explore_pacer",
+                csrf_token=get_csrf_token(),
+                pacer_authorized=True,
+                pacer_authorized_at=pacer_session.get("authorized_at"),
+                pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+                courts=courts,
+                case_type_choices=PCL_CASE_TYPES,
+                defaults=None,
+                explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
+                explore_page_size=PCL_PAGE_SIZE,
+                explore_max_records=PCL_EXPLORE_MAX_RECORDS,
+                run_result=run_result,
+                form_values=form_values,
+            )
+
+        endpoint_base = f"{pcl_base_url}/cases/find"
+        status_codes: List[int] = []
+        response_snippets: List[Dict[str, Any]] = []
+        all_cases: List[Dict[str, Any]] = []
+        receipts: List[Dict[str, Any]] = []
+        page_infos: List[Dict[str, Any]] = []
+        logs: List[Dict[str, Any]] = []
+
+        app.logger.info(
+            "PACER explore run court=%s date_from=%s date_to=%s pages=%s",
+            form_values["court_id"],
+            form_values["date_filed_from"],
+            form_values["date_filed_to"],
+            pages_to_fetch,
+        )
+
+        error_message: Optional[str] = None
+        error_details: Optional[str] = None
+        trace_text: Optional[str] = None
+
+        for page_num in range(1, pages_to_fetch + 1):
+            endpoint_url = f"{endpoint_base}?page={page_num}"
+            started = time.perf_counter()
+            try:
+                response: PclJsonResponse = pcl_client.immediate_case_search(page_num, request_body)
+                elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+                payload = response.payload
+                status_codes.append(response.status_code)
+                response_snippets.append(
+                    {
+                        "page": page_num,
+                        "status_code": response.status_code,
+                        "endpoint": endpoint_url,
+                        "snippet": _truncate_value(payload),
+                    }
+                )
+                cases_page = _extract_case_records(payload)
+                all_cases.extend(cases_page)
+                receipt = payload.get("receipt") or payload.get("receiptData")
+                if isinstance(receipt, dict):
+                    receipts.append({"page": page_num, "receipt": receipt})
+                page_info = payload.get("pageInfo")
+                if isinstance(page_info, dict):
+                    page_infos.append({"page": page_num, "page_info": page_info})
+                logs.append(
+                    {
+                        "page": page_num,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "endpoint": endpoint_url,
+                        "status_code": response.status_code,
+                        "elapsed_ms": elapsed_ms,
+                        "request_summary": {
+                            "courtId": request_body.get("courtId"),
+                            "dateFiledFrom": request_body.get("dateFiledFrom"),
+                            "dateFiledTo": request_body.get("dateFiledTo"),
+                            "caseType": request_body.get("caseType", []),
+                            "pageSize": request_body.get("pageSize"),
+                        },
+                    }
+                )
+            except TokenExpired:
+                elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+                error_message = (
+                    "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
+                )
+                status_codes.append(401)
+                logs.append(
+                    {
+                        "page": page_num,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "endpoint": endpoint_url,
+                        "status_code": 401,
+                        "elapsed_ms": elapsed_ms,
+                        "request_summary": {
+                            "courtId": request_body.get("courtId"),
+                            "dateFiledFrom": request_body.get("dateFiledFrom"),
+                            "dateFiledTo": request_body.get("dateFiledTo"),
+                            "caseType": request_body.get("caseType", []),
+                            "pageSize": request_body.get("pageSize"),
+                        },
+                    }
+                )
+                response_snippets.append(
+                    {
+                        "page": page_num,
+                        "status_code": 401,
+                        "endpoint": endpoint_url,
+                        "snippet": {"message": error_message},
+                    }
+                )
+                break
+            except PclApiError as exc:
+                elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+                status_codes.append(exc.status_code)
+                snippet_payload = _truncate_value(exc.details or {"message": exc.message})
+                response_snippets.append(
+                    {
+                        "page": page_num,
+                        "status_code": exc.status_code,
+                        "endpoint": endpoint_url,
+                        "snippet": snippet_payload,
+                    }
+                )
+                if exc.status_code == 401:
+                    error_message = (
+                        "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
+                    )
+                elif exc.status_code == 406:
+                    error_message = (
+                        "Invalid search parameter. Next step: copy the debug bundle and open a fix request."
+                    )
+                else:
+                    error_message = f"PCL request failed with status {exc.status_code}."
+                error_details = exc.message
+                logs.append(
+                    {
+                        "page": page_num,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "endpoint": endpoint_url,
+                        "status_code": exc.status_code,
+                        "elapsed_ms": elapsed_ms,
+                        "request_summary": {
+                            "courtId": request_body.get("courtId"),
+                            "dateFiledFrom": request_body.get("dateFiledFrom"),
+                            "dateFiledTo": request_body.get("dateFiledTo"),
+                            "caseType": request_body.get("caseType", []),
+                            "pageSize": request_body.get("pageSize"),
+                        },
+                    }
+                )
+                break
+            except Exception as exc:  # pragma: no cover - defensive guardrail
+                elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+                error_message = "Unexpected error while running PACER explore."
+                error_details = str(exc)
+                trace_text = traceback.format_exc()
+                status_codes.append(0)
+                logs.append(
+                    {
+                        "page": page_num,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "endpoint": endpoint_url,
+                        "status_code": 0,
+                        "elapsed_ms": elapsed_ms,
+                        "request_summary": {
+                            "courtId": request_body.get("courtId"),
+                            "dateFiledFrom": request_body.get("dateFiledFrom"),
+                            "dateFiledTo": request_body.get("dateFiledTo"),
+                            "caseType": request_body.get("caseType", []),
+                            "pageSize": request_body.get("pageSize"),
+                        },
+                    }
+                )
+                response_snippets.append(
+                    {
+                        "page": page_num,
+                        "status_code": 0,
+                        "endpoint": endpoint_url,
+                        "snippet": {"message": error_message},
+                    }
+                )
+                app.logger.exception("Unexpected PACER explore error.")
+                break
+
+        cases_limited = all_cases[:max_records]
+        observed_fields = _observed_fields(cases_limited)
+
+        billable_pages_total = 0
+        fee_totals: Dict[str, float] = {}
+        for receipt_row in receipts:
+            receipt_payload = receipt_row["receipt"]
+            billable_pages_value = receipt_payload.get("billablePages")
+            if isinstance(billable_pages_value, (int, float)):
+                billable_pages_total += int(billable_pages_value)
+            for key, value in receipt_payload.items():
+                if "fee" not in str(key).lower():
+                    continue
+                if isinstance(value, (int, float)):
+                    fee_totals[str(key)] = fee_totals.get(str(key), 0.0) + float(value)
+
+        pages_fetched = len({log["page"] for log in logs})
+        if pages_fetched and len(all_cases) > max_records and not truncated_notice:
+            truncated_notice = (
+                f"Showing the first {max_records} records out of {len(all_cases)} returned."
+            )
+            run_result["warnings"].append(truncated_notice)
+
+        if error_message:
+            run_result["errors"].append(error_message)
+            if error_details:
+                run_result["errors"].append(error_details)
+
+        run_result.update(
+            {
+                "status": "ok" if not run_result["errors"] else "error",
+                "logs": logs,
+                "receipts": receipts,
+                "page_infos": page_infos,
+                "cases": cases_limited,
+                "observed_fields": observed_fields,
+                "cost_summary": {
+                    "billable_pages": billable_pages_total,
+                    "fee_totals": fee_totals,
+                },
+                "response_snippets": response_snippets,
+                "pages_requested": pages_requested,
+                "pages_fetched": pages_fetched,
+                "truncated_notice": truncated_notice,
+                "endpoint": endpoint_base,
+            }
+        )
+
+        run_result["debug_bundle"] = _build_debug_bundle(
+            court_id=form_values["court_id"],
+            date_filed_from=form_values["date_filed_from"],
+            date_filed_to=form_values["date_filed_to"],
+            max_records=max_records,
+            pages_requested=pages_requested,
+            pages_fetched=pages_fetched,
+            request_body=request_body,
+            status_codes=status_codes,
+            cases=cases_limited,
+            page_infos=page_infos,
+            truncated_notice=truncated_notice,
+            error_message="\n".join(run_result["errors"]) if run_result["errors"] else None,
+            response_snippets=response_snippets,
+        )
+        if trace_text and run_result["errors"]:
+            run_result["debug_bundle"] += f"\n\ntraceback:\n{trace_text}"
+
+        return render_template(
+            "admin_pacer_explore.html",
+            active_page="federal_data_dashboard",
+            active_subnav="explore_pacer",
+            csrf_token=get_csrf_token(),
+            pacer_authorized=True,
+            pacer_authorized_at=pacer_session.get("authorized_at"),
+            pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+            courts=courts,
+            case_type_choices=PCL_CASE_TYPES,
+            defaults=None,
+            explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
+            explore_page_size=PCL_PAGE_SIZE,
+            explore_max_records=PCL_EXPLORE_MAX_RECORDS,
+            run_result=run_result,
+            form_values=form_values,
         )
 
     @app.get("/admin/federal-data-dashboard/federal-courts")
