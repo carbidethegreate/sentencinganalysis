@@ -58,6 +58,24 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("details", json_type, nullable=True),
     )
 
+    pacer_explore_runs = Table(
+        "pacer_explore_runs",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column("created_by", String(120), nullable=True),
+        Column("mode", String(20), nullable=False),
+        Column("court_id", String(50), nullable=True),
+        Column("date_from", Date, nullable=True),
+        Column("date_to", Date, nullable=True),
+        Column("request_params", json_type, nullable=False),
+        Column("pages_fetched", Integer, nullable=False, server_default="0"),
+        Column("receipts", json_type, nullable=True),
+        Column("observed_fields", json_type, nullable=True),
+        Column("error_summary", Text, nullable=True),
+        Index("ix_pacer_explore_runs_created_at", "created_at"),
+    )
+
     pcl_batch_searches = Table(
         "pcl_batch_searches",
         metadata,
@@ -330,6 +348,7 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
     return {
         "courts": courts,
         "court_import_runs": court_import_runs,
+        "pacer_explore_runs": pacer_explore_runs,
         "pcl_batch_searches": pcl_batch_searches,
         "pcl_batch_requests": pcl_batch_requests,
         "pcl_batch_segments": pcl_batch_segments,

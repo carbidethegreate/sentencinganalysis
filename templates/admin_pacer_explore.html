@@ -3,19 +3,20 @@
 {% block title %}Admin | Explore PACER{% endblock %}
 
 {% block federal_content %}
-  {% set values = form_values or defaults %}
+  {% set case_values = case_values or case_defaults %}
+  {% set party_values = party_values or party_defaults %}
   <section class="card stack">
     <div>
       <p class="pacer-eyebrow">Admin playground</p>
       <h2>Explore PACER</h2>
       <p class="small">
-        This playground runs PACER Case Locator (PCL) immediate case searches so you can inspect the index fields that come back.
+        This playground runs PACER Case Locator (PCL) immediate case and party searches so you can inspect the index fields that come back.
         It is designed for exploration and debugging, not bulk collection.
       </p>
     </div>
 
     <div class="pacer-inline-note" role="note">
-      <strong>What this does:</strong> runs PCL index searches (<code>/cases/find</code>) and shows the raw response, observed fields, receipts, and logs.<br>
+      <strong>What this does:</strong> runs PCL index searches (<code>/cases/find</code> and <code>/parties/find</code>) and shows the raw response, observed fields, receipts, and logs.<br>
       <strong>What this does NOT do:</strong> it does not fetch docket entries, download documents, or store PACER credentials in the browser.
     </div>
 
@@ -51,64 +52,131 @@
       </p>
     </section>
 
-    <form method="post" action="{{ url_for('admin_pacer_explore_run') }}" class="stack">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="actions">
+      <a class="{{ 'primary' if mode == 'cases' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='cases') }}">Case Search</a>
+      <a class="{{ 'primary' if mode == 'parties' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='parties') }}">Party Search</a>
+    </div>
 
-      <div class="grid two">
+    {% if mode == 'cases' %}
+      <form method="post" action="{{ url_for('admin_pacer_explore_run') }}" class="stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="mode" value="cases">
+
+        <div class="grid two">
+          <div>
+            <label for="explore-court">Court</label>
+            <select id="explore-court" name="court_id" required>
+              <option value="">Select a court…</option>
+              {% for court in courts %}
+                <option value="{{ court.court_id }}" {% if case_values and case_values.court_id == court.court_id %}selected{% endif %}>
+                  {{ court.label }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="explore-max-records">Max records</label>
+            <input
+              id="explore-max-records"
+              name="max_records"
+              type="number"
+              min="1"
+              max="{{ explore_max_records }}"
+              value="{{ case_values.max_records if case_values else explore_page_size }}"
+              required
+            >
+            <p class="small">Default {{ explore_page_size }} (one page). Hard cap {{ explore_max_records }}.</p>
+          </div>
+        </div>
+
+        <div class="grid two">
+          <div>
+            <label for="explore-date-from">Date filed from</label>
+            <input id="explore-date-from" name="date_filed_from" type="date" value="{{ case_values.date_filed_from if case_values else '' }}" required>
+          </div>
+          <div>
+            <label for="explore-date-to">Date filed to</label>
+            <input id="explore-date-to" name="date_filed_to" type="date" value="{{ case_values.date_filed_to if case_values else '' }}" required>
+          </div>
+        </div>
+
         <div>
-          <label for="explore-court">Court</label>
-          <select id="explore-court" name="court_id" required>
-            <option value="">Select a court…</option>
-            {% for court in courts %}
-              <option value="{{ court.court_id }}" {% if values and values.court_id == court.court_id %}selected{% endif %}>
-                {{ court.label }}
+          <label for="explore-case-types">Case types (optional)</label>
+          <select id="explore-case-types" name="case_types" multiple size="4">
+            {% set selected_case_types = case_values.case_types if case_values else [] %}
+            {% for case_type, label in case_type_choices %}
+              <option value="{{ case_type }}" {% if selected_case_types and case_type in selected_case_types %}selected{% endif %}>
+                {{ label }}
               </option>
             {% endfor %}
           </select>
+          <p class="small">Leave blank to include all case types.</p>
         </div>
-        <div>
-          <label for="explore-max-records">Max records</label>
-          <input
-            id="explore-max-records"
-            name="max_records"
-            type="number"
-            min="1"
-            max="{{ explore_max_records }}"
-            value="{{ values.max_records if values else explore_page_size }}"
-            required
-          >
-          <p class="small">Default {{ explore_page_size }} (one page). Hard cap {{ explore_max_records }}.</p>
-        </div>
-      </div>
 
-      <div class="grid two">
-        <div>
-          <label for="explore-date-from">Date filed from</label>
-          <input id="explore-date-from" name="date_filed_from" type="date" value="{{ values.date_filed_from if values else '' }}" required>
+        <div class="actions">
+          <button class="primary" type="submit">Run Explore</button>
         </div>
-        <div>
-          <label for="explore-date-to">Date filed to</label>
-          <input id="explore-date-to" name="date_filed_to" type="date" value="{{ values.date_filed_to if values else '' }}" required>
+      </form>
+    {% else %}
+      <form method="post" action="{{ url_for('admin_pacer_explore_run') }}" class="stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="mode" value="parties">
+
+        <div class="grid two">
+          <div>
+            <label for="party-last-name">Last name prefix</label>
+            <input id="party-last-name" name="last_name_prefix" type="text" value="{{ party_values.last_name_prefix if party_values else '' }}" required>
+            <p class="small">Required. Example: <code>doe</code>.</p>
+          </div>
+          <div>
+            <label for="party-first-name">First name (optional)</label>
+            <input id="party-first-name" name="first_name" type="text" value="{{ party_values.first_name if party_values else '' }}">
+          </div>
         </div>
-      </div>
 
-      <div>
-        <label for="explore-case-types">Case types (optional)</label>
-        <select id="explore-case-types" name="case_types" multiple size="4">
-          {% set selected_case_types = values.case_types if values else [] %}
-          {% for case_type, label in case_type_choices %}
-            <option value="{{ case_type }}" {% if selected_case_types and case_type in selected_case_types %}selected{% endif %}>
-              {{ label }}
-            </option>
-          {% endfor %}
-        </select>
-        <p class="small">Leave blank to include all case types.</p>
-      </div>
+        <div class="grid two">
+          <div>
+            <label for="party-date-from">Date filed from (optional)</label>
+            <input id="party-date-from" name="date_filed_from" type="date" value="{{ party_values.date_filed_from if party_values else '' }}">
+          </div>
+          <div>
+            <label for="party-date-to">Date filed to (optional)</label>
+            <input id="party-date-to" name="date_filed_to" type="date" value="{{ party_values.date_filed_to if party_values else '' }}">
+          </div>
+        </div>
 
-      <div class="actions">
-        <button class="primary" type="submit">Run Explore</button>
-      </div>
-    </form>
+        <div class="grid two">
+          <div>
+            <label for="party-court">Court (optional)</label>
+            <select id="party-court" name="court_id">
+              <option value="">All courts</option>
+              {% for court in courts %}
+                <option value="{{ court.court_id }}" {% if party_values and party_values.court_id == court.court_id %}selected{% endif %}>
+                  {{ court.label }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="party-max-records">Max records</label>
+            <input
+              id="party-max-records"
+              name="max_records"
+              type="number"
+              min="1"
+              max="{{ explore_max_records }}"
+              value="{{ party_values.max_records if party_values else explore_page_size }}"
+              required
+            >
+            <p class="small">Default {{ explore_page_size }} (one page). Hard cap {{ explore_max_records }}.</p>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" type="submit">Run Explore</button>
+        </div>
+      </form>
+    {% endif %}
   </section>
 
   {% if run_result %}
@@ -128,7 +196,7 @@
       {% else %}
         <div class="flash success">
           <strong>Run complete.</strong>
-          Pulled {{ run_result.cases|length }} records across {{ run_result.pages_fetched }} page(s).
+          Pulled {{ (run_result.cases|length) if run_result.mode == 'cases' else (run_result.parties|length) }} records across {{ run_result.pages_fetched }} page(s).
         </div>
       {% endif %}
 
@@ -161,66 +229,170 @@
 
       <section class="card stack">
         <p class="pacer-eyebrow">Results</p>
-        <h3>Returned cases (truncated)</h3>
-        {% if run_result.cases %}
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Case number</th>
-                  <th>Case type</th>
-                  <th>Date filed</th>
-                  <th>Short title</th>
-                  <th>Court</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for case in run_result.cases %}
+        {% if run_result.mode == 'cases' %}
+          <h3>Returned cases (truncated)</h3>
+          {% if run_result.cases %}
+            <div class="table-wrap">
+              <table>
+                <thead>
                   <tr>
-                    <td>{{ loop.index }}</td>
-                    <td>{{ case.caseNumber or case.case_number or case.cs_case_number or '—' }}</td>
-                    <td>{{ case.caseType or case.case_type or '—' }}</td>
-                    <td>{{ case.dateFiled or case.date_filed or '—' }}</td>
-                    <td>{{ case.shortTitle or case.short_title or case.cs_short_title or '—' }}</td>
-                    <td>{{ case.courtId or case.court_id or values.court_id }}</td>
+                    <th>#</th>
+                    <th>Case number</th>
+                    <th>Case type</th>
+                    <th>Date filed</th>
+                    <th>Short title</th>
+                    <th>Court</th>
                   </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {% for case in run_result.cases %}
+                    <tr>
+                      <td>{{ loop.index }}</td>
+                      <td>{{ case.caseNumber or case.case_number or case.cs_case_number or '—' }}</td>
+                      <td>{{ case.caseType or case.case_type or '—' }}</td>
+                      <td>{{ case.dateFiled or case.date_filed or '—' }}</td>
+                      <td>{{ case.shortTitle or case.short_title or case.cs_short_title or '—' }}</td>
+                      <td>{{ case.courtId or case.court_id or case_values.court_id }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="small">No cases were returned for the selected filters.</p>
+          {% endif %}
         {% else %}
-          <p class="small">No cases were returned for the selected filters.</p>
+          <h3>Returned parties (truncated)</h3>
+          {% if run_result.parties %}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Last name</th>
+                    <th>First name</th>
+                    <th>Party type</th>
+                    <th>Case number</th>
+                    <th>Court</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for party in run_result.parties %}
+                    <tr>
+                      <td>{{ loop.index }}</td>
+                      <td>{{ party.lastName or party.last_name or '—' }}</td>
+                      <td>{{ party.firstName or party.first_name or '—' }}</td>
+                      <td>{{ party.partyType or party.party_type or '—' }}</td>
+                      <td>{{ party.courtCase.caseNumber if party.courtCase else (party.court_case.case_number if party.court_case else '—') }}</td>
+                      <td>{{ party.courtCase.courtId if party.courtCase else (party.court_case.court_id if party.court_case else party_values.court_id or '—') }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="small">No parties were returned for the selected filters.</p>
+          {% endif %}
         {% endif %}
       </section>
 
       <section class="card stack">
         <p class="pacer-eyebrow">Observed fields</p>
-        <h3>Top-level field coverage</h3>
-        {% if run_result.observed_fields %}
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Field</th>
-                  <th>Non-empty count</th>
-                  <th>Coverage</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for field in run_result.observed_fields %}
+        {% if run_result.mode == 'cases' %}
+          <h3>Top-level field coverage</h3>
+          {% if run_result.observed_fields %}
+            <div class="table-wrap">
+              <table>
+                <thead>
                   <tr>
-                    <td><code>{{ field.field }}</code></td>
-                    <td>{{ field.non_empty_count }}</td>
-                    <td>{{ '%.1f'|format(field.coverage * 100) }}%</td>
+                    <th>Field</th>
+                    <th>Non-empty count</th>
+                    <th>Coverage</th>
                   </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {% for field in run_result.observed_fields %}
+                    <tr>
+                      <td><code>{{ field.field }}</code></td>
+                      <td>{{ field.non_empty_count }}</td>
+                      <td>{{ '%.1f'|format(field.coverage * 100) }}%</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="small">No field observations available yet.</p>
+          {% endif %}
         {% else %}
-          <p class="small">No field observations available yet.</p>
+          <h3>Party fields</h3>
+          {% if run_result.party_observed_fields %}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Field</th>
+                    <th>Non-empty count</th>
+                    <th>Coverage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for field in run_result.party_observed_fields %}
+                    <tr>
+                      <td><code>{{ field.field }}</code></td>
+                      <td>{{ field.non_empty_count }}</td>
+                      <td>{{ '%.1f'|format(field.coverage * 100) }}%</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="small">No party field observations available yet.</p>
+          {% endif %}
+
+          <h3>Court case fields</h3>
+          {% if run_result.court_case_observed_fields %}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Field</th>
+                    <th>Non-empty count</th>
+                    <th>Coverage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for field in run_result.court_case_observed_fields %}
+                    <tr>
+                      <td><code>{{ field.field }}</code></td>
+                      <td>{{ field.non_empty_count }}</td>
+                      <td>{{ '%.1f'|format(field.coverage * 100) }}%</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="small">No court case field observations available yet.</p>
+          {% endif %}
         {% endif %}
+      </section>
+
+      <section class="card stack">
+        <p class="pacer-eyebrow">Next steps</p>
+        <h3>What to do next</h3>
+        <ul class="small">
+          {% for step in run_result.next_steps %}
+            <li>
+              {% if step.active %}
+                <strong>{{ step.label }}</strong>
+              {% else %}
+                {{ step.label }}
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
       </section>
 
       <section class="card stack">
@@ -339,4 +511,63 @@
       })();
     </script>
   {% endif %}
+
+  <section class="card stack">
+    <p class="pacer-eyebrow">Recent runs</p>
+    <h3>Saved Explore PACER runs</h3>
+    <p class="small">
+      Recent runs are saved for debugging and receipts review. Storage is capped to the most recent entries.
+    </p>
+    {% if run_history %}
+      <div class="stack">
+        {% for run in run_history %}
+          <div class="card">
+            <div class="row" style="justify-content: space-between; align-items: center;">
+              <div>
+                <p class="small"><strong>{{ run.mode|capitalize }}</strong> · {{ run.created_at_display }}</p>
+                <p class="small">
+                  Court: <code>{{ run.court_id or 'All' }}</code>
+                  {% if run.date_from or run.date_to %}
+                    · Date range: {{ run.date_from or '—' }} → {{ run.date_to or '—' }}
+                  {% endif %}
+                  · Pages fetched: {{ run.pages_fetched }}
+                </p>
+                {% if run.error_summary %}
+                  <p class="small"><strong>Error:</strong> {{ run.error_summary }}</p>
+                {% endif %}
+              </div>
+              <div class="actions">
+                <form method="post" action="{{ url_for('admin_pacer_explore_run_delete', run_id=run.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="mode" value="{{ mode }}">
+                  <button class="secondary" type="submit">Delete run</button>
+                </form>
+              </div>
+            </div>
+
+            <div class="grid two">
+              <div>
+                <h4>Receipts</h4>
+                {% if run.receipts %}
+                  <pre class="code-block">{{ run.receipts | tojson(indent=2) }}</pre>
+                {% else %}
+                  <p class="small">No receipts saved.</p>
+                {% endif %}
+              </div>
+              <div>
+                <h4>Observed fields</h4>
+                {% if run.observed_fields %}
+                  <pre class="code-block">{{ run.observed_fields | tojson(indent=2) }}</pre>
+                {% else %}
+                  <p class="small">No observed field summary saved.</p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="small">No saved runs yet.</p>
+    {% endif %}
+  </section>
 {% endblock %}

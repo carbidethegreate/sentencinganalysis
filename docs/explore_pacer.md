@@ -6,17 +6,20 @@ The **Explore PACER** page is an admin-only playground for PACER Case Locator (P
 
 ## What this tool does
 
-* Runs **immediate PCL case searches** against `POST /pcl-public-api/rest/cases/find?page={page}`.
+* Runs **immediate PCL searches** against:
+  * `POST /pcl-public-api/rest/cases/find?page={page}` (Case Search)
+  * `POST /pcl-public-api/rest/parties/find?page={page}` (Party Search)
 * Lets you:
-  * choose a court from the `federal_courts` table,
-  * set a date filed range,
-  * optionally select case types, and
+  * choose a court from the `federal_courts` table (optional for party search),
+  * set a date filed range (required for case search, optional for party search),
+  * optionally select case types (case search only), and
   * cap the maximum record count.
 * Shows:
   * the raw response snippets,
   * an observed-fields coverage summary,
   * PACER receipts and fee fields (as returned), and
   * per-page run logs plus a copyable debug bundle.
+* Saves a lightweight **Recent Runs** list (admin-only) with receipts and observed fields so you can review errors without rerunning billable searches.
 
 ## What this tool does NOT do
 
@@ -44,11 +47,12 @@ The UI will warn when a request is truncated by safety caps.
 
 1. Open **Get PACER Data** and authorize PACER access.
 2. Open **Explore PACER**.
-3. Select a court.
-4. Choose a date filed range.
-5. (Optional) select case types.
-6. Leave max records at 54 unless you have a specific reason to expand.
-7. Click **Run Explore**.
+3. Choose **Case Search** or **Party Search**.
+4. Enter the required fields:
+   * Case Search: court + date range (optional case types).
+   * Party Search: last name prefix (optional first name, date range, and court).
+5. Leave max records at 54 unless you have a specific reason to expand.
+6. Click **Run Explore**.
 
 ## Handling errors (and copying the debug bundle)
 
@@ -64,3 +68,15 @@ To copy the debug bundle:
 3. Paste the bundle into your issue, fix request, or investigation notes.
 
 The debug bundle intentionally excludes secrets and tokens.
+
+## Recent run history
+
+Each run writes a lightweight entry to `pacer_explore_runs` with:
+
+* search mode and parameters (no secrets),
+* truncated response samples,
+* receipts and fee fields returned by PACER,
+* observed field summaries, and
+* a short error summary (if applicable).
+
+Retention is capped (latest 200 entries), and admins can delete runs manually from the UI.
