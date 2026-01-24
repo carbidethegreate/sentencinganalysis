@@ -18,6 +18,13 @@ class PclApiError(Exception):
         return f"PCL API error {self.status_code}: {self.message}"
 
 
+@dataclass(frozen=True)
+class PclJsonResponse:
+    status_code: int
+    payload: Dict[str, Any]
+    raw_body: bytes
+
+
 class PclClient:
     def __init__(
         self,
@@ -45,9 +52,19 @@ class PclClient:
     def delete_case_report(self, report_id: str) -> Dict[str, Any]:
         return self._request_json("DELETE", f"/cases/reports/{report_id}")
 
+    def immediate_case_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
+        page_num = max(1, int(page))
+        return self._request_json_with_meta("POST", f"/cases/find?page={page_num}", payload)
+
     def _request_json(
         self, method: str, path: str, payload: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        response = self._request_json_with_meta(method, path, payload)
+        return response.payload
+
+    def _request_json_with_meta(
+        self, method: str, path: str, payload: Optional[Dict[str, Any]] = None
+    ) -> PclJsonResponse:
         url = f"{self._base_url}{path}"
         body = None
         headers = {"Content-Type": "application/json"}
@@ -66,11 +83,14 @@ class PclClient:
         except urllib.error.HTTPError as exc:
             return self._handle_http_error(exc)
 
-        if not response.body:
-            return {}
-        return _safe_json_loads(response.body)
+        payload_dict = _safe_json_loads(response.body) if response.body else {}
+        return PclJsonResponse(
+            status_code=response.status_code,
+            payload=payload_dict,
+            raw_body=response.body,
+        )
 
-    def _handle_http_error(self, exc: urllib.error.HTTPError) -> Dict[str, Any]:
+    def _handle_http_error(self, exc: urllib.error.HTTPError) -> PclJsonResponse:
         body = exc.read()
         details = _safe_json_loads(body) if body else {}
         message = (

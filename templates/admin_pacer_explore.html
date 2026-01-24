@@ -1,0 +1,342 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Explore PACER{% endblock %}
+
+{% block federal_content %}
+  {% set values = form_values or defaults %}
+  <section class="card stack">
+    <div>
+      <p class="pacer-eyebrow">Admin playground</p>
+      <h2>Explore PACER</h2>
+      <p class="small">
+        This playground runs PACER Case Locator (PCL) immediate case searches so you can inspect the index fields that come back.
+        It is designed for exploration and debugging, not bulk collection.
+      </p>
+    </div>
+
+    <div class="pacer-inline-note" role="note">
+      <strong>What this does:</strong> runs PCL index searches (<code>/cases/find</code>) and shows the raw response, observed fields, receipts, and logs.<br>
+      <strong>What this does NOT do:</strong> it does not fetch docket entries, download documents, or store PACER credentials in the browser.
+    </div>
+
+    <div class="flash">
+      <strong>Cost warning:</strong> each page fetch is a billable PACER search and receipts are returned by PACER. Defaults are capped to one page ({{ explore_page_size }} records)
+      and hard-limited to {{ explore_cap_pages }} pages ({{ explore_max_records }} records) unless <code>PCL_EXPLORE_MAX_PAGES</code> is increased server-side.
+    </div>
+
+    <section class="card stack pacer-status-card">
+      <div class="pacer-status-card__header">
+        <div>
+          <p class="pacer-eyebrow">Authorization status</p>
+          <h3 class="pacer-status-card__title">
+            {% if pacer_authorized %}Authorized{% else %}Not authorized{% endif %}
+          </h3>
+          <p class="small pacer-status-card__lead">
+            Authorization is required before PACER will accept the search request.
+          </p>
+          {% if pacer_authorized_at %}
+            <p class="small pacer-status-card__meta">Authorized at {{ pacer_authorized_at.replace('T', ' ') }} UTC.</p>
+          {% endif %}
+        </div>
+        <div class="pacer-status-card__badge" role="status" aria-live="polite">
+          <span class="pacer-status-card__badge-dot" aria-hidden="true"></span>
+          {% if pacer_authorized %}Connected{% else %}Disconnected{% endif %}
+        </div>
+      </div>
+      <div class="actions">
+        <a class="primary" href="{{ pacer_authorize_url }}">Authorize / manage PACER session</a>
+      </div>
+      <p class="small">
+        If you see 401 errors below, re-authorize and try again.
+      </p>
+    </section>
+
+    <form method="post" action="{{ url_for('admin_pacer_explore_run') }}" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="grid two">
+        <div>
+          <label for="explore-court">Court</label>
+          <select id="explore-court" name="court_id" required>
+            <option value="">Select a court…</option>
+            {% for court in courts %}
+              <option value="{{ court.court_id }}" {% if values and values.court_id == court.court_id %}selected{% endif %}>
+                {{ court.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="explore-max-records">Max records</label>
+          <input
+            id="explore-max-records"
+            name="max_records"
+            type="number"
+            min="1"
+            max="{{ explore_max_records }}"
+            value="{{ values.max_records if values else explore_page_size }}"
+            required
+          >
+          <p class="small">Default {{ explore_page_size }} (one page). Hard cap {{ explore_max_records }}.</p>
+        </div>
+      </div>
+
+      <div class="grid two">
+        <div>
+          <label for="explore-date-from">Date filed from</label>
+          <input id="explore-date-from" name="date_filed_from" type="date" value="{{ values.date_filed_from if values else '' }}" required>
+        </div>
+        <div>
+          <label for="explore-date-to">Date filed to</label>
+          <input id="explore-date-to" name="date_filed_to" type="date" value="{{ values.date_filed_to if values else '' }}" required>
+        </div>
+      </div>
+
+      <div>
+        <label for="explore-case-types">Case types (optional)</label>
+        <select id="explore-case-types" name="case_types" multiple size="4">
+          {% set selected_case_types = values.case_types if values else [] %}
+          {% for case_type, label in case_type_choices %}
+            <option value="{{ case_type }}" {% if selected_case_types and case_type in selected_case_types %}selected{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+        <p class="small">Leave blank to include all case types.</p>
+      </div>
+
+      <div class="actions">
+        <button class="primary" type="submit">Run Explore</button>
+      </div>
+    </form>
+  </section>
+
+  {% if run_result %}
+    <section class="stack" aria-live="polite">
+      {% if run_result.errors %}
+        <div class="flash error">
+          <strong>Run failed.</strong>
+          <ul>
+            {% for err in run_result.errors %}
+              <li>{{ err }}</li>
+            {% endfor %}
+          </ul>
+          <p class="small">
+            Next step: use the debug bundle below when opening a fix request.
+          </p>
+        </div>
+      {% else %}
+        <div class="flash success">
+          <strong>Run complete.</strong>
+          Pulled {{ run_result.cases|length }} records across {{ run_result.pages_fetched }} page(s).
+        </div>
+      {% endif %}
+
+      {% if run_result.warnings %}
+        <div class="flash">
+          <strong>Warnings</strong>
+          <ul>
+            {% for warn in run_result.warnings %}
+              <li>{{ warn }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      <section class="card stack">
+        <div class="row" style="justify-content: space-between; align-items: center;">
+          <div>
+            <p class="pacer-eyebrow">Debug bundle</p>
+            <h3>Copyable run bundle</h3>
+            <p class="small">
+              Includes sanitized inputs, request body, status codes, page info, response snippets, and case samples.
+            </p>
+          </div>
+          <div class="actions">
+            <button class="secondary" type="button" id="copy-debug-bundle">Copy debug bundle</button>
+          </div>
+        </div>
+        <pre id="debug-bundle" class="code-block">{{ run_result.debug_bundle }}</pre>
+      </section>
+
+      <section class="card stack">
+        <p class="pacer-eyebrow">Results</p>
+        <h3>Returned cases (truncated)</h3>
+        {% if run_result.cases %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Case number</th>
+                  <th>Case type</th>
+                  <th>Date filed</th>
+                  <th>Short title</th>
+                  <th>Court</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for case in run_result.cases %}
+                  <tr>
+                    <td>{{ loop.index }}</td>
+                    <td>{{ case.caseNumber or case.case_number or case.cs_case_number or '—' }}</td>
+                    <td>{{ case.caseType or case.case_type or '—' }}</td>
+                    <td>{{ case.dateFiled or case.date_filed or '—' }}</td>
+                    <td>{{ case.shortTitle or case.short_title or case.cs_short_title or '—' }}</td>
+                    <td>{{ case.courtId or case.court_id or values.court_id }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="small">No cases were returned for the selected filters.</p>
+        {% endif %}
+      </section>
+
+      <section class="card stack">
+        <p class="pacer-eyebrow">Observed fields</p>
+        <h3>Top-level field coverage</h3>
+        {% if run_result.observed_fields %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Non-empty count</th>
+                  <th>Coverage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for field in run_result.observed_fields %}
+                  <tr>
+                    <td><code>{{ field.field }}</code></td>
+                    <td>{{ field.non_empty_count }}</td>
+                    <td>{{ '%.1f'|format(field.coverage * 100) }}%</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="small">No field observations available yet.</p>
+        {% endif %}
+      </section>
+
+      <section class="card stack">
+        <p class="pacer-eyebrow">Receipts & cost signals</p>
+        <h3>PACER receipts</h3>
+        <p class="small">
+          This section reports what PACER returned. It does not assume pricing or attempt to compute fees beyond PACER's receipts.
+        </p>
+        <div class="grid two">
+          <div class="card">
+            <h4>Totals</h4>
+            <p class="small">Billable pages total: <strong>{{ run_result.cost_summary.billable_pages }}</strong></p>
+            {% if run_result.cost_summary.fee_totals %}
+              <ul class="small">
+                {% for key, value in run_result.cost_summary.fee_totals.items() %}
+                  <li><code>{{ key }}</code>: {{ '%.2f'|format(value) }}</li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="small">No fee fields were reported.</p>
+            {% endif %}
+          </div>
+          <div class="card">
+            <h4>Per page receipts</h4>
+            {% if run_result.receipts %}
+              <ul class="small">
+                {% for receipt in run_result.receipts %}
+                  <li>
+                    <strong>Page {{ receipt.page }}</strong>
+                    <pre class="code-block">{{ receipt.receipt | tojson(indent=2) }}</pre>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="small">No receipts were returned.</p>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+
+      <section class="card stack">
+        <p class="pacer-eyebrow">Run logs</p>
+        <h3>Per-page activity</h3>
+        {% if run_result.logs %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Page</th>
+                  <th>Timestamp (UTC)</th>
+                  <th>Endpoint</th>
+                  <th>Status</th>
+                  <th>Elapsed (ms)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for log in run_result.logs %}
+                  <tr>
+                    <td>{{ log.page }}</td>
+                    <td>{{ log.timestamp.replace('T', ' ') }}</td>
+                    <td><code>{{ log.endpoint }}</code></td>
+                    <td>{{ log.status_code }}</td>
+                    <td>{{ log.elapsed_ms }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="small">No run logs available.</p>
+        {% endif %}
+      </section>
+
+      <section class="card stack">
+        <p class="pacer-eyebrow">Raw response</p>
+        <h3>Status codes and response snippets</h3>
+        <p class="small">
+          Each entry shows the HTTP status, endpoint, and a truncated, token-redacted snippet of the response body.
+        </p>
+        {% if run_result.response_snippets %}
+          {% for snippet in run_result.response_snippets %}
+            <div class="card">
+              <p class="small">
+                <strong>Page {{ snippet.page }}</strong> · Status {{ snippet.status_code }} · <code>{{ snippet.endpoint }}</code>
+              </p>
+              <pre class="code-block">{{ snippet.snippet | tojson(indent=2) }}</pre>
+            </div>
+          {% endfor %}
+        {% else %}
+          <p class="small">No response snippets captured.</p>
+        {% endif %}
+      </section>
+    </section>
+
+    <script>
+      (function () {
+        const copyButton = document.getElementById("copy-debug-bundle");
+        const bundle = document.getElementById("debug-bundle");
+        if (!copyButton || !bundle) return;
+
+        copyButton.addEventListener("click", async function () {
+          const text = bundle.textContent || "";
+          try {
+            await navigator.clipboard.writeText(text);
+            copyButton.textContent = "Copied";
+            window.setTimeout(function () {
+              copyButton.textContent = "Copy debug bundle";
+            }, 1500);
+          } catch (err) {
+            copyButton.textContent = "Copy failed";
+            window.setTimeout(function () {
+              copyButton.textContent = "Copy debug bundle";
+            }, 1500);
+          }
+        });
+      })();
+    </script>
+  {% endif %}
+{% endblock %}
