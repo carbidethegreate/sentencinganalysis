@@ -1,153 +1,210 @@
 {% extends "admin_federal_data_base.html" %}
 
 {% block federal_content %}
-  {% if pacer_authorized %}
-    <div class="card">
-      <p><strong>PACER session active.</strong></p>
-      <p class="small">You're authorized to make PACER Case Locator requests. Choose a next step.</p>
-      {% if pacer_authorized_at %}
-        <p class="small">Authorized at {{ pacer_authorized_at.replace('T', ' ') }} UTC.</p>
-      {% endif %}
-      <div class="actions">
-        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_pcl_batch_search') }}">PCL Batch Search</a>
-        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_expand_existing') }}">Expand Existing PCL Data</a>
-        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_advanced') }}">Advanced</a>
+  <section class="pacer-page">
+    {% if pacer_authorized %}
+      <div class="card pacer-status-card">
+        <div class="pacer-status-card__header">
+          <div>
+            <p class="pacer-eyebrow">PACER access</p>
+            <h2 class="pacer-status-card__title">Session active</h2>
+            <p class="small pacer-status-card__lead">
+              You're authorized to make PACER Case Locator requests. Choose your next step.
+            </p>
+            {% if pacer_authorized_at %}
+              <p class="small pacer-status-card__meta">
+                Authorized at {{ pacer_authorized_at.replace('T', ' ') }} UTC.
+              </p>
+            {% endif %}
+          </div>
+          <div class="pacer-status-card__badge" role="status" aria-live="polite">
+            <span class="pacer-status-card__badge-dot" aria-hidden="true"></span>
+            Connected
+          </div>
+        </div>
+        <div class="pacer-action-grid">
+          <a class="pacer-action-tile" href="{{ url_for('admin_federal_data_dashboard_pcl_batch_search') }}">
+            <span class="pacer-action-tile__title">PCL Batch Search</span>
+            <span class="pacer-action-tile__desc">Run bulk Case Locator searches with queue visibility.</span>
+            <span class="pacer-action-tile__cta">Open batch search →</span>
+          </a>
+          <a class="pacer-action-tile" href="{{ url_for('admin_federal_data_dashboard_expand_existing') }}">
+            <span class="pacer-action-tile__title">Expand Existing PCL Data</span>
+            <span class="pacer-action-tile__desc">Backfill docket details for cases you already indexed.</span>
+            <span class="pacer-action-tile__cta">Expand cases →</span>
+          </a>
+          <a class="pacer-action-tile" href="{{ url_for('admin_federal_data_dashboard_advanced') }}">
+            <span class="pacer-action-tile__title">Advanced Tools</span>
+            <span class="pacer-action-tile__desc">Access diagnostics, overrides, and power-user workflows.</span>
+            <span class="pacer-action-tile__cta">Open advanced →</span>
+          </a>
+        </div>
+        <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_logout') }}" class="pacer-status-card__form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="secondary pacer-status-card__button" type="submit">Clear PACER session</button>
+        </form>
       </div>
-      <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_logout') }}" style="margin-top: 16px;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button class="secondary" type="submit">Clear PACER session</button>
-      </form>
-    </div>
-  {% else %}
-    <div class="card" style="max-width: 720px;">
-      <p class="small">
-        Authenticate with PACER to enable Case Locator requests. Credentials are only used to
-        request a token and are never stored.
-      </p>
-      {% if pacer_env_notice %}
-        <div class="flash">
-          {{ pacer_env_notice }}
-        </div>
-      {% endif %}
-      {% if pacer_needs_otp %}
-        <p class="small"><strong>2FA required.</strong> Enter the one-time passcode from your authenticator app.</p>
-      {% endif %}
-      <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        {% if pacer_server_creds_available and not manual_mode %}
-          <div class="small" style="margin-bottom: 12px;">
-            PACER credentials are configured on the server; they are not shown in the browser.
+    {% else %}
+      <div class="pacer-auth-layout">
+        <div class="card pacer-auth-card">
+          <div class="pacer-auth-card__intro">
+            <p class="pacer-eyebrow">Secure connection</p>
+            <h2 class="pacer-auth-card__title">Authenticate with PACER</h2>
+            <p class="small pacer-auth-card__lead">
+              Credentials are only used to request a PACER token and are never stored.
+            </p>
           </div>
-          <div class="small" style="margin-bottom: 12px;">
-            <a href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
-              Enter PACER username/password manually
-            </a>
-          </div>
-        {% else %}
-          {% if manual_mode %}
-            <input type="hidden" name="manual_mode" value="1">
+
+          {% if pacer_env_notice %}
+            <div class="flash pacer-auth-card__flash">
+              {{ pacer_env_notice }}
+            </div>
           {% endif %}
-          <div style="position:absolute; left:-10000px; width:1px; height:1px; overflow:hidden;">
-            <label for="pacer-decoy-username">Username</label>
-            <input
-              id="pacer-decoy-username"
-              name="username"
-              type="text"
-              autocomplete="username"
-              tabindex="-1"
-              aria-hidden="true"
-            >
-            <label for="pacer-decoy-password">Password</label>
-            <input
-              id="pacer-decoy-password"
-              name="password"
-              type="password"
-              autocomplete="current-password"
-              tabindex="-1"
-              aria-hidden="true"
-            >
-          </div>
-          <div class="grid two">
-            <div>
-              <label for="pacer-login-id">PACER login ID</label>
+
+          {% if pacer_needs_otp %}
+            <div class="pacer-inline-note" role="status">
+              <strong>2FA required.</strong> Enter the one-time passcode from your authenticator app.
+            </div>
+          {% endif %}
+
+          <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off" class="pacer-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {% if pacer_server_creds_available and not manual_mode %}
+              <div class="pacer-server-creds">
+                <p class="small">
+                  PACER credentials are configured on the server; they are not shown in the browser.
+                </p>
+                <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
+                  Enter PACER username/password manually
+                </a>
+              </div>
+            {% else %}
+              {% if manual_mode %}
+                <input type="hidden" name="manual_mode" value="1">
+              {% endif %}
+              <div class="pacer-decoy-fields" aria-hidden="true">
+                <label for="pacer-decoy-username">Username</label>
+                <input
+                  id="pacer-decoy-username"
+                  name="username"
+                  type="text"
+                  autocomplete="username"
+                  tabindex="-1"
+                >
+                <label for="pacer-decoy-password">Password</label>
+                <input
+                  id="pacer-decoy-password"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  tabindex="-1"
+                >
+              </div>
+              <div class="grid two pacer-form__credentials">
+                <div>
+                  <label for="pacer-login-id">PACER login ID</label>
+                  <input
+                    id="pacer-login-id"
+                    name="pacer_login_id"
+                    autocomplete="off"
+                    required
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-bwignore="true"
+                  >
+                </div>
+                <div>
+                  <label for="pacer-login-secret">PACER password</label>
+                  <input
+                    id="pacer-login-secret"
+                    name="pacer_login_secret"
+                    type="password"
+                    autocomplete="new-password"
+                    required
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-bwignore="true"
+                  >
+                </div>
+              </div>
+            {% endif %}
+
+            <div class="pacer-form__section">
+              <label for="pacer-client-code">Client code (optional)</label>
               <input
-                id="pacer-login-id"
-                name="pacer_login_id"
+                id="pacer-client-code"
+                name="pacer_client_code"
                 autocomplete="off"
-                required
+                {% if pacer_client_code_required %}class="input-error"{% endif %}
                 data-lpignore="true"
                 data-1p-ignore="true"
                 data-bwignore="true"
               >
+              {% if pacer_client_code_required %}
+                <p class="small pacer-field-error">
+                  Client code required for this account. Enter the PACER-provided client code and try again.
+                </p>
+              {% endif %}
             </div>
-            <div>
-              <label for="pacer-login-secret">PACER password</label>
+
+            <div class="pacer-form__section">
+              <label for="pacer-otp-code">2FA code (required if your PACER account uses MFA)</label>
               <input
-                id="pacer-login-secret"
-                name="pacer_login_secret"
-                type="password"
-                autocomplete="new-password"
-                required
+                id="pacer-otp-code"
+                name="pacer_otp_code"
+                autocomplete="one-time-code"
+                inputmode="numeric"
                 data-lpignore="true"
                 data-1p-ignore="true"
                 data-bwignore="true"
               >
             </div>
-          </div>
-        {% endif %}
-        <div style="margin-top: 12px;">
-          <label for="pacer-client-code">Client code (optional)</label>
-          <input
-            id="pacer-client-code"
-            name="pacer_client_code"
-            autocomplete="off"
-            {% if pacer_client_code_required %}class="input-error"{% endif %}
-            data-lpignore="true"
-            data-1p-ignore="true"
-            data-bwignore="true"
-          >
-          {% if pacer_client_code_required %}
-            <p class="small" style="color: var(--danger); margin-top: 6px;">
-              Client code required for this account. Enter the PACER-provided client code and try again.
-            </p>
-          {% endif %}
+
+            <div class="pacer-ack">
+              <label class="pacer-ack__label" for="pacer-redaction-ack">
+                <input
+                  id="pacer-redaction-ack"
+                  name="pacer_redaction_ack"
+                  type="checkbox"
+                  value="1"
+                  required
+                  {% if pacer_redaction_acknowledged %}checked{% endif %}
+                >
+                <span>
+                  I have read the PACER redaction requirements and will comply by redacting all required sensitive information before filing.
+                </span>
+              </label>
+              {% if pacer_redaction_required %}
+                <p class="small pacer-field-error">
+                  PACER filer accounts require this acknowledgement. Check the box above and retry.
+                </p>
+              {% endif %}
+            </div>
+
+            <div class="actions pacer-form__actions">
+              <button class="primary pacer-form__submit" type="submit" id="pacer-authorize-button" disabled>Authorize</button>
+            </div>
+          </form>
+
+          <p class="small pacer-endpoint">
+            PACER authentication endpoint: {{ pacer_base_url }} (set <code>PACER_AUTH_BASE_URL</code> to switch environments).
+          </p>
         </div>
-        <div style="margin-top: 12px;">
-          <label for="pacer-otp-code">2FA code (required if your PACER account uses MFA)</label>
-          <input
-            id="pacer-otp-code"
-            name="pacer_otp_code"
-            autocomplete="one-time-code"
-            inputmode="numeric"
-            data-lpignore="true"
-            data-1p-ignore="true"
-            data-bwignore="true"
-          >
-        </div>
-        <div style="margin-top: 16px;">
-          <label style="display: flex; gap: 8px; align-items: flex-start;">
-            <input
-              id="pacer-redaction-ack"
-              name="pacer_redaction_ack"
-              type="checkbox"
-              value="1"
-              required
-              {% if pacer_redaction_acknowledged %}checked{% endif %}
-            >
-            <span>
-              I have read the PACER redaction requirements and will comply by redacting all required sensitive information before filing.
-            </span>
-          </label>
-          {% if pacer_redaction_required %}
-            <p class="small" style="color: var(--danger); margin-top: 6px;">
-              PACER filer accounts require this acknowledgement. Check the box above and retry.
-            </p>
-          {% endif %}
-        </div>
-        <div class="actions" style="margin-top: 16px;">
-          <button class="primary" type="submit" id="pacer-authorize-button" disabled>Authorize</button>
-        </div>
-      </form>
+
+        <aside class="card pacer-help-card" aria-label="PACER preparation guidance">
+          <h3 class="pacer-help-card__title">Before you connect</h3>
+          <ul class="pacer-checklist">
+            <li>Confirm your PACER credentials and client code (if required).</li>
+            <li>Keep your authenticator app nearby for multi-factor prompts.</li>
+            <li>Review the PACER redaction policy for filer accounts.</li>
+          </ul>
+          <div class="pacer-help-card__divider" role="presentation"></div>
+          <p class="small pacer-help-card__footnote">
+            Need to use server-side credentials instead? Remove <code>?manual=1</code> from the URL.
+          </p>
+        </aside>
+      </div>
+
       <script>
         (function () {
           const form = document.querySelector(
@@ -164,9 +221,6 @@
           toggleSubmit();
         })();
       </script>
-      <p class="small" style="margin-top: 16px;">
-        PACER authentication endpoint: {{ pacer_base_url }} (set <code>PACER_AUTH_BASE_URL</code> to switch environments).
-      </p>
-    </div>
-  {% endif %}
+    {% endif %}
+  </section>
 {% endblock %}

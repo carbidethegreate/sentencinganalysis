@@ -1178,3 +1178,281 @@ button.danger {
   font-size: 0.85rem;
   line-height: 1.4;
 }
+
+.pacer-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.pacer-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+
+.pacer-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.pacer-status-card__header {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pacer-status-card__title {
+  margin: 0;
+  font-size: clamp(1.7rem, 3vw, 2.2rem);
+  color: var(--primary-dark);
+}
+
+.pacer-status-card__lead,
+.pacer-status-card__meta {
+  max-width: 60ch;
+}
+
+.pacer-status-card__badge {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  font-weight: 700;
+}
+
+.pacer-status-card__badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 6px rgba(16, 185, 129, 0.15);
+}
+
+.pacer-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.pacer-action-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(140, 132, 128, 0.28);
+  background: linear-gradient(180deg, rgba(249, 246, 242, 0.9), rgba(249, 246, 242, 0.65));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.pacer-action-tile:hover,
+.pacer-action-tile:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(140, 132, 128, 0.45);
+  box-shadow: 0 18px 30px rgba(89, 81, 77, 0.18);
+  text-decoration: none;
+}
+
+.pacer-action-tile__title {
+  font-weight: 700;
+  color: var(--primary-dark);
+}
+
+.pacer-action-tile__desc {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.pacer-action-tile__cta {
+  margin-top: 4px;
+  font-weight: 600;
+  color: var(--primary-dark);
+}
+
+.pacer-status-card__form {
+  margin-top: 4px;
+}
+
+.pacer-status-card__button {
+  width: 100%;
+}
+
+.pacer-auth-layout {
+  display: grid;
+  gap: 18px;
+}
+
+.pacer-auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.pacer-auth-card__title {
+  margin: 0;
+  font-size: clamp(1.8rem, 3.4vw, 2.35rem);
+  color: var(--primary-dark);
+}
+
+.pacer-auth-card__lead {
+  max-width: 62ch;
+}
+
+.pacer-auth-card__flash {
+  margin: 0;
+}
+
+.pacer-inline-note {
+  border-radius: 14px;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  background: rgba(59, 130, 246, 0.1);
+  color: #1d4ed8;
+  padding: 12px 14px;
+}
+
+.pacer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pacer-form__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pacer-form__credentials {
+  gap: 16px;
+}
+
+.pacer-server-creds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px dashed rgba(140, 132, 128, 0.55);
+  background: rgba(217, 203, 186, 0.2);
+}
+
+.pacer-text-link {
+  font-weight: 600;
+}
+
+.pacer-decoy-fields {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+.pacer-ack {
+  border-radius: 16px;
+  border: 1px solid rgba(140, 132, 128, 0.3);
+  background: rgba(217, 203, 186, 0.15);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pacer-ack__label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 0;
+  color: var(--text);
+}
+
+.pacer-ack__label input {
+  margin-top: 2px;
+  width: auto;
+}
+
+.pacer-field-error {
+  color: var(--danger);
+  margin: 0;
+}
+
+.pacer-form__actions {
+  margin-top: 4px;
+}
+
+.pacer-form__submit {
+  min-width: 160px;
+}
+
+.pacer-endpoint {
+  margin: 4px 0 0;
+}
+
+.pacer-help-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: linear-gradient(180deg, rgba(13, 148, 136, 0.1), rgba(13, 148, 136, 0.04));
+  border-color: rgba(13, 148, 136, 0.25);
+}
+
+.pacer-help-card__title {
+  margin: 0;
+  color: var(--primary-dark);
+}
+
+.pacer-checklist {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+}
+
+.pacer-help-card__divider {
+  height: 1px;
+  background: rgba(13, 148, 136, 0.25);
+  margin: 4px 0;
+}
+
+.pacer-help-card__footnote {
+  margin: 0;
+  color: var(--muted);
+}
+
+@media (min-width: 720px) {
+  .pacer-status-card__header {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+
+  .pacer-status-card__button {
+    width: auto;
+  }
+}
+
+@media (min-width: 980px) {
+  .pacer-auth-layout {
+    grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+    align-items: start;
+  }
+
+  .pacer-help-card {
+    position: sticky;
+    top: 96px;
+  }
+}
