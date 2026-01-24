@@ -1302,6 +1302,13 @@ def create_app() -> Flask:
         error_message: Optional[str],
         response_snippets: Sequence[Dict[str, Any]],
     ) -> str:
+        preamble_lines = [
+            "courtdatapro admin debug bundle",
+            "page: /admin/pacer/explore/run",
+            f"mode: {mode}",
+        ]
+        if court_id:
+            preamble_lines.append(f"court_id: {court_id}")
         bundle = {
             "inputs": {
                 "mode": mode,
@@ -1323,7 +1330,8 @@ def create_app() -> Flask:
             "response_snippets": list(response_snippets),
             "record_samples": [_truncate_value(record) for record in list(records)[:3]],
         }
-        return json.dumps(bundle, indent=2, sort_keys=True, default=str)
+        preamble = "\n".join(preamble_lines)
+        return f"{preamble}\n\n{json.dumps(bundle, indent=2, sort_keys=True, default=str)}"
 
     def _apply_pacer_explore_run_retention(conn) -> None:
         pacer_explore_runs = pcl_tables["pacer_explore_runs"]
