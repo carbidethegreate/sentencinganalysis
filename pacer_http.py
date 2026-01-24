@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 import urllib.error
 import urllib.request
 
-from pacer_logging import redact_tokens
+from pacer_logging import scrub_log_message
 from pacer_tokens import PacerTokenStore
 
 
@@ -60,7 +60,7 @@ class PacerHttpClient:
                 request_headers["Cookie"] = cookie_value
 
         if self._logger:
-            self._logger.debug("PCL request %s %s", method, redact_tokens(url))
+            self._logger.debug("PCL request %s %s", method, scrub_log_message(url))
 
         request_obj = urllib.request.Request(
             url, data=data, headers=request_headers, method=method
