@@ -47,6 +47,12 @@ class PclCaseListResult:
     available_case_types: Sequence[str]
 
 
+@dataclass(frozen=True)
+class PclCaseCardResult:
+    rows: List[Dict[str, Any]]
+    pagination: Pagination
+
+
 def parse_filters(args: Dict[str, str]) -> Tuple[PclCaseFilters, int, int]:
     court_id = (args.get("court_id") or "").strip().lower()
     case_type = (args.get("case_type") or "").strip().lower()
@@ -131,6 +137,42 @@ def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size:
         available_courts=available_courts,
         available_case_types=available_case_types,
     )
+
+
+def list_case_cards(
+    engine, tables, filters: PclCaseFilters, *, page: int, page_size: int
+) -> PclCaseCardResult:
+    pcl_cases = tables["pcl_cases"]
+    where_clauses = _build_where_clauses(pcl_cases, filters)
+
+    base_stmt = (
+        select(
+            pcl_cases.c.id,
+            pcl_cases.c.court_id,
+            pcl_cases.c.case_number,
+            pcl_cases.c.case_number_full,
+            pcl_cases.c.case_title,
+            pcl_cases.c.case_type,
+            pcl_cases.c.date_filed,
+            pcl_cases.c.judge_last_name,
+            pcl_cases.c.case_year,
+            pcl_cases.c.case_office,
+            pcl_cases.c.case_link,
+        )
+        .where(and_(*where_clauses))
+        .order_by(pcl_cases.c.date_filed.desc().nullslast(), pcl_cases.c.id.desc())
+    )
+
+    count_stmt = select(func.count()).select_from(pcl_cases).where(and_(*where_clauses))
+    offset = (page - 1) * page_size
+    paged_stmt = base_stmt.limit(page_size).offset(offset)
+
+    with engine.begin() as conn:
+        total = int(conn.execute(count_stmt).scalar_one())
+        rows = conn.execute(paged_stmt).mappings().all()
+
+    pagination = Pagination(page=page, page_size=page_size, total=total)
+    return PclCaseCardResult(rows=[dict(row) for row in rows], pagination=pagination)
 
 
 def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:

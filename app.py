@@ -800,12 +800,18 @@ def create_app() -> Flask:
     _ensure_table_columns(
         "pcl_cases",
         {
+            "case_id": "VARCHAR(120)",
             "case_number_full": "TEXT",
             "date_closed": "DATE",
+            "effective_date_closed": "DATE",
             "case_title": "TEXT",
+            "case_link": "TEXT",
+            "case_year": "VARCHAR(10)",
+            "case_office": "VARCHAR(20)",
             "judge_last_name": "VARCHAR(80)",
             "record_hash": "VARCHAR(128)",
             "last_segment_id": "INTEGER",
+            "source_last_seen_at": "TIMESTAMP",
         },
         label="pcl_cases",
     )
@@ -814,8 +820,20 @@ def create_app() -> Flask:
         {
             "court_id": "VARCHAR(50)",
             "case_number": "TEXT",
+            "ingested_at": "TIMESTAMP",
         },
         label="pcl_case_result_raw",
+    )
+    _ensure_table_columns(
+        "pcl_batch_segments",
+        {
+            "batch_search_id": "INTEGER",
+            "segment_from": "DATE",
+            "segment_to": "DATE",
+            "attempts": "INTEGER",
+            "last_error": "TEXT",
+        },
+        label="pcl_batch_segments",
     )
 
     def _ensure_indexes(statements: Dict[str, str], *, label: str) -> None:
@@ -826,16 +844,17 @@ def create_app() -> Flask:
         except Exception:
             app.logger.exception("Unable to ensure %s indexes.", label)
 
+    _ensure_indexes(
+        {
+            "ix_pcl_cases_court_date": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_court_date ON pcl_cases (court_id, date_filed)",
+            "ix_pcl_cases_case_type": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_case_type ON pcl_cases (case_type)",
+            "ix_pcl_cases_judge_last_name": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_judge_last_name ON pcl_cases (judge_last_name)",
+            "ix_pcl_cases_court_case_number_full": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_court_case_number_full ON pcl_cases (court_id, case_number_full)",
+            "ix_pcl_case_result_raw_court_case": "CREATE INDEX IF NOT EXISTS ix_pcl_case_result_raw_court_case ON pcl_case_result_raw (court_id, case_number)",
+        },
+        label="pcl",
+    )
     if engine.dialect.name == "sqlite":
-        _ensure_indexes(
-            {
-                "ix_pcl_cases_court_date": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_court_date ON pcl_cases (court_id, date_filed)",
-                "ix_pcl_cases_case_type": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_case_type ON pcl_cases (case_type)",
-                "ix_pcl_cases_judge_last_name": "CREATE INDEX IF NOT EXISTS ix_pcl_cases_judge_last_name ON pcl_cases (judge_last_name)",
-                "ix_pcl_case_result_raw_court_case": "CREATE INDEX IF NOT EXISTS ix_pcl_case_result_raw_court_case ON pcl_case_result_raw (court_id, case_number)",
-            },
-            label="pcl",
-        )
         _ensure_indexes(
             {
                 "ix_judges_name_last": "CREATE INDEX IF NOT EXISTS ix_judges_name_last ON judges (name_last)",
@@ -862,6 +881,21 @@ def create_app() -> Flask:
             },
             label="federal courts states",
         )
+        try:
+            with engine.begin() as conn:
+                constraint_exists = conn.execute(
+                    sa_text(
+                        "SELECT 1 FROM pg_constraint WHERE conname = 'ck_pcl_cases_case_type'"
+                    )
+                ).scalar()
+                if not constraint_exists:
+                    conn.execute(
+                        sa_text(
+                            "ALTER TABLE pcl_cases ADD CONSTRAINT ck_pcl_cases_case_type CHECK (case_type in ('cr','crim','ncrim','dcrim'))"
+                        )
+                    )
+        except Exception:
+            app.logger.exception("Unable to ensure pcl case type constraint.")
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
