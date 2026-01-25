@@ -120,6 +120,11 @@
               </summary>
 
               <div class="database-schema-item__content">
+                {% if schema.schema_error %}
+                  <div class="database-schema-item__error">
+                    <p class="small">Schema metadata unavailable: {{ schema.schema_error }}</p>
+                  </div>
+                {% endif %}
                 {% if schema.tables %}
                   {% for table in schema.tables %}
                     <article
@@ -130,25 +135,34 @@
                         <div>
                           <h3>{{ table.name }}</h3>
                           <span class="small">{{ table.column_count }} columns</span>
+                          {% if table.column_error %}
+                            <span class="small database-table-item__error-label">Column metadata unavailable</span>
+                          {% endif %}
                         </div>
                         <a class="button small" href="{{ url_for('admin_database_dashboard', schema=schema.name, table=table.name) }}">View data</a>
                       </div>
-                      <ul class="database-table-item__columns">
-                        {% for column in table.columns %}
-                          <li>
-                            <div>
-                              <span class="database-column-name">{{ column.name }}</span>
-                              <span class="database-column-type">{{ column.type }}</span>
-                            </div>
-                            <div class="database-column-actions">
-                              {% if not column.nullable %}
-                                <span class="database-column-pill">Required</span>
-                              {% endif %}
-                              <a class="database-column-link" href="{{ url_for('admin_database_dashboard', schema=schema.name, table=table.name, column=column.name) }}">Drill down</a>
-                            </div>
-                          </li>
-                        {% endfor %}
-                      </ul>
+                      {% if table.column_error %}
+                        <div class="database-table-item__error">
+                          <p class="small">We could not load column details for this table.</p>
+                        </div>
+                      {% else %}
+                        <ul class="database-table-item__columns">
+                          {% for column in table.columns %}
+                            <li>
+                              <div>
+                                <span class="database-column-name">{{ column.name }}</span>
+                                <span class="database-column-type">{{ column.type }}</span>
+                              </div>
+                              <div class="database-column-actions">
+                                {% if not column.nullable %}
+                                  <span class="database-column-pill">Required</span>
+                                {% endif %}
+                                <a class="database-column-link" href="{{ url_for('admin_database_dashboard', schema=schema.name, table=table.name, column=column.name) }}">Drill down</a>
+                              </div>
+                            </li>
+                          {% endfor %}
+                        </ul>
+                      {% endif %}
                     </article>
                   {% endfor %}
                 {% else %}
@@ -175,15 +189,19 @@
           <h2>Data Preview</h2>
           <p class="small">Preview real rows and column samples to validate schemas quickly.</p>
         </div>
-        {% if selected_schema and selected_table %}
-          <div class="database-detail-meta">
-            <span class="pill">{{ selected_schema }}</span>
-            <span class="pill">{{ selected_table }}</span>
+        <div class="database-detail-meta">
+          {% if selected_schema and selected_table %}
+            <span class="pill">Schema: {{ selected_schema }}</span>
+            <span class="pill">Table: {{ selected_table }}</span>
             {% if selected_column %}
-              <span class="pill">{{ selected_column }}</span>
+              <span class="pill">Column: {{ selected_column }}</span>
+            {% else %}
+              <span class="pill muted">Column: None</span>
             {% endif %}
-          </div>
-        {% endif %}
+          {% else %}
+            <span class="pill muted">No selection yet</span>
+          {% endif %}
+        </div>
       </div>
 
       {% if selected_schema and selected_table %}
