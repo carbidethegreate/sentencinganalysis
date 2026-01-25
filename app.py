@@ -3270,33 +3270,44 @@ def create_app() -> Flask:
         if selected_schema and selected_table:
             available_tables = schema_table_map.get(selected_schema, [])
             if selected_table in available_tables:
-                selected_table_columns = [
-                    {
-                        "name": column["name"],
-                        "type": str(column["type"]),
-                        "nullable": column.get("nullable", True),
-                        "default": column.get("default"),
-                    }
-                    for column in inspector.get_columns(selected_table, schema=selected_schema)
-                ]
+                try:
+                    selected_table_columns = [
+                        {
+                            "name": column["name"],
+                            "type": str(column["type"]),
+                            "nullable": column.get("nullable", True),
+                            "default": column.get("default"),
+                        }
+                        for column in inspector.get_columns(
+                            selected_table, schema=selected_schema
+                        )
+                    ]
+                except SQLAlchemyError as exc:
+                    table_preview_error = str(exc)
+                except Exception as exc:  # noqa: BLE001
+                    table_preview_error = f"{exc.__class__.__name__}: {exc}"
+
                 preparer = engine.dialect.identifier_preparer
                 schema_identifier = preparer.quote(selected_schema)
                 table_identifier = preparer.quote(selected_table)
                 full_table_identifier = f"{schema_identifier}.{table_identifier}"
-                try:
-                    with engine.connect() as connection:
-                        result = connection.execute(
-                            sa_text(f"SELECT * FROM {full_table_identifier} LIMIT :limit"),
-                            {"limit": preview_limit_value},
-                        )
-                        rows = [dict(row._mapping) for row in result]
-                        table_preview = {"columns": list(result.keys()), "rows": rows}
-                except SQLAlchemyError as exc:
-                    table_preview_error = str(exc)
+                if table_preview_error is None:
+                    try:
+                        with engine.connect() as connection:
+                            result = connection.execute(
+                                sa_text(f"SELECT * FROM {full_table_identifier} LIMIT :limit"),
+                                {"limit": preview_limit_value},
+                            )
+                            rows = [dict(row._mapping) for row in result]
+                            table_preview = {"columns": list(result.keys()), "rows": rows}
+                    except SQLAlchemyError as exc:
+                        table_preview_error = str(exc)
+                    except Exception as exc:  # noqa: BLE001
+                        table_preview_error = f"{exc.__class__.__name__}: {exc}"
 
                 if selected_column:
                     column_names = {column["name"] for column in selected_table_columns}
-                    if selected_column in column_names:
+                    if selected_column in column_names and table_preview_error is None:
                         column_identifier = preparer.quote(selected_column)
                         try:
                             with engine.connect() as connection:
@@ -3317,6 +3328,12 @@ def create_app() -> Flask:
                                 }
                         except SQLAlchemyError as exc:
                             column_preview_error = str(exc)
+                        except Exception as exc:  # noqa: BLE001
+                            column_preview_error = f"{exc.__class__.__name__}: {exc}"
+                    elif selected_column:
+                        column_preview_error = "Selected column is not available in this table."
+            else:
+                table_preview_error = "Selected table was not found in this schema."
 
         database_url = engine.url.render_as_string(hide_password=True)
         return render_template(
