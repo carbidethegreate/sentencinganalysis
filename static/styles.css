@@ -681,6 +681,130 @@ button.danger {
   color: #b91c1c;
 }
 
+.code-block {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(140, 132, 128, 0.3);
+  background: rgba(255, 255, 255, 0.75);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--primary-dark);
+  word-break: break-all;
+}
+
+.database-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.database-connection-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.database-connection-card__body {
+  margin-top: 12px;
+}
+
+.database-stat-grid {
+  margin: 16px 0 24px;
+}
+
+.database-schema-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.database-schema-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.database-table-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.database-table-card {
+  border-radius: 12px;
+  border: 1px solid rgba(140, 132, 128, 0.25);
+  background: rgba(255, 255, 255, 0.6);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.database-table-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.database-table-card__header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--primary-dark);
+}
+
+.database-column-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.database-column-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(140, 132, 128, 0.2);
+}
+
+.database-column-name {
+  font-weight: 600;
+  color: var(--primary-dark);
+}
+
+.database-column-type {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.database-column-pill {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(185, 28, 28, 0.1);
+  color: #b91c1c;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.database-view-block {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(217, 203, 186, 0.2);
+  border: 1px dashed rgba(140, 132, 128, 0.35);
+}
+
 .error-actions {
   display: flex;
   flex-direction: column;
