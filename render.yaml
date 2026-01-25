@@ -128,10 +128,12 @@ projects:
         sync: false
       - key: PORT
         sync: false
+        value: "10000"
       - key: PGADMIN_SERVER_JSON_FILE
         sync: false
       - key: PGADMIN_LISTEN_PORT
         sync: false
+        value: "10000"
       - key: PGADMIN_DEFAULT_PASSWORD
         sync: false
       - key: PGADMIN_DEFAULT_EMAIL
@@ -153,6 +155,7 @@ projects:
         name: pgadmin
         mountPath: /var/lib/pgadmin
         sizeGB: 1
+      healthCheckPath: /login
       autoDeployTrigger: commit
     - type: web
       name: CourtDataPro
