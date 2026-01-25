@@ -54,7 +54,12 @@ class PclClient:
 
     def immediate_case_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
         page_num = max(0, int(page))
-        return self._request_json_with_meta("POST", f"/cases/find?page={page_num}", payload)
+        sanitized = _sanitize_case_search_payload(payload)
+        return self._request_json_with_meta(
+            "POST",
+            f"/cases/find?page={page_num}",
+            sanitized,
+        )
 
     def immediate_party_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
         page_num = max(0, int(page))
@@ -113,3 +118,10 @@ def _safe_json_loads(payload: bytes) -> Dict[str, Any]:
         return json.loads(payload.decode("utf-8"))
     except json.JSONDecodeError:
         return {}
+
+
+def _sanitize_case_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned = dict(payload or {})
+    for key in ("pageSize", "page_size", "page", "pageNumber", "page_number"):
+        cleaned.pop(key, None)
+    return cleaned

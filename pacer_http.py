@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 
 from pacer_logging import scrub_log_message
-from pacer_tokens import PacerTokenStore
+from pacer_tokens import PacerTokenRecord, PacerTokenStore
 
 
 class TokenExpired(Exception):
@@ -33,12 +33,14 @@ class PacerHttpClient:
         token_cookie_name: str = "NextGenCSO",
         expected_environment: Optional[str] = None,
         env_mismatch_reason: Optional[str] = None,
+        token_refresher: Optional[Any] = None,
     ) -> None:
         self._token_store = token_store
         self._logger = logger
         self._token_cookie_name = token_cookie_name
         self._expected_environment = expected_environment
         self._env_mismatch_reason = env_mismatch_reason
+        self._token_refresher = token_refresher
 
     def request(
         self,
@@ -49,6 +51,7 @@ class PacerHttpClient:
         data: Optional[bytes] = None,
         timeout: int = 30,
         include_cookie: bool = False,
+        _retried: bool = False,
     ) -> PacerHttpResponse:
         if self._env_mismatch_reason:
             raise PacerEnvironmentMismatch(self._env_mismatch_reason)
@@ -56,6 +59,8 @@ class PacerHttpClient:
         token_record = self._token_store.get_token(
             expected_environment=self._expected_environment
         )
+        if not token_record or not token_record.token:
+            token_record = self._refresh_token()
         if not token_record or not token_record.token:
             raise TokenExpired("PACER token missing or expired.")
 
@@ -88,6 +93,18 @@ class PacerHttpClient:
             if exc.headers:
                 self._capture_refreshed_token(dict(exc.headers))
             if exc.code == 401:
+                if not _retried and self._token_refresher:
+                    refreshed = self._refresh_token()
+                    if refreshed and refreshed.token:
+                        return self.request(
+                            method,
+                            url,
+                            headers=headers,
+                            data=data,
+                            timeout=timeout,
+                            include_cookie=include_cookie,
+                            _retried=True,
+                        )
                 raise TokenExpired("PACER token expired.") from exc
             raise
 
@@ -106,3 +123,22 @@ class PacerHttpClient:
                 obtained_at=datetime.utcnow(),
                 environment=self._expected_environment,
             )
+
+    def _refresh_token(self) -> Optional[PacerTokenRecord]:
+        if not self._token_refresher:
+            return None
+        try:
+            refreshed = self._token_refresher()
+        except Exception:
+            if self._logger:
+                self._logger.warning("PACER token refresh failed.")
+            return None
+        if isinstance(refreshed, PacerTokenRecord):
+            return refreshed
+        if isinstance(refreshed, str) and refreshed:
+            return self._token_store.save_token(
+                refreshed,
+                obtained_at=datetime.utcnow(),
+                environment=self._expected_environment,
+            )
+        return None
