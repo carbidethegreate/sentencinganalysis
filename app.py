@@ -3219,28 +3219,49 @@ def create_app() -> Flask:
             if _is_system_schema(schema_name):
                 continue
             table_entries: List[Dict[str, Any]] = []
-            table_names = sorted(inspector.get_table_names(schema=schema_name))
-            view_names = sorted(inspector.get_view_names(schema=schema_name))
+            schema_error: Optional[str] = None
+            try:
+                table_names = sorted(inspector.get_table_names(schema=schema_name))
+                view_names = sorted(inspector.get_view_names(schema=schema_name))
+            except SQLAlchemyError as exc:
+                table_names = []
+                view_names = []
+                schema_error = str(exc)
+            except Exception as exc:  # noqa: BLE001
+                table_names = []
+                view_names = []
+                schema_error = f"{exc.__class__.__name__}: {exc}"
+
             schema_table_map[schema_name] = table_names
             for table_name in table_names:
-                columns = inspector.get_columns(table_name, schema=schema_name)
-                column_entries = [
-                    {
-                        "name": column["name"],
-                        "type": str(column["type"]),
-                        "nullable": column.get("nullable", True),
-                        "default": column.get("default"),
-                    }
-                    for column in columns
-                ]
+                column_entries: List[Dict[str, Any]] = []
+                column_error: Optional[str] = None
+                try:
+                    columns = inspector.get_columns(table_name, schema=schema_name)
+                    column_entries = [
+                        {
+                            "name": column["name"],
+                            "type": str(column["type"]),
+                            "nullable": column.get("nullable", True),
+                            "default": column.get("default"),
+                        }
+                        for column in columns
+                    ]
+                except SQLAlchemyError as exc:
+                    column_error = str(exc)
+                except Exception as exc:  # noqa: BLE001
+                    column_error = f"{exc.__class__.__name__}: {exc}"
+
                 table_entries.append(
                     {
                         "name": table_name,
                         "columns": column_entries,
                         "column_count": len(column_entries),
+                        "column_error": column_error,
                     }
                 )
-                total_columns += len(column_entries)
+                if column_error is None:
+                    total_columns += len(column_entries)
             total_tables += len(table_entries)
             total_views += len(view_names)
             schemas.append(
@@ -3248,6 +3269,7 @@ def create_app() -> Flask:
                     "name": schema_name,
                     "tables": table_entries,
                     "views": view_names,
+                    "schema_error": schema_error,
                 }
             )
 

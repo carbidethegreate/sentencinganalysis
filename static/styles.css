@@ -172,6 +172,12 @@ header {
   font-weight: 600;
 }
 
+.pill.muted {
+  background: rgba(148, 163, 184, 0.2);
+  border-color: rgba(148, 163, 184, 0.4);
+  color: var(--muted);
+}
+
 .dropdown {
   position: relative;
   display: inline-block;
@@ -1083,6 +1089,13 @@ button.danger {
   gap: 12px;
 }
 
+.database-schema-item__error {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(254, 226, 226, 0.4);
+  border: 1px dashed rgba(239, 68, 68, 0.3);
+}
+
 .database-table-item {
   border-radius: 12px;
   border: 1px solid rgba(140, 132, 128, 0.18);
@@ -1110,6 +1123,16 @@ button.danger {
   font-size: 1rem;
 }
 
+.database-table-item__error-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
 .database-table-item__columns {
   list-style: none;
   padding: 0;
@@ -1128,6 +1151,13 @@ button.danger {
   border-radius: 10px;
   border: 1px solid rgba(140, 132, 128, 0.2);
   background: rgba(255, 255, 255, 0.7);
+}
+
+.database-table-item__error {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(254, 226, 226, 0.45);
+  border: 1px solid rgba(239, 68, 68, 0.25);
 }
 
 .database-column-actions {
