@@ -1,5 +1,5 @@
 :root {
-  --max-width: 1100px;
+  --max-width: min(1440px, 95vw);
   --border: #d9cbba;
   --text: #59514d;
   --muted: #8c8480;
