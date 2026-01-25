@@ -4132,6 +4132,9 @@ def create_app() -> Flask:
             "Yes" if billable_flag is True else "No" if billable_flag is False else "Unknown"
         )
         manual_mode = request.args.get("manual") == "1"
+        search_mode = (request.args.get("search_mode") or "immediate").strip().lower()
+        if search_mode not in {"immediate", "batch"}:
+            search_mode = "immediate"
         return render_template(
             "admin_federal_data_get_pacer_data.html",
             active_page="federal_data_dashboard",
@@ -4156,6 +4159,7 @@ def create_app() -> Flask:
             pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
             pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
             manual_mode=manual_mode,
+            search_mode=search_mode,
         )
 
     @app.get("/admin/pacer/explore")

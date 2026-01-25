@@ -265,6 +265,26 @@
           </script>
         {% endif %}
         <div class="pacer-action-grid">
+          <div class="pacer-action-tile pacer-action-tile--control" role="group" aria-label="Search mode">
+            <span class="pacer-action-tile__title">Search mode</span>
+            <span class="pacer-action-tile__desc">Choose how to run PCL searches. Immediate runs now, Batch queues a report.</span>
+            <div class="pacer-action-tile__controls">
+              <label class="pacer-radio">
+                <input type="radio" name="search_mode" value="immediate" {% if search_mode != 'batch' %}checked{% endif %}>
+                <span>Immediate</span>
+              </label>
+              <label class="pacer-radio">
+                <input type="radio" name="search_mode" value="batch" {% if search_mode == 'batch' %}checked{% endif %}>
+                <span>Batch</span>
+              </label>
+            </div>
+            <div class="pacer-action-tile__cta">
+              <a class="primary" data-search-cta href="{{ url_for('admin_pacer_explore') }}">Start immediate search →</a>
+            </div>
+            <p class="small pacer-action-tile__note">
+              Search results are saved when new. Existing cases are detected and not duplicated.
+            </p>
+          </div>
           <a class="pacer-action-tile" href="{{ url_for('admin_pacer_explore') }}">
             <span class="pacer-action-tile__title">Immediate Search</span>
             <span class="pacer-action-tile__desc">Run live Case Locator searches and review results instantly.</span>
@@ -286,6 +306,28 @@
             <span class="pacer-action-tile__cta">Open advanced →</span>
           </a>
         </div>
+        <script>
+          (function () {
+            const container = document.querySelector(".pacer-action-tile--control");
+            if (!container) return;
+            const radios = container.querySelectorAll("input[name='search_mode']");
+            const cta = container.querySelector("[data-search-cta]");
+            if (!cta || radios.length === 0) return;
+            const setCta = function (mode) {
+              if (mode === "batch") {
+                cta.textContent = "Start batch search →";
+                cta.setAttribute("href", "{{ url_for('admin_federal_data_dashboard_pcl_batch_search') }}");
+              } else {
+                cta.textContent = "Start immediate search →";
+                cta.setAttribute("href", "{{ url_for('admin_pacer_explore') }}");
+              }
+            };
+            radios.forEach((radio) => {
+              radio.addEventListener("change", () => setCta(radio.value));
+              if (radio.checked) setCta(radio.value);
+            });
+          })();
+        </script>
         <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_logout') }}" class="pacer-status-card__form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button class="secondary pacer-status-card__button" type="submit">Clear PACER session</button>
