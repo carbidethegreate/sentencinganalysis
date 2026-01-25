@@ -76,7 +76,11 @@ from pacer_tokens import (
 )
 from pacer_env import (
     DEFAULT_PACER_AUTH_BASE_URL,
+    DEFAULT_PACER_AUTH_BASE_URL_PROD,
     DEFAULT_PCL_BASE_URL,
+    DEFAULT_PCL_BASE_URL_PROD,
+    ENV_PROD,
+    ENV_QA,
     infer_pacer_env,
     pacer_env_billable,
     pacer_env_host,
@@ -935,15 +939,29 @@ def create_app() -> Flask:
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
+    pacer_auth_base_url_env = os.environ.get("PACER_AUTH_BASE_URL")
+    pcl_base_url_env = os.environ.get("PCL_BASE_URL")
     pacer_auth_base_url = _normalize_pacer_base_url(
-        os.environ.get("PACER_AUTH_BASE_URL", DEFAULT_PACER_AUTH_BASE_URL)
+        pacer_auth_base_url_env or DEFAULT_PACER_AUTH_BASE_URL
     )
-    pcl_base_url_env = _normalize_pacer_base_url(
-        os.environ.get("PCL_BASE_URL", DEFAULT_PCL_BASE_URL)
+    pcl_base_url_candidate = _normalize_pacer_base_url(
+        pcl_base_url_env or DEFAULT_PCL_BASE_URL
     )
+    if not pacer_auth_base_url_env and pcl_base_url_candidate:
+        inferred_env = infer_pacer_env(pcl_base_url_candidate)
+        if inferred_env == ENV_PROD:
+            pacer_auth_base_url = DEFAULT_PACER_AUTH_BASE_URL_PROD
+        elif inferred_env == ENV_QA:
+            pacer_auth_base_url = DEFAULT_PACER_AUTH_BASE_URL
+    if not pcl_base_url_env and pacer_auth_base_url:
+        inferred_env = infer_pacer_env(pacer_auth_base_url)
+        if inferred_env == ENV_PROD:
+            pcl_base_url_candidate = DEFAULT_PCL_BASE_URL_PROD
+        elif inferred_env == ENV_QA:
+            pcl_base_url_candidate = DEFAULT_PCL_BASE_URL
     pacer_env_config = validate_pacer_environment_config(
         pacer_auth_base_url,
-        pcl_base_url_env,
+        pcl_base_url_candidate,
     )
     pacer_auth_env = pacer_env_config.auth_env
     pacer_auth_client = PacerAuthClient(
