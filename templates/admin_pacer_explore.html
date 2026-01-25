@@ -65,10 +65,11 @@
           {% if pacer_search_enabled %}Search enabled{% else %}Search disabled{% endif %}
         </div>
       </div>
-      {% if pacer_search_disabled %}
+      {% if pacer_client_code_required %}
         <div class="flash warning">
-          <strong>Search disabled:</strong>
-          PACER returned a token but requires a client code to enable searching. Add the client code and re-authorize.
+          <strong>Client code required by PACER:</strong>
+          PACER indicated that a client code is required for this account. Searches remain enabled, but re-authorize
+          with a client code to ensure billable activity is tracked correctly.
         </div>
       {% endif %}
       <div class="actions">
@@ -86,7 +87,8 @@
 
     {% if not pacer_search_enabled %}
       <div class="flash warning">
-        Explore PACER is disabled until authentication and search permissions are aligned. Re-authorize with a client code (if required), then retry.
+        Explore PACER is disabled until authentication is active and the PACER environment matches the configured PCL environment.
+        Re-authorize and try again.
       </div>
     {% endif %}
 

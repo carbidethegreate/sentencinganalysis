@@ -483,12 +483,8 @@ def interpret_pacer_auth_response(
         login_result == "1" and _pacer_mentions_redaction(error_description)
     )
     token_present = bool(login_result == "0" and token)
-    search_disabled = bool(token_present and needs_client_code)
+    search_disabled = False
     search_disabled_reason = None
-    if search_disabled:
-        search_disabled_reason = (
-            "PACER authenticated, but searching is disabled until a client code is supplied."
-        )
     can_proceed = bool(token_present and (search_disabled or not error_description))
     return PacerAuthResult(
         token=token if can_proceed else "",
