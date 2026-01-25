@@ -52,6 +52,21 @@ class PclClient:
     def delete_case_report(self, report_id: str) -> Dict[str, Any]:
         return self._request_json("DELETE", f"/cases/reports/{report_id}")
 
+    def start_party_download(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request_json("POST", "/parties/download", payload)
+
+    def get_party_download_status(self, report_id: str) -> Dict[str, Any]:
+        return self._request_json("GET", f"/parties/download/status/{report_id}")
+
+    def list_party_reports(self) -> Dict[str, Any]:
+        return self._request_json("GET", "/parties/reports")
+
+    def download_party_report(self, report_id: str) -> Dict[str, Any]:
+        return self._request_json("GET", f"/parties/download/{report_id}")
+
+    def delete_party_report(self, report_id: str) -> Dict[str, Any]:
+        return self._request_json("DELETE", f"/parties/reports/{report_id}")
+
     def immediate_case_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
         page_num = max(0, int(page))
         sanitized = _sanitize_case_search_payload(payload)

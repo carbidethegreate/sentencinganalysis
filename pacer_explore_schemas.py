@@ -11,20 +11,24 @@ EXPLORE_PACER_UI_IGNORE_KEYS: Set[str] = {
 EXPLORE_PACER_UI_FIELDS: Dict[str, Set[str]] = {
     "cases": {
         "mode",
+        "search_mode",
         "court_id",
         "date_filed_from",
         "date_filed_to",
+        "page",
         "max_records",
         "case_types",
     },
     "parties": {
         "mode",
+        "search_mode",
         "last_name",
         "exact_name_match",
         "first_name",
         "date_filed_from",
         "date_filed_to",
         "court_id",
+        "page",
         "max_records",
     },
 }

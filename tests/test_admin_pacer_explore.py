@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -35,6 +36,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.engine = self.app.engine
         self.courts_table = self.app.pcl_courts_table
         self.explore_runs_table = self.app.pcl_tables["pacer_explore_runs"]
+        self.search_requests_table = self.app.pcl_tables["pacer_search_requests"]
         self._seed_courts()
         self._login_admin()
 
@@ -127,7 +129,10 @@ class AdminPacerExploreTests(unittest.TestCase):
             "date_filed_from": "2024-01-01",
             "date_filed_to": "2024-01-31",
             "max_records": "54",
+            "page": "1",
         }
+        if "search_mode" in overrides:
+            payload["search_mode"] = overrides.pop("search_mode")
         payload.update(overrides)
         return self.client.post("/admin/pacer/explore/run", data=payload)
 
@@ -450,6 +455,119 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.assertIn("Doe", html)
         self.assertIn("courtCase", html)
         self.assertIn("judgeLastName", html)
+
+    def test_batch_mode_submits_report_and_stores_request(self):
+        self._authorize_pacer()
+        report_payload = {"reportId": "123", "status": "SUBMITTED", "recordCount": 10}
+        with patch.object(self.app.pcl_client, "start_case_download", return_value=report_payload) as mock_start:
+            response = self._post_run(search_mode="batch", max_records="108")
+        html = response.data.decode("utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Report submitted", html)
+        mock_start.assert_called_once()
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                select(self.search_requests_table).order_by(self.search_requests_table.c.id.desc())
+            ).mappings().first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["search_mode"], "batch")
+        self.assertEqual(row["report_id"], "123")
+
+    def test_batch_status_updates_request(self):
+        self._authorize_pacer()
+        criteria = {
+            "ui_inputs": {
+                "court_id": "akdc",
+                "date_filed_from": "2024-01-01",
+                "date_filed_to": "2024-01-31",
+                "max_records": "54",
+            },
+            "request_body": {
+                "courtId": ["akdc"],
+                "dateFiledFrom": "2024-01-01",
+                "dateFiledTo": "2024-01-31",
+            },
+        }
+        with self.engine.begin() as conn:
+            request_id = conn.execute(
+                insert(self.search_requests_table).values(
+                    search_type="case",
+                    search_mode="batch",
+                    criteria_json=json.dumps(criteria),
+                    report_id="101",
+                    report_status="SUBMITTED",
+                )
+            ).inserted_primary_key[0]
+
+        status_payload = {"reportId": "101", "status": "COMPLETED", "recordCount": 5}
+        with patch.object(self.app.pcl_client, "get_case_download_status", return_value=status_payload):
+            response = self.client.post(
+                "/admin/pacer/explore/batch/status",
+                data={"csrf_token": "csrf-token", "request_id": request_id},
+            )
+        html = response.data.decode("utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("COMPLETED", html)
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                select(self.search_requests_table).where(self.search_requests_table.c.id == request_id)
+            ).mappings().first()
+        self.assertEqual(row["report_status"], "COMPLETED")
+
+    def test_batch_load_results_after_completion(self):
+        self._authorize_pacer()
+        criteria = {
+            "ui_inputs": {
+                "court_id": "akdc",
+                "date_filed_from": "2024-01-01",
+                "date_filed_to": "2024-01-31",
+                "max_records": "54",
+            },
+            "request_body": {
+                "courtId": ["akdc"],
+                "dateFiledFrom": "2024-01-01",
+                "dateFiledTo": "2024-01-31",
+            },
+        }
+        with self.engine.begin() as conn:
+            request_id = conn.execute(
+                insert(self.search_requests_table).values(
+                    search_type="case",
+                    search_mode="batch",
+                    criteria_json=json.dumps(criteria),
+                    report_id="202",
+                    report_status="SUBMITTED",
+                )
+            ).inserted_primary_key[0]
+
+        status_payload = {"reportId": "202", "status": "COMPLETED", "recordCount": 1}
+        report_payload = {
+            "content": [
+                {
+                    "caseNumber": "1:24-cr-00004",
+                    "caseType": "cr",
+                    "dateFiled": "2024-01-20",
+                    "shortTitle": "USA v. Batch",
+                }
+            ]
+        }
+        with patch.object(self.app.pcl_client, "get_case_download_status", return_value=status_payload):
+            with patch.object(self.app.pcl_client, "download_case_report", return_value=report_payload):
+                response = self.client.post(
+                    "/admin/pacer/explore/batch/load",
+                    data={"csrf_token": "csrf-token", "request_id": request_id},
+                )
+        html = response.data.decode("utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("1:24-cr-00004", html)
+
+    def test_invalid_search_mode_is_rejected(self):
+        self._authorize_pacer()
+        with patch.object(self.app.pcl_client, "immediate_case_search") as mock_search:
+            response = self._post_run(search_mode="unsupported")
+        html = response.data.decode("utf-8")
+        self.assertIn("Search mode must be Immediate or Batch", html)
+        mock_search.assert_not_called()
 
     def test_run_delete_is_admin_only(self):
         with self.engine.begin() as conn:
