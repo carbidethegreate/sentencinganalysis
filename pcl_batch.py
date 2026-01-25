@@ -474,7 +474,6 @@ class PclBatchWorker:
                 update(case_table)
                 .where(case_table.c.id == existing.id)
                 .values(
-                    case_number_full=normalized["case_number_full"],
                     case_type=normalized["case_type"],
                     date_filed=normalized["date_filed"],
                     date_closed=normalized["date_closed"],
