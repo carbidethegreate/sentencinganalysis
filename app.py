@@ -3440,6 +3440,14 @@ def create_app() -> Flask:
             selected_table_columns=selected_table_columns,
         )
 
+    @app.post("/admin/database-dashboard/refresh")
+    @admin_required
+    def admin_database_dashboard_refresh():
+        require_csrf()
+        engine.dispose()
+        flash("Database metadata refreshed.", "success")
+        return redirect(url_for("admin_database_dashboard"))
+
     @app.get("/admin/database-dashboard/export")
     @admin_required
     def admin_database_dashboard_export():

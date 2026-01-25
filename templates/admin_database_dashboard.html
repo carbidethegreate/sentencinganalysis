@@ -86,6 +86,14 @@
         </form>
       </div>
       <div class="database-toolbar__action">
+        <p class="label">Database metadata</p>
+        <form method="post" action="{{ url_for('admin_database_dashboard_refresh') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="button small" type="submit">Refresh databases &amp; tables</button>
+        </form>
+        <p class="small">Pulls the latest schema and table list from the database.</p>
+      </div>
+      <div class="database-toolbar__action">
         <p class="label">Quick tips</p>
         <ul class="database-toolbar__tips">
           <li class="small">Open schemas to see tables and drill into columns.</li>
