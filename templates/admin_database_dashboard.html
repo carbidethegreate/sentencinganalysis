@@ -47,6 +47,48 @@
     </div>
   </div>
 
+  <section class="card database-toolbar">
+    <div class="database-toolbar__search">
+      <label class="label" for="databaseSearch">Search schemas, tables, or columns</label>
+      <input
+        id="databaseSearch"
+        class="database-search-input"
+        type="search"
+        placeholder="Search for case_data_one, party_last_name, or any column"
+      >
+      <p class="small">Type to filter the navigator in real time. Results highlight what matches.</p>
+    </div>
+    <div class="database-toolbar__actions">
+      <div class="database-toolbar__action">
+        <p class="label">Preview limit</p>
+        <form class="database-limit-form" method="get" action="{{ url_for('admin_database_dashboard') }}">
+          {% if selected_schema %}
+            <input type="hidden" name="schema" value="{{ selected_schema }}">
+          {% endif %}
+          {% if selected_table %}
+            <input type="hidden" name="table" value="{{ selected_table }}">
+          {% endif %}
+          {% if selected_column %}
+            <input type="hidden" name="column" value="{{ selected_column }}">
+          {% endif %}
+          <select name="limit">
+            {% for option in [10, 25, 50, 75, 100] %}
+              <option value="{{ option }}" {% if preview_limit == option %}selected{% endif %}>{{ option }} rows</option>
+            {% endfor %}
+          </select>
+          <button class="button small" type="submit">Apply</button>
+        </form>
+      </div>
+      <div class="database-toolbar__action">
+        <p class="label">Quick tips</p>
+        <ul class="database-toolbar__tips">
+          <li class="small">Open schemas to see tables and drill into columns.</li>
+          <li class="small">Use export to download CSVs for analysis.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
   <div class="database-explorer">
     <aside class="card database-explorer__nav">
       <div class="database-explorer__nav-header">
@@ -59,7 +101,7 @@
       {% if schemas %}
         <div class="database-explorer__schema-list">
           {% for schema in schemas %}
-            <details class="database-schema-item" {% if selected_schema == schema.name %}open{% endif %}>
+            <details class="database-schema-item" data-schema="{{ schema.name }}" {% if selected_schema == schema.name %}open{% endif %}>
               <summary class="database-schema-item__summary">
                 <div>
                   <span class="database-schema-item__name">{{ schema.name }}</span>
@@ -71,7 +113,10 @@
               <div class="database-schema-item__content">
                 {% if schema.tables %}
                   {% for table in schema.tables %}
-                    <article class="database-table-item {% if selected_schema == schema.name and selected_table == table.name %}active{% endif %}">
+                    <article
+                      class="database-table-item {% if selected_schema == schema.name and selected_table == table.name %}active{% endif %}"
+                      data-search="{{ schema.name }} {{ table.name }} {{ table.columns | map(attribute='name') | join(' ') }}"
+                    >
                       <div class="database-table-item__header">
                         <div>
                           <h3>{{ table.name }}</h3>
@@ -133,6 +178,53 @@
       </div>
 
       {% if selected_schema and selected_table %}
+        <div class="database-detail-actions">
+          <div class="database-detail-card">
+            <h3>Table controls</h3>
+            <div class="database-detail-card__body">
+              <div>
+                <p class="label">Table</p>
+                <p class="small">{{ selected_schema }}.{{ selected_table }}</p>
+              </div>
+              <div>
+                <p class="label">Columns</p>
+                <p class="small">{{ selected_table_columns | length }}</p>
+              </div>
+              <a
+                class="button secondary small"
+                href="{{ url_for('admin_database_dashboard_export', schema=selected_schema, table=selected_table, limit=preview_limit) }}"
+              >
+                Export all columns
+              </a>
+            </div>
+          </div>
+          <div class="database-detail-card">
+            <h3>Export data</h3>
+            <form class="database-export-form" method="get" action="{{ url_for('admin_database_dashboard_export') }}">
+              <input type="hidden" name="schema" value="{{ selected_schema }}">
+              <input type="hidden" name="table" value="{{ selected_table }}">
+              <div class="database-export-controls">
+                <button class="button secondary small" type="button" data-action="select-all">Select all</button>
+                <button class="button secondary small" type="button" data-action="clear-all">Clear</button>
+              </div>
+              <div class="database-column-checklist">
+                {% for column in selected_table_columns %}
+                  <label class="database-column-checklist__item">
+                    <input type="checkbox" name="columns" value="{{ column.name }}" checked>
+                    <span>{{ column.name }}</span>
+                    <span class="small">{{ column.type }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+              <div class="database-export-footer">
+                <label class="small" for="exportLimit">Export limit</label>
+                <input id="exportLimit" type="number" name="limit" min="1" max="5000" value="{{ preview_limit }}">
+                <button class="button small" type="submit">Download CSV</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
         <div class="database-detail-section">
           <h3>Table Snapshot</h3>
           <p class="small">Showing up to {{ preview_limit }} rows from the selected table.</p>
@@ -228,4 +320,65 @@
       {% endif %}
     </section>
   </div>
+
+  <script>
+    const searchInput = document.getElementById("databaseSearch");
+    if (searchInput) {
+      const schemaItems = document.querySelectorAll(".database-schema-item");
+      searchInput.addEventListener("input", () => {
+        const query = searchInput.value.trim().toLowerCase();
+        schemaItems.forEach((schemaItem) => {
+          let hasMatch = false;
+          const tableItems = schemaItem.querySelectorAll(".database-table-item");
+          tableItems.forEach((tableItem) => {
+            const haystack = (tableItem.dataset.search || tableItem.textContent).toLowerCase();
+            const matches = !query || haystack.includes(query);
+            tableItem.style.display = matches ? "" : "none";
+            if (matches) {
+              hasMatch = true;
+            }
+          });
+          schemaItem.style.display = !query || hasMatch ? "" : "none";
+          if (query && hasMatch) {
+            schemaItem.setAttribute("open", "open");
+          }
+        });
+      });
+    }
+
+    const exportForm = document.querySelector(".database-export-form");
+    if (exportForm) {
+      const checkboxes = Array.from(
+        exportForm.querySelectorAll('input[type="checkbox"][name="columns"]')
+      );
+      const submitButton = exportForm.querySelector('button[type="submit"]');
+      const updateSubmitState = () => {
+        const anyChecked = checkboxes.some((checkbox) => checkbox.checked);
+        if (submitButton) {
+          submitButton.disabled = !anyChecked;
+        }
+      };
+      exportForm.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        if (target.dataset.action === "select-all") {
+          checkboxes.forEach((checkbox) => {
+            checkbox.checked = true;
+          });
+        }
+        if (target.dataset.action === "clear-all") {
+          checkboxes.forEach((checkbox) => {
+            checkbox.checked = false;
+          });
+        }
+        updateSubmitState();
+      });
+      checkboxes.forEach((checkbox) => {
+        checkbox.addEventListener("change", updateSubmitState);
+      });
+      updateSubmitState();
+    }
+  </script>
 {% endblock %}
