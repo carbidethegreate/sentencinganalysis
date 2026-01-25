@@ -871,12 +871,37 @@ button.danger {
   gap: 10px;
 }
 
+.database-search-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.database-search-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 .database-search-input {
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid rgba(140, 132, 128, 0.3);
   background: rgba(255, 255, 255, 0.9);
   font-size: 0.95rem;
+}
+
+.database-search-input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  border-color: rgba(37, 99, 235, 0.5);
+}
+
+.database-search-empty {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(254, 226, 226, 0.35);
+  border: 1px dashed rgba(239, 68, 68, 0.25);
 }
 
 .database-toolbar__actions {

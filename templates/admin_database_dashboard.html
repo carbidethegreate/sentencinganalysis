@@ -49,7 +49,13 @@
 
   <section class="card database-toolbar">
     <div class="database-toolbar__search">
-      <label class="label" for="databaseSearch">Search schemas, tables, or columns</label>
+      <div class="database-search-header">
+        <label class="label" for="databaseSearch">Search schemas, tables, or columns</label>
+        <div class="database-search-meta">
+          <span class="small" id="databaseSearchCount">Showing all tables</span>
+          <button class="button small ghost" type="button" id="databaseSearchClear">Clear</button>
+        </div>
+      </div>
       <input
         id="databaseSearch"
         class="database-search-input"
@@ -100,6 +106,9 @@
 
       {% if schemas %}
         <div class="database-explorer__schema-list">
+          <p class="small database-search-empty" id="databaseSearchEmpty" hidden>
+            No tables match your search. Try a different keyword.
+          </p>
           {% for schema in schemas %}
             <details class="database-schema-item" data-schema="{{ schema.name }}" {% if selected_schema == schema.name %}open{% endif %}>
               <summary class="database-schema-item__summary">
@@ -325,6 +334,26 @@
     const searchInput = document.getElementById("databaseSearch");
     if (searchInput) {
       const schemaItems = document.querySelectorAll(".database-schema-item");
+      const searchCount = document.getElementById("databaseSearchCount");
+      const searchClear = document.getElementById("databaseSearchClear");
+      const searchEmpty = document.getElementById("databaseSearchEmpty");
+      const updateSearchMeta = () => {
+        let visibleTables = 0;
+        schemaItems.forEach((schemaItem) => {
+          const visibleTablesInSchema = schemaItem.querySelectorAll(
+            ".database-table-item:not([style*='display: none'])"
+          ).length;
+          visibleTables += visibleTablesInSchema;
+        });
+        if (searchCount) {
+          searchCount.textContent = visibleTables
+            ? `Showing ${visibleTables} table${visibleTables === 1 ? "" : "s"}`
+            : "No tables found";
+        }
+        if (searchEmpty) {
+          searchEmpty.hidden = visibleTables !== 0;
+        }
+      };
       searchInput.addEventListener("input", () => {
         const query = searchInput.value.trim().toLowerCase();
         schemaItems.forEach((schemaItem) => {
@@ -343,7 +372,16 @@
             schemaItem.setAttribute("open", "open");
           }
         });
+        updateSearchMeta();
       });
+      if (searchClear) {
+        searchClear.addEventListener("click", () => {
+          searchInput.value = "";
+          searchInput.dispatchEvent(new Event("input"));
+          searchInput.focus();
+        });
+      }
+      updateSearchMeta();
     }
 
     const exportForm = document.querySelector(".database-export-form");
