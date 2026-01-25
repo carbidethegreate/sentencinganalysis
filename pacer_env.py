@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 ENV_QA = "qa"
 ENV_PROD = "prod"
 ENV_UNKNOWN = "unknown"
+DEFAULT_PACER_AUTH_BASE_URL = "https://qa-login.uscourts.gov"
+DEFAULT_PCL_BASE_URL = "https://qa-pcl.uscourts.gov/pcl-public-api/rest"
 
 
 @dataclass(frozen=True)

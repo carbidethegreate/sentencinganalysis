@@ -75,6 +75,8 @@ from pacer_tokens import (
     token_fingerprint,
 )
 from pacer_env import (
+    DEFAULT_PACER_AUTH_BASE_URL,
+    DEFAULT_PCL_BASE_URL,
     infer_pacer_env,
     pacer_env_billable,
     pacer_env_host,
@@ -934,10 +936,10 @@ def create_app() -> Flask:
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
     pacer_auth_base_url = _normalize_pacer_base_url(
-        os.environ.get("PACER_AUTH_BASE_URL", "https://pacer.login.uscourts.gov")
+        os.environ.get("PACER_AUTH_BASE_URL", DEFAULT_PACER_AUTH_BASE_URL)
     )
     pcl_base_url_env = _normalize_pacer_base_url(
-        os.environ.get("PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest")
+        os.environ.get("PCL_BASE_URL", DEFAULT_PCL_BASE_URL)
     )
     pacer_env_config = validate_pacer_environment_config(
         pacer_auth_base_url,

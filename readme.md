@@ -22,7 +22,7 @@ Required for production
 - `CPD_ADMIN_KEY`: master admin password (username is always `CPDADMIN`)
 
 Federal data dashboard
-- `PACER_AUTH_BASE_URL`: PACER authentication base URL (use `https://qa-login.uscourts.gov` for QA or `https://pacer.login.uscourts.gov` for Production)
+- `PACER_AUTH_BASE_URL`: PACER authentication base URL (default `https://qa-login.uscourts.gov`, use `https://pacer.login.uscourts.gov` for Production)
 - `PCL_BASE_URL`: PACER Case Locator API base URL (default `https://qa-pcl.uscourts.gov/pcl-public-api/rest`)
 - QA and Production endpoints require **separate PACER accounts**. Keep `PACER_AUTH_BASE_URL` and `PCL_BASE_URL` aligned to the same environment or PCL calls will be blocked locally.
 - PCL requests must include the `X-NEXT-GEN-CSO` header returned by PACER auth. Some accounts also require a PACER client code to enable searching; re-authorize with the client code if searches are disabled.
