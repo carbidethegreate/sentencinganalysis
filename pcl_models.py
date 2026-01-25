@@ -150,6 +150,38 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Index("ix_pacer_search_runs_created_at", "created_at"),
     )
 
+    pacer_saved_searches = Table(
+        "pacer_saved_searches",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("label", Text, nullable=False),
+        Column("search_type", String(20), nullable=False),
+        Column("search_mode", String(20), nullable=False),
+        Column("criteria_json", Text, nullable=False),
+        Column("schedule", String(40), nullable=True),
+        Column("active", Boolean, nullable=False, server_default=sa_text("true")),
+        Column("created_by", String(120), nullable=True),
+        Column("last_run_at", DateTime(timezone=True), nullable=True),
+        Column("run_count", Integer, nullable=False, server_default="0"),
+        CheckConstraint(
+            "search_type in ('case','party')",
+            name="ck_pacer_saved_searches_type",
+        ),
+        CheckConstraint(
+            "search_mode in ('immediate','batch')",
+            name="ck_pacer_saved_searches_mode",
+        ),
+        Index("ix_pacer_saved_searches_created_at", "created_at"),
+    )
+
     pcl_batch_searches = Table(
         "pcl_batch_searches",
         metadata,
@@ -466,6 +498,7 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         "pacer_explore_runs": pacer_explore_runs,
         "pacer_search_requests": pacer_search_requests,
         "pacer_search_runs": pacer_search_runs,
+        "pacer_saved_searches": pacer_saved_searches,
         "pcl_batch_searches": pcl_batch_searches,
         "pcl_batch_requests": pcl_batch_requests,
         "pcl_batch_segments": pcl_batch_segments,

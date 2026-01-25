@@ -2165,6 +2165,148 @@ def create_app() -> Flask:
             )
         return rows
 
+    def _format_run_timestamp(value: Any) -> str:
+        if isinstance(value, datetime):
+            return value.isoformat().replace("T", " ")
+        return str(value or "")
+
+    def _summarize_saved_search(criteria: Dict[str, Any]) -> Dict[str, Any]:
+        ui_inputs = criteria.get("ui_inputs") if isinstance(criteria, dict) else {}
+        if not isinstance(ui_inputs, dict):
+            ui_inputs = {}
+        case_types = ui_inputs.get("case_types") or []
+        if isinstance(case_types, str):
+            case_types = [case_types]
+        return {
+            "court_id": ui_inputs.get("court_id") or "",
+            "date_from": ui_inputs.get("date_filed_from") or "",
+            "date_to": ui_inputs.get("date_filed_to") or "",
+            "case_types": [str(value) for value in case_types if value],
+            "last_name": ui_inputs.get("last_name") or "",
+            "first_name": ui_inputs.get("first_name") or "",
+        }
+
+    def _normalize_saved_search_schedule(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        schedule = str(value).strip().lower()
+        if schedule in {"manual", "daily", "weekly", "monthly"}:
+            return schedule
+        return None
+
+    def _default_saved_search_label(
+        *, search_type: str, search_mode: str, criteria: Dict[str, Any]
+    ) -> str:
+        summary = _summarize_saved_search(criteria)
+        court = summary.get("court_id") or "all courts"
+        date_from = summary.get("date_from") or ""
+        date_to = summary.get("date_to") or ""
+        label_parts = [search_type.capitalize(), search_mode.capitalize(), court]
+        if date_from or date_to:
+            label_parts.append(f"{date_from or 'start'} to {date_to or 'end'}")
+        return " · ".join(label_parts)
+
+    def _build_saved_search_run_fields(
+        *, search_type: str, search_mode: str, criteria: Dict[str, Any], saved_search_id: int
+    ) -> List[Dict[str, str]]:
+        ui_inputs = criteria.get("ui_inputs") if isinstance(criteria, dict) else {}
+        if not isinstance(ui_inputs, dict):
+            ui_inputs = {}
+        fields: List[Dict[str, str]] = [
+            {"name": "mode", "value": "cases" if search_type == "case" else "parties"},
+            {"name": "search_mode", "value": search_mode},
+            {"name": "saved_search_id", "value": str(saved_search_id)},
+        ]
+
+        def add_field(name: str, value: Any) -> None:
+            if value is None:
+                return
+            text = str(value)
+            if not text:
+                return
+            fields.append({"name": name, "value": text})
+
+        for key in (
+            "court_id",
+            "date_filed_from",
+            "date_filed_to",
+            "page",
+            "max_records",
+            "last_name",
+            "first_name",
+            "ssn",
+        ):
+            add_field(key, ui_inputs.get(key))
+
+        if ui_inputs.get("exact_name_match"):
+            fields.append({"name": "exact_name_match", "value": "1"})
+
+        case_types = ui_inputs.get("case_types") or []
+        if isinstance(case_types, str):
+            case_types = [case_types]
+        for case_type in case_types:
+            add_field("case_types", case_type)
+
+        return fields
+
+    def _load_pacer_saved_searches(limit: int = 12) -> List[Dict[str, Any]]:
+        pacer_saved_searches = pcl_tables["pacer_saved_searches"]
+        stmt = (
+            select(pacer_saved_searches)
+            .where(pacer_saved_searches.c.active.is_(True))
+            .order_by(
+                pacer_saved_searches.c.created_at.desc(),
+                pacer_saved_searches.c.id.desc(),
+            )
+            .limit(limit)
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        saved: List[Dict[str, Any]] = []
+        for row in rows:
+            criteria = _parse_search_request_criteria(row.get("criteria_json"))
+            summary = _summarize_saved_search(criteria)
+            saved.append(
+                {
+                    **row,
+                    "created_at_display": _format_run_timestamp(row.get("created_at")),
+                    "last_run_display": _format_run_timestamp(row.get("last_run_at")),
+                    "schedule_label": row.get("schedule") or "Manual",
+                    "summary": summary,
+                    "run_fields": _build_saved_search_run_fields(
+                        search_type=row.get("search_type") or "case",
+                        search_mode=row.get("search_mode") or "immediate",
+                        criteria=criteria,
+                        saved_search_id=row.get("id"),
+                    ),
+                }
+            )
+        return saved
+
+    def _load_pacer_search_run(run_id: int) -> Optional[Dict[str, Any]]:
+        pacer_search_runs = pcl_tables["pacer_search_runs"]
+        with engine.begin() as conn:
+            row = (
+                conn.execute(select(pacer_search_runs).where(pacer_search_runs.c.id == run_id))
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
+
+    def _touch_pacer_saved_search(search_id: int) -> None:
+        pacer_saved_searches = pcl_tables["pacer_saved_searches"]
+        now = datetime.utcnow()
+        with engine.begin() as conn:
+            conn.execute(
+                update(pacer_saved_searches)
+                .where(pacer_saved_searches.c.id == search_id)
+                .values(
+                    last_run_at=now,
+                    run_count=pacer_saved_searches.c.run_count + 1,
+                    updated_at=now,
+                )
+            )
+
     def _load_pacer_search_runs(limit: int = 12) -> List[Dict[str, Any]]:
         pacer_search_runs = pcl_tables["pacer_search_runs"]
         stmt = (
@@ -2185,11 +2327,7 @@ def create_app() -> Flask:
             runs.append(
                 {
                     **row,
-                    "created_at_display": (
-                        created_at.isoformat().replace("T", " ")
-                        if isinstance(created_at, datetime)
-                        else str(created_at or "")
-                    ),
+                    "created_at_display": _format_run_timestamp(created_at),
                     "court_id": ui_inputs.get("court_id"),
                     "date_from": ui_inputs.get("date_filed_from"),
                     "date_to": ui_inputs.get("date_filed_to"),
@@ -4289,7 +4427,86 @@ def create_app() -> Flask:
             pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
             manual_mode=manual_mode,
             search_mode=search_mode,
+            saved_searches=_load_pacer_saved_searches(),
+            search_run_history=_load_pacer_search_runs(),
         )
+
+    @app.post("/admin/pacer/saved-searches")
+    @admin_required
+    def admin_pacer_saved_search_create():
+        require_csrf()
+        run_id = _parse_optional_int(request.form.get("run_id"))
+        label = (request.form.get("label") or "").strip()
+        schedule = _normalize_saved_search_schedule(request.form.get("schedule"))
+        next_url = request.form.get("next") or url_for("admin_federal_data_dashboard_get_pacer_data")
+        if not next_url.startswith("/"):
+            next_url = url_for("admin_federal_data_dashboard_get_pacer_data")
+
+        if not run_id:
+            flash("Select a run to save.", "error")
+            return redirect(next_url)
+
+        run = _load_pacer_search_run(run_id)
+        if not run:
+            flash("Run not found. Refresh and try again.", "error")
+            return redirect(next_url)
+
+        search_type = str(run.get("search_type") or "case")
+        search_mode = str(run.get("search_mode") or "immediate")
+        criteria_json = run.get("criteria_json")
+        if not criteria_json:
+            flash("Run criteria missing; cannot save this search.", "error")
+            return redirect(next_url)
+
+        criteria = _parse_search_request_criteria(criteria_json)
+        if not label:
+            label = _default_saved_search_label(
+                search_type=search_type,
+                search_mode=search_mode,
+                criteria=criteria,
+            )
+
+        created_by = "Admin"
+        if g.current_user:
+            created_by = (
+                g.current_user.get("email")
+                or g.current_user.get("name")
+                or str(g.current_user.get("id") or "Admin")
+            )
+
+        pacer_saved_searches = pcl_tables["pacer_saved_searches"]
+        with engine.begin() as conn:
+            conn.execute(
+                insert(pacer_saved_searches).values(
+                    label=label,
+                    search_type=search_type,
+                    search_mode=search_mode,
+                    criteria_json=criteria_json,
+                    schedule=schedule,
+                    created_by=created_by,
+                )
+            )
+
+        flash("Saved search created.", "success")
+        return redirect(next_url)
+
+    @app.post("/admin/pacer/saved-searches/<int:search_id>/delete")
+    @admin_required
+    def admin_pacer_saved_search_delete(search_id: int):
+        require_csrf()
+        next_url = request.form.get("next") or url_for("admin_federal_data_dashboard_get_pacer_data")
+        if not next_url.startswith("/"):
+            next_url = url_for("admin_federal_data_dashboard_get_pacer_data")
+        pacer_saved_searches = pcl_tables["pacer_saved_searches"]
+        now = datetime.utcnow()
+        with engine.begin() as conn:
+            conn.execute(
+                update(pacer_saved_searches)
+                .where(pacer_saved_searches.c.id == search_id)
+                .values(active=False, updated_at=now)
+            )
+        flash("Saved search removed.", "success")
+        return redirect(next_url)
 
     @app.get("/admin/pacer/explore")
     @admin_required
@@ -4347,6 +4564,7 @@ def create_app() -> Flask:
         search_mode = search_mode_raw or "immediate"
         if search_mode_raw and search_mode_raw not in {"immediate", "batch"}:
             search_mode = "immediate"
+        saved_search_id = _parse_optional_int(request.form.get("saved_search_id"))
 
         case_values = None
         party_values = None
@@ -5412,6 +5630,9 @@ def create_app() -> Flask:
             observed_fields=observed_fields_payload,
             error_summary="\n".join(run_result["errors"]) if run_result["errors"] else None,
         )
+
+        if saved_search_id and not run_result["errors"]:
+            _touch_pacer_saved_search(saved_search_id)
 
         return render_response(_pacer_token_matches_pcl())
 
@@ -6895,6 +7116,8 @@ def create_app() -> Flask:
             page_url=page_url,
             available_courts=result.available_courts,
             available_case_types=result.available_case_types,
+            saved_searches=_load_pacer_saved_searches(limit=6),
+            search_run_history=_load_pacer_search_runs(limit=6),
         )
 
     @app.post("/admin/pcl/cases/<int:case_id>/docket-enrichment/queue")

@@ -328,6 +328,112 @@
             });
           })();
         </script>
+
+        <section class="card stack">
+          <p class="pacer-eyebrow">Saved searches</p>
+          <h3>Reusable PACER search presets</h3>
+          <p class="small">
+            Save a proven search from run history. Use Run now to repeat the search and store any new results.
+          </p>
+          {% if saved_searches %}
+            <div class="stack">
+              {% for saved in saved_searches %}
+                <div class="card">
+                  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+                    <div>
+                      <p class="small"><strong>{{ saved.label }}</strong></p>
+                      <p class="small">
+                        {{ saved.search_type|capitalize }} · {{ saved.search_mode|capitalize }}
+                        · Schedule: {{ saved.schedule_label|capitalize }}
+                      </p>
+                      <p class="small">
+                        Court: <code>{{ saved.summary.court_id or 'All' }}</code>
+                        {% if saved.summary.date_from or saved.summary.date_to %}
+                          · Date range: {{ saved.summary.date_from or '—' }} → {{ saved.summary.date_to or '—' }}
+                        {% endif %}
+                      </p>
+                      {% if saved.summary.case_types %}
+                        <p class="small">Case types: {{ saved.summary.case_types | join(', ') }}</p>
+                      {% endif %}
+                      {% if saved.summary.last_name %}
+                        <p class="small">Party: {{ saved.summary.last_name }}{% if saved.summary.first_name %}, {{ saved.summary.first_name }}{% endif %}</p>
+                      {% endif %}
+                      {% if saved.last_run_display %}
+                        <p class="small">Last run: {{ saved.last_run_display }}</p>
+                      {% endif %}
+                    </div>
+                    <div class="actions">
+                      <form method="post" action="{{ url_for('admin_pacer_explore_run') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        {% for field in saved.run_fields %}
+                          <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
+                        {% endfor %}
+                        <button class="primary" type="submit">Run now</button>
+                      </form>
+                      <form method="post" action="{{ url_for('admin_pacer_saved_search_delete', search_id=saved.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="next" value="{{ url_for('admin_federal_data_dashboard_get_pacer_data') }}">
+                        <button class="secondary" type="submit">Remove</button>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="small">No saved searches yet. Save a recent run to make it reusable.</p>
+          {% endif %}
+        </section>
+
+        <section class="card stack">
+          <p class="pacer-eyebrow">Run history</p>
+          <h3>Recent PACER runs</h3>
+          <p class="small">Use the Save action to turn a run into a reusable preset.</p>
+          {% if search_run_history %}
+            <div class="stack">
+              {% for run in search_run_history %}
+                <div class="card">
+                  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+                    <div>
+                      <p class="small"><strong>{{ run.search_type|capitalize }}</strong> · {{ run.search_mode|capitalize }} · {{ run.created_at_display }}</p>
+                      <p class="small">
+                        Court: <code>{{ run.court_id or 'All' }}</code>
+                        {% if run.date_from or run.date_to %}
+                          · Date range: {{ run.date_from or '—' }} → {{ run.date_to or '—' }}
+                        {% endif %}
+                      </p>
+                      <p class="small">
+                        New cases: {{ run.cases_inserted or 0 }} · Updated cases: {{ run.cases_updated or 0 }}
+                        · New parties: {{ run.parties_inserted or 0 }} · Updated parties: {{ run.parties_updated or 0 }}
+                      </p>
+                      {% if run.report_id %}
+                        <p class="small">Report ID: <code>{{ run.report_id }}</code> · Status: {{ run.report_status or '—' }}</p>
+                      {% endif %}
+                    </div>
+                    <div class="actions">
+                      <form method="post" action="{{ url_for('admin_pacer_saved_search_create') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="run_id" value="{{ run.id }}">
+                        <input type="hidden" name="next" value="{{ url_for('admin_federal_data_dashboard_get_pacer_data') }}">
+                        <input name="label" placeholder="Saved search name" style="margin-bottom: 8px;">
+                        <select name="schedule">
+                          <option value="">Manual</option>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                        </select>
+                        <button class="secondary" type="submit">Save search</button>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="small">No stored runs yet.</p>
+          {% endif %}
+        </section>
+
         <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_logout') }}" class="pacer-status-card__form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button class="secondary pacer-status-card__button" type="submit">Clear PACER session</button>
