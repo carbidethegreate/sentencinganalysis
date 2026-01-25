@@ -4651,6 +4651,13 @@ def create_app() -> Flask:
                 flash(message, "error")
                 return redirect(redirect_target)
 
+        if not client_code:
+            client_code = (
+                json_payload.get("clientCode")
+                or json_payload.get("pacer_client_code")
+                or request.form.get("pacer_client_code", "")
+            ).strip()
+
         if login_id.strip().upper() == "CPDADMIN":
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
