@@ -214,6 +214,8 @@
           <div>
             <label for="party-first-name">First name (optional)</label>
             <input id="party-first-name" name="first_name" type="text" value="{{ party_values.first_name if party_values else '' }}">
+            <label for="party-ssn" class="small" style="margin-top: 8px; display: block;">SSN (optional)</label>
+            <input id="party-ssn" name="ssn" type="text" value="{{ party_values.ssn if party_values else '' }}" placeholder="123-45-6789">
           </div>
         </div>
 
@@ -390,6 +392,45 @@
                 · Total records {{ run_result.page_info.totalElements or '—' }}
               </p>
             {% endif %}
+            {% if run_result.search_mode == 'immediate' and run_result.page_info %}
+              {% set current_page = run_result.page_number or (run_result.page_info.number + 1 if run_result.page_info.number is not none else 1) %}
+              <div class="actions">
+                {% if not run_result.page_info.first %}
+                  <form method="post" action="{{ url_for('admin_pacer_explore_run') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="mode" value="cases">
+                    <input type="hidden" name="search_mode" value="immediate">
+                    <input type="hidden" name="court_id" value="{{ case_values.court_id if case_values else '' }}">
+                    <input type="hidden" name="date_filed_from" value="{{ case_values.date_filed_from if case_values else '' }}">
+                    <input type="hidden" name="date_filed_to" value="{{ case_values.date_filed_to if case_values else '' }}">
+                    {% if case_values and case_values.case_types %}
+                      {% for case_type in case_values.case_types %}
+                        <input type="hidden" name="case_types" value="{{ case_type }}">
+                      {% endfor %}
+                    {% endif %}
+                    <input type="hidden" name="page" value="{{ current_page - 1 }}">
+                    <button class="secondary" type="submit">Previous page</button>
+                  </form>
+                {% endif %}
+                {% if not run_result.page_info.last %}
+                  <form method="post" action="{{ url_for('admin_pacer_explore_run') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="mode" value="cases">
+                    <input type="hidden" name="search_mode" value="immediate">
+                    <input type="hidden" name="court_id" value="{{ case_values.court_id if case_values else '' }}">
+                    <input type="hidden" name="date_filed_from" value="{{ case_values.date_filed_from if case_values else '' }}">
+                    <input type="hidden" name="date_filed_to" value="{{ case_values.date_filed_to if case_values else '' }}">
+                    {% if case_values and case_values.case_types %}
+                      {% for case_type in case_values.case_types %}
+                        <input type="hidden" name="case_types" value="{{ case_type }}">
+                      {% endfor %}
+                    {% endif %}
+                    <input type="hidden" name="page" value="{{ current_page + 1 }}">
+                    <button class="secondary" type="submit">Next page</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% endif %}
             {% if run_result.cases %}
               <div class="table-wrap">
                 <table>
@@ -417,6 +458,15 @@
                   </tbody>
                 </table>
               </div>
+              {% if run_result.store_payload %}
+                <div class="actions">
+                  <form method="post" action="{{ url_for('admin_pacer_explore_store') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <textarea name="store_payload" hidden>{{ run_result.store_payload | tojson }}</textarea>
+                    <button class="primary" type="submit">Store or Update</button>
+                  </form>
+                </div>
+              {% endif %}
             {% else %}
               <p class="small">No cases were returned for the selected filters.</p>
             {% endif %}
@@ -428,6 +478,47 @@
                 · Total pages {{ run_result.page_info.totalPages or '—' }}
                 · Total records {{ run_result.page_info.totalElements or '—' }}
               </p>
+            {% endif %}
+            {% if run_result.search_mode == 'immediate' and run_result.page_info %}
+              {% set current_page = run_result.page_number or (run_result.page_info.number + 1 if run_result.page_info.number is not none else 1) %}
+              <div class="actions">
+                {% if not run_result.page_info.first %}
+                  <form method="post" action="{{ url_for('admin_pacer_explore_run') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="mode" value="parties">
+                    <input type="hidden" name="search_mode" value="immediate">
+                    <input type="hidden" name="last_name" value="{{ party_values.last_name if party_values else '' }}">
+                    <input type="hidden" name="first_name" value="{{ party_values.first_name if party_values else '' }}">
+                    <input type="hidden" name="ssn" value="{{ party_values.ssn if party_values else '' }}">
+                    <input type="hidden" name="court_id" value="{{ party_values.court_id if party_values else '' }}">
+                    <input type="hidden" name="date_filed_from" value="{{ party_values.date_filed_from if party_values else '' }}">
+                    <input type="hidden" name="date_filed_to" value="{{ party_values.date_filed_to if party_values else '' }}">
+                    {% if party_values and party_values.exact_name_match %}
+                      <input type="hidden" name="exact_name_match" value="true">
+                    {% endif %}
+                    <input type="hidden" name="page" value="{{ current_page - 1 }}">
+                    <button class="secondary" type="submit">Previous page</button>
+                  </form>
+                {% endif %}
+                {% if not run_result.page_info.last %}
+                  <form method="post" action="{{ url_for('admin_pacer_explore_run') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="mode" value="parties">
+                    <input type="hidden" name="search_mode" value="immediate">
+                    <input type="hidden" name="last_name" value="{{ party_values.last_name if party_values else '' }}">
+                    <input type="hidden" name="first_name" value="{{ party_values.first_name if party_values else '' }}">
+                    <input type="hidden" name="ssn" value="{{ party_values.ssn if party_values else '' }}">
+                    <input type="hidden" name="court_id" value="{{ party_values.court_id if party_values else '' }}">
+                    <input type="hidden" name="date_filed_from" value="{{ party_values.date_filed_from if party_values else '' }}">
+                    <input type="hidden" name="date_filed_to" value="{{ party_values.date_filed_to if party_values else '' }}">
+                    {% if party_values and party_values.exact_name_match %}
+                      <input type="hidden" name="exact_name_match" value="true">
+                    {% endif %}
+                    <input type="hidden" name="page" value="{{ current_page + 1 }}">
+                    <button class="secondary" type="submit">Next page</button>
+                  </form>
+                {% endif %}
+              </div>
             {% endif %}
             {% if run_result.parties %}
               <div class="table-wrap">
@@ -456,6 +547,15 @@
                   </tbody>
                 </table>
               </div>
+              {% if run_result.store_payload %}
+                <div class="actions">
+                  <form method="post" action="{{ url_for('admin_pacer_explore_store') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <textarea name="store_payload" hidden>{{ run_result.store_payload | tojson }}</textarea>
+                    <button class="primary" type="submit">Store or Update</button>
+                  </form>
+                </div>
+              {% endif %}
             {% else %}
               <p class="small">No parties were returned for the selected filters.</p>
             {% endif %}

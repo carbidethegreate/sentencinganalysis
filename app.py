@@ -12,6 +12,7 @@ import threading
 import traceback
 import urllib.error
 import urllib.request
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
@@ -1333,6 +1334,7 @@ def create_app() -> Flask:
             "last_name": "",
             "exact_name_match": False,
             "first_name": "",
+            "ssn": "",
             "date_filed_from": "",
             "date_filed_to": "",
             "court_id": "",
@@ -1437,6 +1439,139 @@ def create_app() -> Flask:
             )
             parsed = PCL_BATCH_MAX_RECORDS
         return parsed, warning
+
+    def _normalize_receipt_payloads(
+        receipts: Sequence[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        fields = [
+            "transactionDate",
+            "billablePages",
+            "loginId",
+            "search",
+            "description",
+            "csoId",
+            "reportId",
+            "searchFee",
+        ]
+        normalized: List[Dict[str, Any]] = []
+        for row in receipts:
+            payload = row.get("receipt") if isinstance(row, dict) else None
+            if not isinstance(payload, dict):
+                payload = row if isinstance(row, dict) else {}
+            receipt = {key: payload.get(key) for key in fields if key in payload}
+            if receipt:
+                normalized.append(receipt)
+        return normalized
+
+    def _normalize_page_info(page_info: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not isinstance(page_info, dict):
+            return None
+        keys = [
+            "number",
+            "size",
+            "totalPages",
+            "totalElements",
+            "numberOfElements",
+            "first",
+            "last",
+        ]
+        normalized = {key: page_info.get(key) for key in keys if key in page_info}
+        return normalized or None
+
+    def _hash_record(parts: Sequence[Any]) -> str:
+        hashed = hashlib.sha256()
+        for part in parts:
+            text = "" if part is None else str(part)
+            hashed.update(text.encode("utf-8"))
+            hashed.update(b"|")
+        return hashed.hexdigest()
+
+    def _normalize_case_record(
+        record: Dict[str, Any],
+        *,
+        default_court_id: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        court_id = record.get("courtId") or record.get("court_id") or default_court_id
+        case_number = (
+            record.get("caseNumber")
+            or record.get("case_number")
+            or record.get("caseNumberFull")
+            or record.get("case_number_full")
+        )
+        if not court_id or not case_number:
+            return None
+        case_number_full = (
+            record.get("caseNumberFull")
+            or record.get("case_number_full")
+            or case_number
+        )
+        data_json = json.dumps(record, default=str)
+        case_type_value = record.get("caseType") or record.get("case_type")
+        if isinstance(case_type_value, str):
+            case_type_value = case_type_value.strip().lower()
+        if case_type_value and case_type_value not in CRIMINAL_CASE_TYPES:
+            case_type_value = None
+        return {
+            "court_id": court_id,
+            "case_id": record.get("caseId") or record.get("case_id"),
+            "case_number": case_number,
+            "case_number_full": case_number_full,
+            "case_type": case_type_value,
+            "date_filed": _parse_iso_date(
+                str(record.get("dateFiled") or record.get("date_filed") or "")
+            ),
+            "date_closed": _parse_iso_date(
+                str(record.get("dateClosed") or record.get("date_closed") or "")
+            ),
+            "effective_date_closed": _parse_iso_date(
+                str(record.get("effectiveDateClosed") or record.get("effective_date_closed") or "")
+            ),
+            "short_title": record.get("shortTitle") or record.get("short_title"),
+            "case_title": record.get("caseTitle") or record.get("case_title"),
+            "case_link": record.get("caseLink") or record.get("case_link"),
+            "case_year": record.get("caseYear") or record.get("case_year"),
+            "case_office": record.get("caseOffice") or record.get("case_office"),
+            "judge_last_name": record.get("judgeLastName") or record.get("judge_last_name"),
+            "record_hash": _hash_record([court_id, case_number_full, data_json]),
+            "data_json": data_json,
+            "source_last_seen_at": datetime.utcnow(),
+        }
+
+    def _normalize_party_record(
+        record: Dict[str, Any],
+        *,
+        case_id: int,
+    ) -> Dict[str, Any]:
+        data_json = json.dumps(record, default=str)
+        last_name = record.get("lastName") or record.get("last_name")
+        first_name = record.get("firstName") or record.get("first_name")
+        middle_name = record.get("middleName") or record.get("middle_name")
+        party_type = record.get("partyType") or record.get("party_type")
+        party_role = record.get("partyRole") or record.get("party_role")
+        party_name = record.get("partyName") or record.get("party_name")
+        record_hash = _hash_record(
+            [
+                case_id,
+                last_name,
+                first_name,
+                middle_name,
+                party_type,
+                party_role,
+                party_name,
+            ]
+        )
+        return {
+            "case_id": case_id,
+            "last_name": last_name,
+            "first_name": first_name,
+            "middle_name": middle_name,
+            "party_type": party_type,
+            "party_role": party_role,
+            "party_name": party_name,
+            "record_hash": record_hash,
+            "data_json": data_json,
+            "source_last_seen_at": datetime.utcnow(),
+        }
 
     def _parse_page_number(value: Any) -> Tuple[int, Optional[str]]:
         warning = None
@@ -1731,6 +1866,159 @@ def create_app() -> Flask:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
+    def _upsert_pcl_case(
+        conn: Any,
+        case_record: Dict[str, Any],
+    ) -> Tuple[int, bool]:
+        pcl_cases = pcl_tables["pcl_cases"]
+        court_id = case_record["court_id"]
+        case_number_full = case_record["case_number_full"]
+        existing = (
+            conn.execute(
+                select(pcl_cases.c.id).where(
+                    (pcl_cases.c.court_id == court_id)
+                    & (pcl_cases.c.case_number_full == case_number_full)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        now = datetime.utcnow()
+        if existing:
+            conn.execute(
+                update(pcl_cases)
+                .where(pcl_cases.c.id == existing["id"])
+                .values(
+                    **{
+                        **case_record,
+                        "updated_at": now,
+                    }
+                )
+            )
+            return int(existing["id"]), False
+        result = conn.execute(
+            insert(pcl_cases).values(
+                **{
+                    **case_record,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        )
+        return int(result.inserted_primary_key[0]), True
+
+    def _upsert_pcl_party(
+        conn: Any,
+        party_record: Dict[str, Any],
+    ) -> Tuple[int, bool]:
+        pcl_parties = pcl_tables["pcl_parties"]
+        record_hash = party_record["record_hash"]
+        existing = (
+            conn.execute(
+                select(pcl_parties.c.id).where(pcl_parties.c.record_hash == record_hash)
+            )
+            .mappings()
+            .first()
+        )
+        now = datetime.utcnow()
+        if existing:
+            conn.execute(
+                update(pcl_parties)
+                .where(pcl_parties.c.id == existing["id"])
+                .values(
+                    **{
+                        **party_record,
+                        "updated_at": now,
+                    }
+                )
+            )
+            return int(existing["id"]), False
+        result = conn.execute(
+            insert(pcl_parties).values(
+                **{
+                    **party_record,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        )
+        return int(result.inserted_primary_key[0]), True
+
+    def _store_pacer_search_run(
+        *,
+        search_type: str,
+        search_mode: str,
+        criteria: Dict[str, Any],
+        receipts: Sequence[Dict[str, Any]],
+        page_info: Optional[Dict[str, Any]],
+        raw_response: Optional[Dict[str, Any]],
+        results: Sequence[Dict[str, Any]],
+        report_id: Optional[str] = None,
+        report_status: Optional[str] = None,
+    ) -> Dict[str, int]:
+        pacer_search_runs = pcl_tables["pacer_search_runs"]
+        counts = {"cases_inserted": 0, "cases_updated": 0, "parties_inserted": 0, "parties_updated": 0}
+        normalized_receipts = _normalize_receipt_payloads(receipts)
+        normalized_page_info = _normalize_page_info(page_info)
+        criteria_json = json.dumps(criteria, default=str)
+        receipt_json = json.dumps(normalized_receipts, default=str)
+        page_info_json = json.dumps(normalized_page_info, default=str) if normalized_page_info else None
+        raw_response_json = (
+            json.dumps(raw_response, default=str) if isinstance(raw_response, dict) else None
+        )
+        default_court_id = (criteria.get("ui_inputs") or {}).get("court_id")
+        with engine.begin() as conn:
+            conn.execute(
+                insert(pacer_search_runs).values(
+                    search_type=search_type,
+                    search_mode=search_mode,
+                    criteria_json=criteria_json,
+                    report_id=report_id,
+                    report_status=report_status,
+                    receipt_json=receipt_json,
+                    page_info_json=page_info_json,
+                    raw_response_json=raw_response_json,
+                )
+            )
+            if search_type == "case":
+                for record in results:
+                    if not isinstance(record, dict):
+                        continue
+                    normalized = _normalize_case_record(
+                        record, default_court_id=default_court_id
+                    )
+                    if not normalized:
+                        continue
+                    _, inserted = _upsert_pcl_case(conn, normalized)
+                    if inserted:
+                        counts["cases_inserted"] += 1
+                    else:
+                        counts["cases_updated"] += 1
+            else:
+                for record in results:
+                    if not isinstance(record, dict):
+                        continue
+                    court_case = record.get("courtCase")
+                    if not isinstance(court_case, dict):
+                        continue
+                    normalized_case = _normalize_case_record(
+                        court_case, default_court_id=default_court_id
+                    )
+                    if not normalized_case:
+                        continue
+                    case_id, case_inserted = _upsert_pcl_case(conn, normalized_case)
+                    if case_inserted:
+                        counts["cases_inserted"] += 1
+                    else:
+                        counts["cases_updated"] += 1
+                    party_record = _normalize_party_record(record, case_id=case_id)
+                    _, party_inserted = _upsert_pcl_party(conn, party_record)
+                    if party_inserted:
+                        counts["parties_inserted"] += 1
+                    else:
+                        counts["parties_updated"] += 1
+        return counts
+
     def _hydrate_explore_values(
         mode: str, ui_inputs: Mapping[str, Any], search_mode: str
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
@@ -1750,6 +2038,7 @@ def create_app() -> Flask:
             "last_name": ui_inputs.get("last_name", ""),
             "exact_name_match": bool(ui_inputs.get("exact_name_match")),
             "first_name": ui_inputs.get("first_name", ""),
+            "ssn": ui_inputs.get("ssn", ""),
             "date_filed_from": ui_inputs.get("date_filed_from", ""),
             "date_filed_to": ui_inputs.get("date_filed_to", ""),
             "court_id": ui_inputs.get("court_id", ""),
@@ -1777,6 +2066,56 @@ def create_app() -> Flask:
             "unbilledPageCount": _get("unbilledPageCount", "unbilled_page_count"),
             "downloadFee": _get("downloadFee", "download_fee"),
             "pages": _get("pages", "page_count"),
+        }
+
+    def _build_store_payload(
+        *,
+        mode: str,
+        search_mode: str,
+        criteria: Dict[str, Any],
+        results: Sequence[Dict[str, Any]],
+        receipts: Sequence[Dict[str, Any]],
+        page_info: Optional[Dict[str, Any]],
+        raw_response: Optional[Dict[str, Any]],
+        report_request: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        return {
+            "mode": mode,
+            "search_mode": search_mode,
+            "criteria": criteria,
+            "results": list(results),
+            "receipts": list(receipts),
+            "page_info": page_info,
+            "raw_response": raw_response,
+            "report_request": report_request,
+        }
+
+    def _base_run_result(mode: str, search_mode: str) -> Dict[str, Any]:
+        return {
+            "status": "error",
+            "mode": mode,
+            "search_mode": search_mode,
+            "errors": [],
+            "warnings": [],
+            "logs": [],
+            "receipts": [],
+            "page_infos": [],
+            "cases": [],
+            "parties": [],
+            "observed_fields": [],
+            "party_observed_fields": [],
+            "court_case_observed_fields": [],
+            "cost_summary": {"billable_pages": 0, "fee_totals": {}},
+            "debug_bundle": "",
+            "response_snippets": [],
+            "pages_requested": 0,
+            "pages_fetched": 0,
+            "truncated_notice": None,
+            "endpoint": "",
+            "report_request": None,
+            "page_info": None,
+            "page_number": None,
+            "next_steps": [],
         }
 
     def _build_next_steps(
@@ -3995,6 +4334,7 @@ def create_app() -> Flask:
                         "last_name": party_values["last_name"],
                         "exact_name_match": party_values["exact_name_match"],
                         "first_name": party_values["first_name"],
+                        "ssn": party_values.get("ssn"),
                         "date_filed_from": party_values["date_filed_from"],
                         "date_filed_to": party_values["date_filed_to"],
                     }
@@ -4503,6 +4843,7 @@ def create_app() -> Flask:
 
         api_page = max(0, (requested_page or 1) - 1)
         api_pages = [api_page]
+        last_payload: Optional[Dict[str, Any]] = None
 
         for api_page in api_pages:
             display_page = api_page + 1
@@ -4515,6 +4856,7 @@ def create_app() -> Flask:
                     response = pcl_client.immediate_party_search(api_page, request_body)
                 elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                 payload = response.payload
+                last_payload = payload
                 status_codes.append(response.status_code)
                 response_snippets.append(
                     {
@@ -4555,6 +4897,7 @@ def create_app() -> Flask:
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
+                        "ssn": request_body.get("ssn"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                     }
@@ -4589,6 +4932,7 @@ def create_app() -> Flask:
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
+                        "ssn": request_body.get("ssn"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                     }
@@ -4655,6 +4999,7 @@ def create_app() -> Flask:
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
+                        "ssn": request_body.get("ssn"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                     }
@@ -4690,6 +5035,7 @@ def create_app() -> Flask:
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
+                        "ssn": request_body.get("ssn"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
                     }
@@ -4773,10 +5119,23 @@ def create_app() -> Flask:
                 "pages_fetched": pages_fetched,
                 "truncated_notice": truncated_notice,
                 "endpoint": endpoint_base,
+                "page_number": requested_page,
+                "raw_response": last_payload,
             }
         )
         if page_infos:
             run_result["page_info"] = page_infos[-1].get("page_info")
+        if records_limited:
+            run_result["store_payload"] = _build_store_payload(
+                mode=mode,
+                search_mode=search_mode,
+                criteria={"ui_inputs": ui_inputs, "request_body": request_body},
+                results=records_limited,
+                receipts=receipts,
+                page_info=run_result.get("page_info"),
+                raw_response=last_payload,
+                report_request=None,
+            )
 
         run_result["debug_bundle"] = _build_debug_bundle(
             mode=mode,
@@ -4845,6 +5204,7 @@ def create_app() -> Flask:
                     "last_name": party_values["last_name"],
                     "exact_name_match": party_values["exact_name_match"],
                     "first_name": party_values["first_name"],
+                    "ssn": party_values.get("ssn"),
                     "date_filed_from": party_values["date_filed_from"],
                     "date_filed_to": party_values["date_filed_to"],
                 }
@@ -5155,8 +5515,20 @@ def create_app() -> Flask:
                         "status": report_status,
                         "info": report_info,
                     },
+                    "raw_response": payload,
                 }
             )
+            if records:
+                run_result["store_payload"] = _build_store_payload(
+                    mode=mode,
+                    search_mode=search_mode,
+                    criteria=criteria,
+                    results=records,
+                    receipts=[],
+                    page_info=None,
+                    raw_response=payload,
+                    report_request=run_result["report_request"],
+                )
 
         max_records, _ = _clamp_max_records(ui_inputs.get("max_records", ""))
         run_result["pages_requested"] = max(1, math.ceil(max_records / PCL_PAGE_SIZE))
@@ -5186,6 +5558,159 @@ def create_app() -> Flask:
             token_diagnostics=None,
         )
 
+        return _render_pacer_explore_with_result(
+            mode=mode,
+            case_values=case_values,
+            party_values=party_values,
+            run_result=run_result,
+            pacer_authorized=_pacer_token_matches_pcl(),
+        )
+
+    @app.post("/admin/pacer/explore/store")
+    @admin_required
+    def admin_pacer_explore_store():
+        require_csrf()
+        payload_text = request.form.get("store_payload") or ""
+        try:
+            payload = json.loads(payload_text) if payload_text else {}
+        except json.JSONDecodeError:
+            payload = {}
+
+        mode = (payload.get("mode") or "cases").strip().lower()
+        if mode not in {"cases", "parties"}:
+            mode = "cases"
+        search_mode = (payload.get("search_mode") or "immediate").strip().lower()
+        if search_mode not in {"immediate", "batch"}:
+            search_mode = "immediate"
+
+        run_result = _base_run_result(mode, search_mode)
+        criteria = payload.get("criteria") if isinstance(payload.get("criteria"), dict) else {}
+        ui_inputs = criteria.get("ui_inputs") if isinstance(criteria.get("ui_inputs"), dict) else {}
+        case_values, party_values = _hydrate_explore_values(mode, ui_inputs, search_mode)
+
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        receipts = payload.get("receipts") if isinstance(payload.get("receipts"), list) else []
+        page_info = payload.get("page_info") if isinstance(payload.get("page_info"), dict) else None
+        raw_response = payload.get("raw_response") if isinstance(payload.get("raw_response"), dict) else None
+        report_request = (
+            payload.get("report_request")
+            if isinstance(payload.get("report_request"), dict)
+            else None
+        )
+        report_id = report_request.get("report_id") if report_request else None
+        report_status = report_request.get("status") if report_request else None
+
+        if not results:
+            run_result["errors"].append("No results available to store.")
+            return _render_pacer_explore_with_result(
+                mode=mode,
+                case_values=case_values,
+                party_values=party_values,
+                run_result=run_result,
+                pacer_authorized=_pacer_token_matches_pcl(),
+            )
+
+        counts = _store_pacer_search_run(
+            search_type="case" if mode == "cases" else "party",
+            search_mode=search_mode,
+            criteria=criteria,
+            receipts=receipts,
+            page_info=page_info,
+            raw_response=raw_response,
+            results=results,
+            report_id=str(report_id) if report_id is not None else None,
+            report_status=report_status,
+        )
+
+        if mode == "cases":
+            run_result["cases"] = results
+            observed_fields = _observed_fields(results)
+            run_result["observed_fields"] = observed_fields
+            run_result["next_steps"] = _build_next_steps(
+                status_codes=[],
+                observed_fields=observed_fields,
+            )
+        else:
+            run_result["parties"] = results
+            party_field_report = _observed_party_fields(results)
+            run_result["party_observed_fields"] = party_field_report["party"]
+            run_result["court_case_observed_fields"] = party_field_report["court_case"]
+            run_result["next_steps"] = _build_next_steps(
+                status_codes=[],
+                observed_fields=run_result["party_observed_fields"],
+                nested_observed_fields=run_result["court_case_observed_fields"],
+            )
+
+        billable_pages_total = 0
+        fee_totals: Dict[str, float] = {}
+        for receipt_row in receipts:
+            receipt_payload = receipt_row.get("receipt") if isinstance(receipt_row, dict) else None
+            if not isinstance(receipt_payload, dict):
+                continue
+            billable_pages_value = receipt_payload.get("billablePages")
+            if isinstance(billable_pages_value, (int, float)):
+                billable_pages_total += int(billable_pages_value)
+            for key, value in receipt_payload.items():
+                if "fee" not in str(key).lower():
+                    continue
+                if isinstance(value, (int, float)):
+                    fee_totals[str(key)] = fee_totals.get(str(key), 0.0) + float(value)
+
+        run_result.update(
+            {
+                "status": "ok",
+                "receipts": receipts,
+                "page_info": page_info,
+                "cost_summary": {
+                    "billable_pages": billable_pages_total,
+                    "fee_totals": fee_totals,
+                },
+                "report_request": report_request,
+                "raw_response": raw_response,
+            }
+        )
+        run_result["store_payload"] = _build_store_payload(
+            mode=mode,
+            search_mode=search_mode,
+            criteria=criteria,
+            results=results,
+            receipts=receipts,
+            page_info=page_info,
+            raw_response=raw_response,
+            report_request=report_request,
+        )
+
+        run_result["debug_bundle"] = _build_debug_bundle(
+            mode=mode,
+            search_mode=search_mode,
+            court_id=(case_values or party_values or {}).get("court_id", ""),
+            date_filed_from=(case_values or party_values or {}).get("date_filed_from", ""),
+            date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+            last_name=party_values.get("last_name") if party_values else None,
+            exact_name_match=party_values.get("exact_name_match") if party_values else None,
+            first_name=party_values.get("first_name") if party_values else None,
+            max_records=len(results),
+            requested_page=page_info.get("number") + 1 if page_info and page_info.get("number") is not None else None,
+            unexpected_input_keys=[],
+            pages_requested=1,
+            pages_fetched=1,
+            request_body=criteria.get("request_body") or {},
+            request_urls=[],
+            status_codes=[],
+            records=results,
+            page_infos=[{"page_info": page_info}] if page_info else [],
+            truncated_notice=None,
+            error_message=None,
+            response_snippets=[],
+            environment=app.config.get("PACER_ENV_CONFIG"),
+            token_diagnostics=None,
+        )
+
+        flash(
+            "Stored cases: {cases_inserted} new, {cases_updated} updated · "
+            "Parties: {parties_inserted} new, {parties_updated} updated.".format(**counts),
+            "success",
+        )
         return _render_pacer_explore_with_result(
             mode=mode,
             case_values=case_values,

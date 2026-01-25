@@ -25,6 +25,7 @@ EXPLORE_PACER_UI_FIELDS: Dict[str, Set[str]] = {
         "last_name",
         "exact_name_match",
         "first_name",
+        "ssn",
         "date_filed_from",
         "date_filed_to",
         "court_id",
@@ -44,6 +45,7 @@ EXPLORE_PACER_PCL_FIELDS: Dict[str, Set[str]] = {
         "lastName",
         "exactNameMatch",
         "firstName",
+        "ssn",
         "courtId",
         "dateFiledFrom",
         "dateFiledTo",
@@ -132,6 +134,8 @@ def build_party_search_payload(
             }
     if ui_inputs.get("first_name"):
         body["firstName"] = ui_inputs.get("first_name")
+    if ui_inputs.get("ssn"):
+        body["ssn"] = ui_inputs.get("ssn")
     if ui_inputs.get("court_id"):
         body["courtId"] = [ui_inputs.get("court_id")]
     if include_date_range:
