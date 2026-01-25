@@ -115,6 +115,37 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Index("ix_pacer_search_requests_created_at", "created_at"),
     )
 
+    pacer_search_runs = Table(
+        "pacer_search_runs",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("search_type", String(20), nullable=False),
+        Column("search_mode", String(20), nullable=False),
+        Column("criteria_json", Text, nullable=False),
+        Column("report_id", String(120), nullable=True),
+        Column("report_status", String(80), nullable=True),
+        Column("receipt_json", Text, nullable=False),
+        Column("page_info_json", Text, nullable=True),
+        Column("raw_response_json", Text, nullable=True),
+        CheckConstraint(
+            "search_type in ('case','party')",
+            name="ck_pacer_search_runs_type",
+        ),
+        CheckConstraint(
+            "search_mode in ('immediate','batch')",
+            name="ck_pacer_search_runs_mode",
+        ),
+        Index("ix_pacer_search_runs_created_at", "created_at"),
+    )
+
     pcl_batch_searches = Table(
         "pcl_batch_searches",
         metadata,
@@ -281,6 +312,32 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Index("ix_pcl_cases_judge_last_name", "judge_last_name"),
     )
 
+    pcl_parties = Table(
+        "pcl_parties",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("case_id", Integer, ForeignKey("pcl_cases.id"), nullable=False, index=True),
+        Column("last_name", Text, nullable=True),
+        Column("first_name", Text, nullable=True),
+        Column("middle_name", Text, nullable=True),
+        Column("party_type", Text, nullable=True),
+        Column("party_role", Text, nullable=True),
+        Column("party_name", Text, nullable=True),
+        Column("source_last_seen_at", DateTime(timezone=True), nullable=True),
+        Column("record_hash", String(128), nullable=False),
+        Column("data_json", Text, nullable=False),
+        UniqueConstraint("record_hash", name="uq_pcl_parties_record_hash"),
+        Index("ix_pcl_parties_case_id", "case_id"),
+    )
+
     pcl_remote_jobs = Table(
         "pcl_remote_jobs",
         metadata,
@@ -404,12 +461,14 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         "court_import_runs": court_import_runs,
         "pacer_explore_runs": pacer_explore_runs,
         "pacer_search_requests": pacer_search_requests,
+        "pacer_search_runs": pacer_search_runs,
         "pcl_batch_searches": pcl_batch_searches,
         "pcl_batch_requests": pcl_batch_requests,
         "pcl_batch_segments": pcl_batch_segments,
         "pcl_remote_jobs": pcl_remote_jobs,
         "pcl_case_result_raw": pcl_case_result_raw,
         "pcl_cases": pcl_cases,
+        "pcl_parties": pcl_parties,
         "pcl_receipts": pcl_receipts,
         "pcl_batch_receipts": pcl_batch_receipts,
         "docket_enrichment_jobs": docket_enrichment_jobs,

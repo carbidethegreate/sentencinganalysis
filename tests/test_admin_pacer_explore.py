@@ -37,6 +37,9 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.courts_table = self.app.pcl_courts_table
         self.explore_runs_table = self.app.pcl_tables["pacer_explore_runs"]
         self.search_requests_table = self.app.pcl_tables["pacer_search_requests"]
+        self.search_runs_table = self.app.pcl_tables["pacer_search_runs"]
+        self.cases_table = self.app.pcl_tables["pcl_cases"]
+        self.parties_table = self.app.pcl_tables["pcl_parties"]
         self._seed_courts()
         self._login_admin()
 
@@ -399,6 +402,7 @@ class AdminPacerExploreTests(unittest.TestCase):
                 "last_name": "doe",
                 "exact_name_match": "true",
                 "first_name": "jane",
+                "ssn": "123-45-6789",
                 "court_id": "akdc",
                 "date_filed_from": "2024-01-01",
                 "date_filed_to": "2024-01-31",
@@ -411,6 +415,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.assertEqual(invalid_keys, [])
         self.assertEqual(missing_keys, [])
         self.assertNotIn("pageSize", payload)
+        self.assertIn("ssn", payload)
 
         invalid_payload = build_party_search_payload(
             {"first_name": "jane"},
@@ -594,6 +599,178 @@ class AdminPacerExploreTests(unittest.TestCase):
                 select(self.explore_runs_table).where(self.explore_runs_table.c.id == run_id)
             ).mappings().all()
         self.assertEqual(remaining, [])
+
+    def test_immediate_pagination_controls_respect_page_number(self):
+        self._authorize_pacer()
+        payload = {
+            "content": [],
+            "receipt": {"billablePages": 0},
+            "pageInfo": {
+                "number": 1,
+                "size": 54,
+                "totalPages": 3,
+                "totalElements": 120,
+                "numberOfElements": 54,
+                "first": False,
+                "last": False,
+            },
+        }
+        fake_response = PclJsonResponse(status_code=200, payload=payload, raw_body=b"{}")
+        with patch.object(self.app.pcl_client, "immediate_case_search", return_value=fake_response) as mock_search:
+            response = self._post_run(page="2")
+        self.assertEqual(response.status_code, 200)
+        mock_search.assert_called_once()
+        self.assertIn("Page 2", response.data.decode("utf-8"))
+
+    def test_store_or_update_upserts_cases(self):
+        payload = {
+            "mode": "cases",
+            "search_mode": "immediate",
+            "criteria": {
+                "ui_inputs": {
+                    "court_id": "akdc",
+                    "date_filed_from": "2024-01-01",
+                    "date_filed_to": "2024-01-31",
+                },
+                "request_body": {
+                    "courtId": ["akdc"],
+                    "dateFiledFrom": "2024-01-01",
+                    "dateFiledTo": "2024-01-31",
+                },
+            },
+            "results": [
+                {
+                    "caseNumber": "1:24-cr-00001",
+                    "caseNumberFull": "1:24-cr-00001",
+                    "caseType": "cr",
+                    "caseTitle": "USA v. Doe",
+                    "dateFiled": "2024-01-02",
+                    "courtId": "akdc",
+                }
+            ],
+            "receipts": [
+                {
+                    "page": 1,
+                    "receipt": {
+                        "transactionDate": "2024-01-02",
+                        "billablePages": 1,
+                        "loginId": "acct",
+                        "search": "case search",
+                        "description": "PCL search",
+                        "csoId": "abc",
+                        "reportId": "r1",
+                        "searchFee": 0.1,
+                    },
+                }
+            ],
+            "page_info": {"number": 0, "size": 54, "totalPages": 1, "totalElements": 1},
+            "raw_response": {"content": []},
+        }
+        response = self.client.post(
+            "/admin/pacer/explore/store",
+            data={"csrf_token": "csrf-token", "store_payload": json.dumps(payload)},
+        )
+        self.assertEqual(response.status_code, 200)
+        with self.engine.begin() as conn:
+            cases = conn.execute(select(self.cases_table)).mappings().all()
+            runs = conn.execute(select(self.search_runs_table)).mappings().all()
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(len(runs), 1)
+
+        payload["results"][0]["caseTitle"] = "USA v. Doe Updated"
+        response = self.client.post(
+            "/admin/pacer/explore/store",
+            data={"csrf_token": "csrf-token", "store_payload": json.dumps(payload)},
+        )
+        self.assertEqual(response.status_code, 200)
+        with self.engine.begin() as conn:
+            cases = conn.execute(select(self.cases_table)).mappings().all()
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["case_title"], "USA v. Doe Updated")
+
+    def test_store_or_update_links_parties_to_cases(self):
+        payload = {
+            "mode": "parties",
+            "search_mode": "immediate",
+            "criteria": {
+                "ui_inputs": {"last_name": "doe"},
+                "request_body": {"lastName": "doe"},
+            },
+            "results": [
+                {
+                    "lastName": "Doe",
+                    "firstName": "Jane",
+                    "partyType": "defendant",
+                    "courtCase": {
+                        "caseNumber": "2:24-cr-00002",
+                        "caseNumberFull": "2:24-cr-00002",
+                        "courtId": "akdc",
+                        "caseType": "cr",
+                    },
+                }
+            ],
+            "receipts": [],
+            "page_info": None,
+            "raw_response": {"content": []},
+        }
+        response = self.client.post(
+            "/admin/pacer/explore/store",
+            data={"csrf_token": "csrf-token", "store_payload": json.dumps(payload)},
+        )
+        self.assertEqual(response.status_code, 200)
+        with self.engine.begin() as conn:
+            cases = conn.execute(select(self.cases_table)).mappings().all()
+            parties = conn.execute(select(self.parties_table)).mappings().all()
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(len(parties), 1)
+        self.assertEqual(parties[0]["case_id"], cases[0]["id"])
+
+    def test_store_or_update_records_batch_report_metadata(self):
+        payload = {
+            "mode": "cases",
+            "search_mode": "batch",
+            "criteria": {
+                "ui_inputs": {
+                    "court_id": "akdc",
+                    "date_filed_from": "2024-01-01",
+                    "date_filed_to": "2024-01-31",
+                },
+                "request_body": {
+                    "courtId": ["akdc"],
+                    "dateFiledFrom": "2024-01-01",
+                    "dateFiledTo": "2024-01-31",
+                },
+            },
+            "results": [
+                {
+                    "caseNumber": "3:24-cr-00003",
+                    "caseNumberFull": "3:24-cr-00003",
+                    "caseType": "cr",
+                    "caseTitle": "USA v. Batch",
+                    "dateFiled": "2024-01-20",
+                    "courtId": "akdc",
+                }
+            ],
+            "receipts": [],
+            "page_info": None,
+            "raw_response": {"content": []},
+            "report_request": {
+                "request_id": 1,
+                "report_id": "batch-55",
+                "status": "COMPLETED",
+                "info": {"reportId": "batch-55", "status": "COMPLETED"},
+            },
+        }
+        response = self.client.post(
+            "/admin/pacer/explore/store",
+            data={"csrf_token": "csrf-token", "store_payload": json.dumps(payload)},
+        )
+        self.assertEqual(response.status_code, 200)
+        with self.engine.begin() as conn:
+            runs = conn.execute(select(self.search_runs_table)).mappings().all()
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["report_id"], "batch-55")
+        self.assertEqual(runs[0]["report_status"], "COMPLETED")
 
 
 if __name__ == "__main__":
