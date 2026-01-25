@@ -22,7 +22,7 @@
 
     <div class="flash">
       <strong>Cost warning:</strong> billable searches are reported by PACER receipts. Current billing status: {{ pacer_env_billable_label }}. Defaults are capped to one page ({{ explore_page_size }} records)
-      and hard-limited to {{ explore_cap_pages }} pages ({{ explore_max_records }} records) unless <code>PCL_EXPLORE_MAX_PAGES</code> is increased server-side.
+      and immediate searches are limited to {{ immediate_max_pages }} pages ({{ immediate_max_pages * explore_page_size }} records). Batch reports support up to {{ batch_max_pages }} pages ({{ explore_max_records }} records).
     </div>
 
     <section class="card stack pacer-status-card">
@@ -97,6 +97,20 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="cases">
 
+        <div class="stack">
+          <label for="case-search-mode">Search Mode</label>
+          <select id="case-search-mode" name="search_mode" data-search-mode-control>
+            <option value="immediate" {% if not case_values or case_values.search_mode == 'immediate' %}selected{% endif %}>Immediate</option>
+            <option value="batch" {% if case_values and case_values.search_mode == 'batch' %}selected{% endif %}>Batch</option>
+          </select>
+          <p class="small">
+            Immediate returns paged results ({{ explore_page_size }} per page) and is limited to {{ immediate_max_pages }} pages / {{ immediate_max_pages * explore_page_size }} items.
+          </p>
+          <p class="small">
+            Batch runs a report for later retrieval and supports up to {{ batch_max_pages }} pages / {{ explore_max_records }} items.
+          </p>
+        </div>
+
         <div class="grid two">
           <div>
             <label for="explore-court">Court</label>
@@ -109,6 +123,22 @@
               {% endfor %}
             </select>
           </div>
+          <div data-search-mode-field="immediate">
+            <label for="case-page-number">Page</label>
+            <input
+              id="case-page-number"
+              name="page"
+              type="number"
+              min="1"
+              max="{{ immediate_max_pages }}"
+              value="{{ case_values.page if case_values else 1 }}"
+              required
+            >
+            <p class="small">Page size is fixed at {{ explore_page_size }}. Maximum {{ immediate_max_pages }} pages.</p>
+          </div>
+        </div>
+
+        <div class="grid two" data-search-mode-field="batch">
           <div>
             <label for="explore-max-records">Max records</label>
             <input
@@ -157,6 +187,20 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="mode" value="parties">
 
+        <div class="stack">
+          <label for="party-search-mode">Search Mode</label>
+          <select id="party-search-mode" name="search_mode" data-search-mode-control>
+            <option value="immediate" {% if not party_values or party_values.search_mode == 'immediate' %}selected{% endif %}>Immediate</option>
+            <option value="batch" {% if party_values and party_values.search_mode == 'batch' %}selected{% endif %}>Batch</option>
+          </select>
+          <p class="small">
+            Immediate returns paged results ({{ explore_page_size }} per page) and is limited to {{ immediate_max_pages }} pages / {{ immediate_max_pages * explore_page_size }} items.
+          </p>
+          <p class="small">
+            Batch runs a report for later retrieval and supports up to {{ batch_max_pages }} pages / {{ explore_max_records }} items.
+          </p>
+        </div>
+
         <div class="grid two">
           <div>
             <label for="party-last-name">Last name</label>
@@ -196,6 +240,22 @@
               {% endfor %}
             </select>
           </div>
+          <div data-search-mode-field="immediate">
+            <label for="party-page-number">Page</label>
+            <input
+              id="party-page-number"
+              name="page"
+              type="number"
+              min="1"
+              max="{{ immediate_max_pages }}"
+              value="{{ party_values.page if party_values else 1 }}"
+              required
+            >
+            <p class="small">Page size is fixed at {{ explore_page_size }}. Maximum {{ immediate_max_pages }} pages.</p>
+          </div>
+        </div>
+
+        <div class="grid two" data-search-mode-field="batch">
           <div>
             <label for="party-max-records">Max records</label>
             <input
@@ -233,10 +293,17 @@
           </p>
         </div>
       {% else %}
-        <div class="flash success">
-          <strong>Run complete.</strong>
-          Pulled {{ (run_result.cases|length) if run_result.mode == 'cases' else (run_result.parties|length) }} records across {{ run_result.pages_fetched }} page(s).
-        </div>
+        {% if run_result.search_mode == 'batch' %}
+          <div class="flash success">
+            <strong>Report submitted.</strong>
+            Track the report status below before loading results.
+          </div>
+        {% else %}
+          <div class="flash success">
+            <strong>Run complete.</strong>
+            Pulled {{ (run_result.cases|length) if run_result.mode == 'cases' else (run_result.parties|length) }} records across {{ run_result.pages_fetched }} page(s).
+          </div>
+        {% endif %}
       {% endif %}
 
       {% if run_result.warnings %}
@@ -248,6 +315,51 @@
             {% endfor %}
           </ul>
         </div>
+      {% endif %}
+
+      {% if run_result.search_mode == 'batch' and run_result.report_request %}
+        {% set report_info = run_result.report_request.info or {} %}
+        <section class="card stack" id="batch-report-status">
+          <div class="row" style="justify-content: space-between; align-items: center;">
+            <div>
+              <p class="pacer-eyebrow">Batch report</p>
+              <h3>Report status</h3>
+              <p class="small">Report ID: <code>{{ run_result.report_request.report_id or '—' }}</code></p>
+            </div>
+            <div class="actions">
+              <form method="post" action="{{ url_for('admin_pacer_explore_batch_status') }}" class="row" data-auto-poll-form>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="request_id" value="{{ run_result.report_request.request_id }}">
+                <button class="secondary" type="submit">Refresh status</button>
+                <label class="small" style="margin-left: 12px;">
+                  <input type="checkbox" data-auto-poll-toggle>
+                  Auto-refresh
+                </label>
+              </form>
+            </div>
+          </div>
+
+          <dl class="pcl-detail-list">
+            <div><dt>Status</dt><dd>{{ run_result.report_request.status or '—' }}</dd></div>
+            <div><dt>Start time</dt><dd>{{ report_info.startTime or '—' }}</dd></div>
+            <div><dt>End time</dt><dd>{{ report_info.endTime or '—' }}</dd></div>
+            <div><dt>Record count</dt><dd>{{ report_info.recordCount or '—' }}</dd></div>
+            <div><dt>Unbilled pages</dt><dd>{{ report_info.unbilledPageCount or '—' }}</dd></div>
+            <div><dt>Download fee</dt><dd>{{ report_info.downloadFee or '—' }}</dd></div>
+            <div><dt>Pages</dt><dd>{{ report_info.pages or '—' }}</dd></div>
+          </dl>
+
+          {% if run_result.report_request.status == 'COMPLETED' %}
+            <div class="actions">
+              <form method="post" action="{{ url_for('admin_pacer_explore_batch_load') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="request_id" value="{{ run_result.report_request.request_id }}">
+                <button class="primary" type="submit">Load results</button>
+              </form>
+              <a class="secondary" href="{{ url_for('admin_pacer_explore_batch_download', request_id=run_result.report_request.request_id) }}">Download report</a>
+            </div>
+          {% endif %}
+        </section>
       {% endif %}
 
       <section class="card stack">
@@ -266,74 +378,96 @@
         <pre id="debug-bundle" class="code-block">{{ run_result.debug_bundle }}</pre>
       </section>
 
-      <section class="card stack">
-        <p class="pacer-eyebrow">Results</p>
-        {% if run_result.mode == 'cases' %}
-          <h3>Returned cases (truncated)</h3>
-          {% if run_result.cases %}
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Case number</th>
-                    <th>Case type</th>
-                    <th>Date filed</th>
-                    <th>Short title</th>
-                    <th>Court</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for case in run_result.cases %}
+      {% if run_result.search_mode == 'immediate' or run_result.cases or run_result.parties %}
+        <section class="card stack">
+          <p class="pacer-eyebrow">Results</p>
+          {% if run_result.mode == 'cases' %}
+            <h3>Returned cases (truncated)</h3>
+            {% if run_result.page_info %}
+              <p class="small">
+                Page {{ run_result.page_number or (run_result.page_info.number + 1 if run_result.page_info.number is not none else '—') }}
+                · Total pages {{ run_result.page_info.totalPages or '—' }}
+                · Total records {{ run_result.page_info.totalElements or '—' }}
+              </p>
+            {% endif %}
+            {% if run_result.cases %}
+              <div class="table-wrap">
+                <table>
+                  <thead>
                     <tr>
-                      <td>{{ loop.index }}</td>
-                      <td>{{ case.caseNumber or case.case_number or case.cs_case_number or '—' }}</td>
-                      <td>{{ case.caseType or case.case_type or '—' }}</td>
-                      <td>{{ case.dateFiled or case.date_filed or '—' }}</td>
-                      <td>{{ case.shortTitle or case.short_title or case.cs_short_title or '—' }}</td>
-                      <td>{{ case.courtId or case.court_id or case_values.court_id }}</td>
+                      <th>#</th>
+                      <th>Case number</th>
+                      <th>Case type</th>
+                      <th>Date filed</th>
+                      <th>Short title</th>
+                      <th>Court</th>
                     </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {% for case in run_result.cases %}
+                      <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>{{ case.caseNumber or case.case_number or case.cs_case_number or '—' }}</td>
+                        <td>{{ case.caseType or case.case_type or '—' }}</td>
+                        <td>{{ case.dateFiled or case.date_filed or '—' }}</td>
+                        <td>{{ case.shortTitle or case.short_title or case.cs_short_title or '—' }}</td>
+                        <td>{{ case.courtId or case.court_id or case_values.court_id }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p class="small">No cases were returned for the selected filters.</p>
+            {% endif %}
           {% else %}
-            <p class="small">No cases were returned for the selected filters.</p>
-          {% endif %}
-        {% else %}
-          <h3>Returned parties (truncated)</h3>
-          {% if run_result.parties %}
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Last name</th>
-                    <th>First name</th>
-                    <th>Party type</th>
-                    <th>Case number</th>
-                    <th>Court</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for party in run_result.parties %}
+            <h3>Returned parties (truncated)</h3>
+            {% if run_result.page_info %}
+              <p class="small">
+                Page {{ run_result.page_number or (run_result.page_info.number + 1 if run_result.page_info.number is not none else '—') }}
+                · Total pages {{ run_result.page_info.totalPages or '—' }}
+                · Total records {{ run_result.page_info.totalElements or '—' }}
+              </p>
+            {% endif %}
+            {% if run_result.parties %}
+              <div class="table-wrap">
+                <table>
+                  <thead>
                     <tr>
-                      <td>{{ loop.index }}</td>
-                      <td>{{ party.lastName or party.last_name or '—' }}</td>
-                      <td>{{ party.firstName or party.first_name or '—' }}</td>
-                      <td>{{ party.partyType or party.party_type or '—' }}</td>
-                      <td>{{ party.courtCase.caseNumber if party.courtCase else (party.court_case.case_number if party.court_case else '—') }}</td>
-                      <td>{{ party.courtCase.courtId if party.courtCase else (party.court_case.court_id if party.court_case else party_values.court_id or '—') }}</td>
+                      <th>#</th>
+                      <th>Last name</th>
+                      <th>First name</th>
+                      <th>Party type</th>
+                      <th>Case number</th>
+                      <th>Court</th>
                     </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          {% else %}
-            <p class="small">No parties were returned for the selected filters.</p>
+                  </thead>
+                  <tbody>
+                    {% for party in run_result.parties %}
+                      <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>{{ party.lastName or party.last_name or '—' }}</td>
+                        <td>{{ party.firstName or party.first_name or '—' }}</td>
+                        <td>{{ party.partyType or party.party_type or '—' }}</td>
+                        <td>{{ party.courtCase.caseNumber if party.courtCase else (party.court_case.case_number if party.court_case else '—') }}</td>
+                        <td>{{ party.courtCase.courtId if party.courtCase else (party.court_case.court_id if party.court_case else party_values.court_id or '—') }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% else %}
+              <p class="small">No parties were returned for the selected filters.</p>
+            {% endif %}
           {% endif %}
-        {% endif %}
-      </section>
+        </section>
+      {% else %}
+        <section class="card stack">
+          <p class="pacer-eyebrow">Results</p>
+          <h3>Report pending</h3>
+          <p class="small">Batch results will be available once the report status is completed.</p>
+        </section>
+      {% endif %}
 
       <section class="card stack">
         <p class="pacer-eyebrow">Observed fields</p>
@@ -552,6 +686,55 @@
               copyButton.textContent = "Copy debug bundle";
             }, 1500);
           }
+        });
+      })();
+
+      (function () {
+        const modeControls = document.querySelectorAll("[data-search-mode-control]");
+        const toggleFields = (mode) => {
+          document.querySelectorAll("[data-search-mode-field]").forEach((field) => {
+            const target = field.getAttribute("data-search-mode-field");
+            const isMatch = target === mode;
+            field.style.display = isMatch ? "" : "none";
+            field.querySelectorAll("input, select, textarea").forEach((input) => {
+              input.disabled = !isMatch;
+            });
+          });
+        };
+        modeControls.forEach((control) => {
+          toggleFields(control.value);
+          control.addEventListener("change", (event) => {
+            toggleFields(event.target.value);
+          });
+        });
+      })();
+
+      (function () {
+        const pollForms = document.querySelectorAll("[data-auto-poll-form]");
+        pollForms.forEach((form) => {
+          const toggle = form.querySelector("[data-auto-poll-toggle]");
+          if (!toggle) return;
+          let timer = null;
+          const stop = () => {
+            if (timer) {
+              window.clearInterval(timer);
+              timer = null;
+            }
+          };
+          const start = () => {
+            stop();
+            timer = window.setInterval(() => {
+              form.submit();
+            }, 15000);
+          };
+          toggle.addEventListener("change", () => {
+            if (toggle.checked) {
+              start();
+            } else {
+              stop();
+            }
+          });
+          window.addEventListener("beforeunload", stop);
         });
       })();
     </script>

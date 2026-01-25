@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import quote_plus
 
 import requests
@@ -1307,8 +1307,9 @@ def create_app() -> Flask:
     # Immediate PCL searches always return 54 records per page; pageSize is not valid in /cases/find.
     PCL_PAGE_SIZE = 54
     PCL_EXPLORE_DEFAULT_MAX_RECORDS = 54
-    PCL_EXPLORE_MAX_PAGES = max(1, int(os.environ.get("PCL_EXPLORE_MAX_PAGES", "5")))
-    PCL_EXPLORE_MAX_RECORDS = PCL_PAGE_SIZE * PCL_EXPLORE_MAX_PAGES
+    PCL_IMMEDIATE_MAX_PAGES = 100
+    PCL_BATCH_MAX_PAGES = 2000
+    PCL_BATCH_MAX_RECORDS = PCL_PAGE_SIZE * PCL_BATCH_MAX_PAGES
     PCL_EXPLORE_RUN_RETENTION = 200
     PCL_CASE_TYPES = [
         ("cv", "Civil (cv)"),
@@ -1316,6 +1317,81 @@ def create_app() -> Flask:
         ("bk", "Bankruptcy (bk)"),
         ("ap", "Appellate (ap)"),
     ]
+
+    def _build_pacer_explore_defaults() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        case_defaults = {
+            "search_mode": "immediate",
+            "date_filed_from": "",
+            "date_filed_to": "",
+            "court_id": "",
+            "page": 1,
+            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+            "case_types": [],
+        }
+        party_defaults = {
+            "search_mode": "immediate",
+            "last_name": "",
+            "exact_name_match": False,
+            "first_name": "",
+            "date_filed_from": "",
+            "date_filed_to": "",
+            "court_id": "",
+            "page": 1,
+            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+        }
+        return case_defaults, party_defaults
+
+    def _render_pacer_explore_with_result(
+        *,
+        mode: str,
+        case_values: Optional[Dict[str, Any]],
+        party_values: Optional[Dict[str, Any]],
+        run_result: Optional[Dict[str, Any]],
+        pacer_authorized: bool,
+    ) -> str:
+        pacer_session = _get_pacer_session()
+        pacer_authenticated = bool(pacer_session)
+        pacer_search_disabled = bool(session.get("pacer_search_disabled"))
+        env_config = app.config.get("PACER_ENV_CONFIG") or {}
+        auth_env = env_config.get("auth_env", "unknown")
+        pcl_env = env_config.get("pcl_env", "unknown")
+        billable_flag = pacer_env_billable(str(pcl_env))
+        billable_label = (
+            "Yes" if billable_flag is True else "No" if billable_flag is False else "Unknown"
+        )
+        case_defaults, party_defaults = _build_pacer_explore_defaults()
+        return render_template(
+            "admin_pacer_explore.html",
+            active_page="federal_data_dashboard",
+            active_subnav="explore_pacer",
+            csrf_token=get_csrf_token(),
+            pacer_authenticated=pacer_authenticated,
+            pacer_search_enabled=bool(pacer_authorized and not _pacer_search_disabled()),
+            pacer_search_disabled=pacer_search_disabled,
+            pacer_search_disabled_reason=session.get("pacer_search_disabled_reason"),
+            pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
+            pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
+            pacer_auth_env_label=pacer_env_label(str(auth_env)),
+            pcl_env_label=pacer_env_label(str(pcl_env)),
+            pacer_auth_host=pacer_env_host(pacer_auth_base_url),
+            pcl_host=pacer_env_host(pcl_base_url),
+            pacer_env_billable_label=billable_label,
+            pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
+            pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
+            courts=_load_court_choices(),
+            case_type_choices=PCL_CASE_TYPES,
+            mode=mode,
+            case_defaults=case_defaults,
+            party_defaults=party_defaults,
+            immediate_max_pages=PCL_IMMEDIATE_MAX_PAGES,
+            batch_max_pages=PCL_BATCH_MAX_PAGES,
+            explore_page_size=PCL_PAGE_SIZE,
+            explore_max_records=PCL_BATCH_MAX_RECORDS,
+            run_result=run_result,
+            case_values=case_values,
+            party_values=party_values,
+            run_history=_load_pacer_explore_runs(),
+        )
 
     def _load_court_choices() -> List[Dict[str, Any]]:
         stmt = (
@@ -1354,12 +1430,24 @@ def create_app() -> Flask:
         if parsed < 1:
             parsed = PCL_EXPLORE_DEFAULT_MAX_RECORDS
             warning = "Max records must be at least 1. Using the safe default of 54."
-        if parsed > PCL_EXPLORE_MAX_RECORDS:
+        if parsed > PCL_BATCH_MAX_RECORDS:
             warning = (
-                f"Max records capped at {PCL_EXPLORE_MAX_RECORDS} "
-                f"({PCL_EXPLORE_MAX_PAGES} pages)."
+                f"Max records capped at {PCL_BATCH_MAX_RECORDS} "
+                f"({PCL_BATCH_MAX_PAGES} pages)."
             )
-            parsed = PCL_EXPLORE_MAX_RECORDS
+            parsed = PCL_BATCH_MAX_RECORDS
+        return parsed, warning
+
+    def _parse_page_number(value: Any) -> Tuple[int, Optional[str]]:
+        warning = None
+        try:
+            parsed = int(str(value).strip() or "1")
+        except ValueError:
+            parsed = 1
+            warning = "Page must be an integer. Defaulting to page 1."
+        if parsed < 1:
+            parsed = 1
+            warning = "Page must be at least 1. Defaulting to page 1."
         return parsed, warning
 
     def _extract_case_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1441,6 +1529,7 @@ def create_app() -> Flask:
     def _build_debug_bundle(
         *,
         mode: str,
+        search_mode: str,
         court_id: str,
         date_filed_from: str,
         date_filed_to: str,
@@ -1448,6 +1537,7 @@ def create_app() -> Flask:
         exact_name_match: Optional[bool],
         first_name: Optional[str],
         max_records: int,
+        requested_page: Optional[int],
         unexpected_input_keys: Sequence[str],
         pages_requested: int,
         pages_fetched: int,
@@ -1472,6 +1562,7 @@ def create_app() -> Flask:
         bundle = {
             "inputs": {
                 "mode": mode,
+                "search_mode": search_mode,
                 "court_id": court_id,
                 "date_filed_from": date_filed_from,
                 "date_filed_to": date_filed_to,
@@ -1479,6 +1570,7 @@ def create_app() -> Flask:
                 "exact_name_match": exact_name_match,
                 "first_name": first_name,
                 "max_records": max_records,
+                "requested_page": requested_page,
                 "page_size": PCL_PAGE_SIZE,
                 "pages_requested": pages_requested,
                 "pages_fetched": pages_fetched,
@@ -1569,6 +1661,123 @@ def create_app() -> Flask:
                 }
             )
         return runs
+
+    def _store_pacer_search_request(
+        *,
+        search_type: str,
+        search_mode: str,
+        criteria: Dict[str, Any],
+        report_id: Optional[str] = None,
+        report_status: Optional[str] = None,
+        report_meta: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        pacer_search_requests = pcl_tables["pacer_search_requests"]
+        payload = {
+            "search_type": search_type,
+            "search_mode": search_mode,
+            "criteria_json": json.dumps(criteria, default=str),
+            "report_id": report_id,
+            "report_status": report_status,
+            "report_meta_json": json.dumps(report_meta, default=str)
+            if report_meta is not None
+            else None,
+        }
+        with engine.begin() as conn:
+            result = conn.execute(insert(pacer_search_requests).values(payload))
+            return int(result.inserted_primary_key[0])
+
+    def _update_pacer_search_request(
+        request_id: int,
+        *,
+        report_id: Optional[str] = None,
+        report_status: Optional[str] = None,
+        report_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        pacer_search_requests = pcl_tables["pacer_search_requests"]
+        updates: Dict[str, Any] = {"updated_at": datetime.utcnow()}
+        if report_id is not None:
+            updates["report_id"] = report_id
+        if report_status is not None:
+            updates["report_status"] = report_status
+        if report_meta is not None:
+            updates["report_meta_json"] = json.dumps(report_meta, default=str)
+        with engine.begin() as conn:
+            conn.execute(
+                update(pacer_search_requests)
+                .where(pacer_search_requests.c.id == request_id)
+                .values(**updates)
+            )
+
+    def _load_pacer_search_request(request_id: int) -> Optional[Dict[str, Any]]:
+        pacer_search_requests = pcl_tables["pacer_search_requests"]
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(pacer_search_requests).where(
+                        pacer_search_requests.c.id == request_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
+
+    def _parse_search_request_criteria(payload: Optional[str]) -> Dict[str, Any]:
+        if not payload:
+            return {}
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _hydrate_explore_values(
+        mode: str, ui_inputs: Mapping[str, Any], search_mode: str
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        if mode == "cases":
+            case_values = {
+                "search_mode": search_mode,
+                "court_id": ui_inputs.get("court_id", ""),
+                "date_filed_from": ui_inputs.get("date_filed_from", ""),
+                "date_filed_to": ui_inputs.get("date_filed_to", ""),
+                "page": ui_inputs.get("page", 1),
+                "max_records": ui_inputs.get("max_records", ""),
+                "case_types": ui_inputs.get("case_types") or [],
+            }
+            return case_values, None
+        party_values = {
+            "search_mode": search_mode,
+            "last_name": ui_inputs.get("last_name", ""),
+            "exact_name_match": bool(ui_inputs.get("exact_name_match")),
+            "first_name": ui_inputs.get("first_name", ""),
+            "date_filed_from": ui_inputs.get("date_filed_from", ""),
+            "date_filed_to": ui_inputs.get("date_filed_to", ""),
+            "court_id": ui_inputs.get("court_id", ""),
+            "page": ui_inputs.get("page", 1),
+            "max_records": ui_inputs.get("max_records", ""),
+        }
+        return None, party_values
+
+    def _normalize_report_status(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip().upper()
+
+    def _extract_report_info(payload: Dict[str, Any]) -> Dict[str, Any]:
+        source = payload.get("reportInfo") if isinstance(payload.get("reportInfo"), dict) else payload
+        def _get(key: str, alt_key: str) -> Any:
+            return source.get(key) if key in source else source.get(alt_key)
+
+        return {
+            "reportId": _get("reportId", "report_id"),
+            "status": _get("status", "reportStatus") or _get("report_status", "reportStatus"),
+            "startTime": _get("startTime", "start_time"),
+            "endTime": _get("endTime", "end_time"),
+            "recordCount": _get("recordCount", "record_count"),
+            "unbilledPageCount": _get("unbilledPageCount", "unbilled_page_count"),
+            "downloadFee": _get("downloadFee", "download_fee"),
+            "pages": _get("pages", "page_count"),
+        }
 
     def _build_next_steps(
         *,
@@ -3578,52 +3787,12 @@ def create_app() -> Flask:
         mode = (request.args.get("mode") or "cases").strip().lower()
         if mode not in {"cases", "parties"}:
             mode = "cases"
-        case_defaults = {
-            "date_filed_from": "",
-            "date_filed_to": "",
-            "court_id": "",
-            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
-            "case_types": [],
-        }
-        party_defaults = {
-            "last_name": "",
-            "exact_name_match": False,
-            "first_name": "",
-            "date_filed_from": "",
-            "date_filed_to": "",
-            "court_id": "",
-            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
-        }
-        return render_template(
-            "admin_pacer_explore.html",
-            active_page="federal_data_dashboard",
-            active_subnav="explore_pacer",
-            csrf_token=get_csrf_token(),
-            pacer_authenticated=pacer_authenticated,
-            pacer_search_enabled=pacer_search_enabled,
-            pacer_search_disabled=pacer_search_disabled,
-            pacer_search_disabled_reason=session.get("pacer_search_disabled_reason"),
-            pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
-            pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
-            pacer_auth_env_label=pacer_env_label(str(auth_env)),
-            pcl_env_label=pacer_env_label(str(pcl_env)),
-            pacer_auth_host=pacer_env_host(pacer_auth_base_url),
-            pcl_host=pacer_env_host(pcl_base_url),
-            pacer_env_billable_label=billable_label,
-            pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
-            pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
-            courts=_load_court_choices(),
-            case_type_choices=PCL_CASE_TYPES,
+        return _render_pacer_explore_with_result(
             mode=mode,
-            case_defaults=case_defaults,
-            party_defaults=party_defaults,
-            explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
-            explore_page_size=PCL_PAGE_SIZE,
-            explore_max_records=PCL_EXPLORE_MAX_RECORDS,
-            run_result=None,
             case_values=None,
             party_values=None,
-            run_history=_load_pacer_explore_runs(),
+            run_result=None,
+            pacer_authorized=pacer_search_enabled,
         )
 
     @app.post("/admin/pacer/explore/run")
@@ -3643,7 +3812,6 @@ def create_app() -> Flask:
         mode = (request.form.get("mode") or "cases").strip().lower()
         if mode not in {"cases", "parties"}:
             mode = "cases"
-
         ui_inputs = collect_ui_inputs(
             request.form.to_dict(flat=False),
             multi_keys={"case_types"},
@@ -3654,37 +3822,30 @@ def create_app() -> Flask:
             app.logger.info(
                 "PACER explore unexpected input keys: %s", ", ".join(unexpected_input_keys)
             )
-
-        case_defaults = {
-            "date_filed_from": "",
-            "date_filed_to": "",
-            "court_id": "",
-            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
-            "case_types": [],
-        }
-        party_defaults = {
-            "last_name": "",
-            "exact_name_match": False,
-            "first_name": "",
-            "date_filed_from": "",
-            "date_filed_to": "",
-            "court_id": "",
-            "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
-        }
+        search_mode_raw = str(ui_inputs.get("search_mode") or "").strip().lower()
+        search_mode = search_mode_raw or "immediate"
+        if search_mode_raw and search_mode_raw not in {"immediate", "batch"}:
+            search_mode = "immediate"
 
         case_values = None
         party_values = None
         if mode == "cases":
             case_values = {
+                "search_mode": search_mode,
                 "court_id": ui_inputs.get("court_id", ""),
                 "date_filed_from": ui_inputs.get("date_filed_from", ""),
                 "date_filed_to": ui_inputs.get("date_filed_to", ""),
+                "page": ui_inputs.get("page", "") or 1,
                 "max_records": ui_inputs.get("max_records", ""),
                 "case_types": ui_inputs.get("case_types") or [],
             }
-            max_records, max_records_warning = _clamp_max_records(
-                case_values["max_records"]
-            )
+            if search_mode == "batch":
+                max_records, max_records_warning = _clamp_max_records(
+                    case_values["max_records"]
+                )
+            else:
+                max_records = PCL_PAGE_SIZE
+                max_records_warning = None
         else:
             raw_exact_name_match = ui_inputs.get("exact_name_match")
             exact_name_match = False
@@ -3698,21 +3859,31 @@ def create_app() -> Flask:
                     "on",
                 }
             party_values = {
+                "search_mode": search_mode,
                 "last_name": ui_inputs.get("last_name", ""),
                 "exact_name_match": exact_name_match,
                 "first_name": ui_inputs.get("first_name", ""),
                 "date_filed_from": ui_inputs.get("date_filed_from", ""),
                 "date_filed_to": ui_inputs.get("date_filed_to", ""),
                 "court_id": ui_inputs.get("court_id", ""),
+                "page": ui_inputs.get("page", "") or 1,
                 "max_records": ui_inputs.get("max_records", ""),
             }
-            max_records, max_records_warning = _clamp_max_records(
-                party_values["max_records"]
-            )
+            if search_mode == "batch":
+                max_records, max_records_warning = _clamp_max_records(
+                    party_values["max_records"]
+                )
+            else:
+                max_records = PCL_PAGE_SIZE
+                max_records_warning = None
+
+        requested_page: Optional[int] = None
+        page_warning: Optional[str] = None
 
         run_result: Dict[str, Any] = {
             "status": "error",
             "mode": mode,
+            "search_mode": search_mode,
             "errors": [],
             "warnings": [],
             "logs": [],
@@ -3730,8 +3901,23 @@ def create_app() -> Flask:
             "pages_fetched": 0,
             "truncated_notice": None,
             "endpoint": "",
+            "report_request": None,
+            "page_info": None,
+            "page_number": None,
             "next_steps": [],
         }
+
+        if search_mode_raw and search_mode_raw not in {"immediate", "batch"}:
+            run_result["errors"].append(
+                "Search mode must be Immediate or Batch."
+            )
+
+        if search_mode == "immediate":
+            page_source = (case_values or party_values or {}).get("page", "")
+            requested_page, page_warning = _parse_page_number(page_source)
+            run_result["page_number"] = requested_page
+            if page_warning:
+                run_result["warnings"].append(page_warning)
 
         token_record = pacer_token_store.get_token()
         token_diagnostics = _token_diagnostics(token_record)
@@ -3745,36 +3931,12 @@ def create_app() -> Flask:
         date_to: Optional[datetime.date] = None
 
         def render_response(pacer_authorized: bool) -> str:
-            return render_template(
-                "admin_pacer_explore.html",
-                active_page="federal_data_dashboard",
-                active_subnav="explore_pacer",
-                csrf_token=get_csrf_token(),
-                pacer_authenticated=bool(pacer_session),
-                pacer_search_enabled=bool(pacer_authorized and not _pacer_search_disabled()),
-                pacer_search_disabled=bool(session.get("pacer_search_disabled")),
-                pacer_search_disabled_reason=session.get("pacer_search_disabled_reason"),
-                pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
-                pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
-                pacer_auth_env_label=pacer_env_label(str(auth_env)),
-                pcl_env_label=pacer_env_label(str(pcl_env)),
-                pacer_auth_host=pacer_env_host(pacer_auth_base_url),
-                pcl_host=pacer_env_host(pcl_base_url),
-                pacer_env_billable_label=billable_label,
-                pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
-                pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
-                courts=courts,
-                case_type_choices=PCL_CASE_TYPES,
+            return _render_pacer_explore_with_result(
                 mode=mode,
-                case_defaults=case_defaults,
-                party_defaults=party_defaults,
-                explore_cap_pages=PCL_EXPLORE_MAX_PAGES,
-                explore_page_size=PCL_PAGE_SIZE,
-                explore_max_records=PCL_EXPLORE_MAX_RECORDS,
-                run_result=run_result,
                 case_values=case_values,
                 party_values=party_values,
-                run_history=_load_pacer_explore_runs(),
+                run_result=run_result,
+                pacer_authorized=pacer_authorized,
             )
 
         if not pacer_session:
@@ -3783,6 +3945,7 @@ def create_app() -> Flask:
             )
             run_result["debug_bundle"] = _build_debug_bundle(
                 mode=mode,
+                search_mode=search_mode,
                 court_id=(case_values or party_values or {}).get("court_id", ""),
                 date_filed_from=(case_values or party_values or {}).get(
                     "date_filed_from", ""
@@ -3792,6 +3955,7 @@ def create_app() -> Flask:
                 exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
+                requested_page=requested_page,
                 unexpected_input_keys=unexpected_input_keys,
                 pages_requested=0,
                 pages_fetched=0,
@@ -3808,7 +3972,9 @@ def create_app() -> Flask:
             )
             request_params = {
                 "mode": mode,
+                "search_mode": search_mode,
                 "max_records": max_records,
+                "page_number": requested_page,
                 "page_size": PCL_PAGE_SIZE,
                 "request_body": {},
                 "response_samples": [],
@@ -3853,6 +4019,7 @@ def create_app() -> Flask:
             )
             run_result["debug_bundle"] = _build_debug_bundle(
                 mode=mode,
+                search_mode=search_mode,
                 court_id=(case_values or party_values or {}).get("court_id", ""),
                 date_filed_from=(case_values or party_values or {}).get(
                     "date_filed_from", ""
@@ -3862,6 +4029,7 @@ def create_app() -> Flask:
                 exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
+                requested_page=requested_page,
                 unexpected_input_keys=unexpected_input_keys,
                 pages_requested=0,
                 pages_fetched=0,
@@ -3878,7 +4046,9 @@ def create_app() -> Flask:
             )
             request_params = {
                 "mode": mode,
+                "search_mode": search_mode,
                 "max_records": max_records,
+                "page_number": requested_page,
                 "page_size": PCL_PAGE_SIZE,
                 "request_body": {},
                 "response_samples": [],
@@ -3905,6 +4075,7 @@ def create_app() -> Flask:
             )
             run_result["debug_bundle"] = _build_debug_bundle(
                 mode=mode,
+                search_mode=search_mode,
                 court_id=(case_values or party_values or {}).get("court_id", ""),
                 date_filed_from=(case_values or party_values or {}).get(
                     "date_filed_from", ""
@@ -3914,6 +4085,7 @@ def create_app() -> Flask:
                 exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
+                requested_page=requested_page,
                 unexpected_input_keys=unexpected_input_keys,
                 pages_requested=0,
                 pages_fetched=0,
@@ -3930,7 +4102,9 @@ def create_app() -> Flask:
             )
             request_params = {
                 "mode": mode,
+                "search_mode": search_mode,
                 "max_records": max_records,
+                "page_number": requested_page,
                 "page_size": PCL_PAGE_SIZE,
                 "request_body": {},
                 "response_samples": [],
@@ -3954,6 +4128,7 @@ def create_app() -> Flask:
             )
             run_result["debug_bundle"] = _build_debug_bundle(
                 mode=mode,
+                search_mode=search_mode,
                 court_id=(case_values or party_values or {}).get("court_id", ""),
                 date_filed_from=(case_values or party_values or {}).get(
                     "date_filed_from", ""
@@ -3963,6 +4138,7 @@ def create_app() -> Flask:
                 exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
+                requested_page=requested_page,
                 unexpected_input_keys=unexpected_input_keys,
                 pages_requested=0,
                 pages_fetched=0,
@@ -3979,7 +4155,9 @@ def create_app() -> Flask:
             )
             request_params = {
                 "mode": mode,
+                "search_mode": search_mode,
                 "max_records": max_records,
+                "page_number": requested_page,
                 "page_size": PCL_PAGE_SIZE,
                 "request_body": {},
                 "response_samples": [],
@@ -4028,17 +4206,24 @@ def create_app() -> Flask:
                         "Date filed from must be on or before date filed to."
                     )
 
-        if max_records_warning:
+        if search_mode == "batch" and max_records_warning:
             run_result["warnings"].append(max_records_warning)
 
-        pages_requested = max(1, math.ceil(max_records / PCL_PAGE_SIZE))
-        pages_to_fetch = min(pages_requested, PCL_EXPLORE_MAX_PAGES)
-        if pages_to_fetch < pages_requested:
-            truncated_notice = (
-                f"Requested {pages_requested} pages but safety cap limited the run to "
-                f"{pages_to_fetch} pages ({pages_to_fetch * PCL_PAGE_SIZE} records max)."
-            )
-            run_result["warnings"].append(truncated_notice)
+        pages_requested = 1
+        pages_to_fetch = 1
+        if search_mode == "batch":
+            pages_requested = max(1, math.ceil(max_records / PCL_PAGE_SIZE))
+            if pages_requested > PCL_BATCH_MAX_PAGES:
+                run_result["errors"].append(
+                    "Batch searches are limited to 2,000 pages. "
+                    "Reduce max records or narrow the search."
+                )
+        else:
+            if requested_page and requested_page > PCL_IMMEDIATE_MAX_PAGES:
+                run_result["errors"].append(
+                    "Immediate searches are limited to 100 pages. "
+                    "Use Batch mode for larger runs."
+                )
 
         if mode == "cases":
             request_body = build_case_search_payload(ui_inputs)
@@ -4053,9 +4238,16 @@ def create_app() -> Flask:
             if mode == "cases"
             else f"{pcl_base_url}/parties/find"
         )
-        request_urls = [
-            f"{endpoint_base}?page={api_page}" for api_page in range(pages_to_fetch)
-        ]
+        batch_endpoint_base = (
+            f"{pcl_base_url}/cases/download"
+            if mode == "cases"
+            else f"{pcl_base_url}/parties/download"
+        )
+        if search_mode == "immediate":
+            api_page = max(0, (requested_page or 1) - 1)
+            request_urls = [f"{endpoint_base}?page={api_page}"]
+        else:
+            request_urls = [batch_endpoint_base]
 
         if not run_result["errors"]:
             valid_payload, invalid_keys, missing_keys = validate_pcl_payload(
@@ -4080,6 +4272,7 @@ def create_app() -> Flask:
         if run_result["errors"]:
             run_result["debug_bundle"] = _build_debug_bundle(
                 mode=mode,
+                search_mode=search_mode,
                 court_id=(case_values or party_values or {}).get("court_id", ""),
                 date_filed_from=(case_values or party_values or {}).get(
                     "date_filed_from", ""
@@ -4091,6 +4284,7 @@ def create_app() -> Flask:
                 exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
+                requested_page=requested_page,
                 unexpected_input_keys=unexpected_input_keys,
                 pages_requested=pages_requested,
                 pages_fetched=0,
@@ -4107,8 +4301,10 @@ def create_app() -> Flask:
             )
             request_params = {
                 "mode": mode,
+                "search_mode": search_mode,
                 "max_records": max_records,
                 "pages_requested": pages_requested,
+                "page_number": requested_page,
                 "page_size": PCL_PAGE_SIZE,
                 "request_body": request_body,
                 "response_samples": [],
@@ -4145,6 +4341,139 @@ def create_app() -> Flask:
                 error_summary="; ".join(run_result["errors"]),
             )
             return render_response(_pacer_token_matches_pcl())
+
+        if search_mode == "batch":
+            app.logger.info(
+                "PACER explore batch submit mode=%s",
+                mode,
+            )
+            report_payload: Optional[Dict[str, Any]] = None
+            report_error: Optional[str] = None
+            report_details: Optional[str] = None
+            try:
+                if mode == "cases":
+                    report_payload = pcl_client.start_case_download(request_body)
+                else:
+                    report_payload = pcl_client.start_party_download(request_body)
+            except TokenExpired:
+                report_error = (
+                    "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
+                )
+            except PclApiError as exc:
+                report_error = f"PCL request failed with status {exc.status_code}."
+                report_details = exc.message
+            except Exception as exc:  # pragma: no cover - defensive guardrail
+                report_error = "Unexpected error while submitting batch report."
+                report_details = str(exc)
+                app.logger.exception("Unexpected PACER batch submit error.")
+
+            if report_error:
+                run_result["errors"].append(report_error)
+                if report_details:
+                    run_result["errors"].append(report_details)
+                run_result["debug_bundle"] = _build_debug_bundle(
+                    mode=mode,
+                    search_mode=search_mode,
+                    court_id=(case_values or party_values or {}).get("court_id", ""),
+                    date_filed_from=(case_values or party_values or {}).get(
+                        "date_filed_from", ""
+                    ),
+                    date_filed_to=(case_values or party_values or {}).get(
+                        "date_filed_to", ""
+                    ),
+                    last_name=party_values.get("last_name") if party_values else None,
+                    exact_name_match=party_values.get("exact_name_match") if party_values else None,
+                    first_name=party_values.get("first_name") if party_values else None,
+                    max_records=max_records,
+                    requested_page=requested_page,
+                    unexpected_input_keys=unexpected_input_keys,
+                    pages_requested=pages_requested,
+                    pages_fetched=0,
+                    request_body=request_body,
+                    request_urls=request_urls,
+                    status_codes=[],
+                    records=[],
+                    page_infos=[],
+                    truncated_notice=None,
+                    error_message="; ".join(run_result["errors"]),
+                    response_snippets=[],
+                    environment=app.config.get("PACER_ENV_CONFIG"),
+                    token_diagnostics=token_diagnostics,
+                )
+                request_params = {
+                    "mode": mode,
+                    "search_mode": search_mode,
+                    "max_records": max_records,
+                    "pages_requested": pages_requested,
+                    "page_number": requested_page,
+                    "page_size": PCL_PAGE_SIZE,
+                    "request_body": request_body,
+                    "response_samples": [],
+                }
+                _store_pacer_explore_run(
+                    mode=mode,
+                    court_id=(case_values or party_values or {}).get("court_id"),
+                    date_from=date_from,
+                    date_to=date_to,
+                    request_params=request_params,
+                    pages_fetched=0,
+                    receipts=[],
+                    observed_fields=None,
+                    error_summary="; ".join(run_result["errors"]),
+                )
+                return render_response(_pacer_token_matches_pcl())
+
+            report_info = _extract_report_info(report_payload or {})
+            report_id = report_info.get("reportId") or report_payload.get("reportId")
+            report_status = _normalize_report_status(report_info.get("status") or "SUBMITTED")
+            criteria_payload = {
+                "ui_inputs": ui_inputs,
+                "request_body": request_body,
+            }
+            request_id = _store_pacer_search_request(
+                search_type="case" if mode == "cases" else "party",
+                search_mode=search_mode,
+                criteria=criteria_payload,
+                report_id=str(report_id) if report_id is not None else None,
+                report_status=report_status,
+                report_meta=report_info,
+            )
+            run_result.update(
+                {
+                    "status": "ok",
+                    "endpoint": batch_endpoint_base,
+                    "pages_requested": pages_requested,
+                    "pages_fetched": 0,
+                    "report_request": {
+                        "request_id": request_id,
+                        "report_id": report_id,
+                        "status": report_status,
+                        "info": report_info,
+                    },
+                }
+            )
+            request_params = {
+                "mode": mode,
+                "search_mode": search_mode,
+                "max_records": max_records,
+                "pages_requested": pages_requested,
+                "page_number": requested_page,
+                "page_size": PCL_PAGE_SIZE,
+                "request_body": request_body,
+                "response_samples": [],
+            }
+            _store_pacer_explore_run(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id"),
+                date_from=date_from,
+                date_to=date_to,
+                request_params=request_params,
+                pages_fetched=0,
+                receipts=[],
+                observed_fields=None,
+                error_summary=None,
+            )
+            return render_response(_pacer_token_matches_pcl())
         status_codes: List[int] = []
         response_snippets: List[Dict[str, Any]] = []
         all_records: List[Dict[str, Any]] = []
@@ -4172,7 +4501,10 @@ def create_app() -> Flask:
         error_details: Optional[str] = None
         trace_text: Optional[str] = None
 
-        for api_page in range(pages_to_fetch):
+        api_page = max(0, (requested_page or 1) - 1)
+        api_pages = [api_page]
+
+        for api_page in api_pages:
             display_page = api_page + 1
             endpoint_url = f"{endpoint_base}?page={api_page}"
             started = time.perf_counter()
@@ -4443,9 +4775,12 @@ def create_app() -> Flask:
                 "endpoint": endpoint_base,
             }
         )
+        if page_infos:
+            run_result["page_info"] = page_infos[-1].get("page_info")
 
         run_result["debug_bundle"] = _build_debug_bundle(
             mode=mode,
+            search_mode=search_mode,
             court_id=(case_values or party_values or {}).get("court_id", ""),
             date_filed_from=(case_values or party_values or {}).get("date_filed_from", ""),
             date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
@@ -4453,6 +4788,7 @@ def create_app() -> Flask:
             exact_name_match=party_values.get("exact_name_match") if party_values else None,
             first_name=party_values.get("first_name") if party_values else None,
             max_records=max_records,
+            requested_page=requested_page,
             unexpected_input_keys=unexpected_input_keys,
             pages_requested=pages_requested,
             pages_fetched=pages_fetched,
@@ -4484,8 +4820,10 @@ def create_app() -> Flask:
 
         request_params = {
             "mode": mode,
+            "search_mode": search_mode,
             "max_records": max_records,
             "pages_requested": pages_requested,
+            "page_number": requested_page,
             "page_size": PCL_PAGE_SIZE,
             "request_body": request_body,
             "response_samples": response_snippets[:3],
@@ -4529,6 +4867,359 @@ def create_app() -> Flask:
         )
 
         return render_response(_pacer_token_matches_pcl())
+
+    @app.post("/admin/pacer/explore/batch/status")
+    @admin_required
+    def admin_pacer_explore_batch_status():
+        require_csrf()
+        request_id = int(request.form.get("request_id") or 0)
+        search_request = _load_pacer_search_request(request_id)
+        if not search_request:
+            run_result = {
+                "status": "error",
+                "mode": "cases",
+                "search_mode": "batch",
+                "errors": ["Batch request not found."],
+                "warnings": [],
+                "logs": [],
+                "receipts": [],
+                "page_infos": [],
+                "cases": [],
+                "parties": [],
+                "observed_fields": [],
+                "party_observed_fields": [],
+                "court_case_observed_fields": [],
+                "cost_summary": {"billable_pages": 0, "fee_totals": {}},
+                "debug_bundle": "",
+                "response_snippets": [],
+                "pages_requested": 0,
+                "pages_fetched": 0,
+                "truncated_notice": None,
+                "endpoint": "",
+                "report_request": None,
+                "page_info": None,
+                "page_number": None,
+                "next_steps": [],
+            }
+            return _render_pacer_explore_with_result(
+                mode="cases",
+                case_values=None,
+                party_values=None,
+                run_result=run_result,
+                pacer_authorized=_pacer_token_matches_pcl(),
+            )
+
+        search_type = search_request.get("search_type") or "case"
+        mode = "cases" if search_type == "case" else "parties"
+        search_mode = search_request.get("search_mode") or "batch"
+        criteria = _parse_search_request_criteria(search_request.get("criteria_json"))
+        ui_inputs = criteria.get("ui_inputs") or {}
+        case_values, party_values = _hydrate_explore_values(mode, ui_inputs, search_mode)
+        report_id = search_request.get("report_id")
+
+        run_result = {
+            "status": "error",
+            "mode": mode,
+            "search_mode": search_mode,
+            "errors": [],
+            "warnings": [],
+            "logs": [],
+            "receipts": [],
+            "page_infos": [],
+            "cases": [],
+            "parties": [],
+            "observed_fields": [],
+            "party_observed_fields": [],
+            "court_case_observed_fields": [],
+            "cost_summary": {"billable_pages": 0, "fee_totals": {}},
+            "debug_bundle": "",
+            "response_snippets": [],
+            "pages_requested": 0,
+            "pages_fetched": 0,
+            "truncated_notice": None,
+            "endpoint": "",
+            "report_request": None,
+            "page_info": None,
+            "page_number": None,
+            "next_steps": [],
+        }
+
+        if not report_id:
+            run_result["errors"].append("Missing report ID for this batch request.")
+            return _render_pacer_explore_with_result(
+                mode=mode,
+                case_values=case_values,
+                party_values=party_values,
+                run_result=run_result,
+                pacer_authorized=_pacer_token_matches_pcl(),
+            )
+
+        status_payload: Optional[Dict[str, Any]] = None
+        try:
+            if mode == "cases":
+                status_payload = pcl_client.get_case_download_status(str(report_id))
+            else:
+                status_payload = pcl_client.get_party_download_status(str(report_id))
+        except TokenExpired:
+            run_result["errors"].append(
+                "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
+            )
+        except PclApiError as exc:
+            run_result["errors"].append(f"PCL status check failed with status {exc.status_code}.")
+            run_result["errors"].append(exc.message)
+        except Exception as exc:  # pragma: no cover - defensive guardrail
+            run_result["errors"].append("Unexpected error while checking report status.")
+            run_result["errors"].append(str(exc))
+            app.logger.exception("Unexpected PACER batch status error.")
+
+        report_info = _extract_report_info(status_payload or {})
+        report_status = _normalize_report_status(report_info.get("status"))
+        if report_info:
+            _update_pacer_search_request(
+                request_id,
+                report_status=report_status,
+                report_meta=report_info,
+            )
+        run_result.update(
+            {
+                "status": "ok" if not run_result["errors"] else "error",
+                "report_request": {
+                    "request_id": request_id,
+                    "report_id": report_id,
+                    "status": report_status,
+                    "info": report_info,
+                },
+            }
+        )
+        max_records, _ = _clamp_max_records(ui_inputs.get("max_records", ""))
+        run_result["pages_requested"] = max(1, math.ceil(max_records / PCL_PAGE_SIZE))
+        run_result["debug_bundle"] = _build_debug_bundle(
+            mode=mode,
+            search_mode=search_mode,
+            court_id=(case_values or party_values or {}).get("court_id", ""),
+            date_filed_from=(case_values or party_values or {}).get("date_filed_from", ""),
+            date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+            last_name=party_values.get("last_name") if party_values else None,
+            exact_name_match=party_values.get("exact_name_match") if party_values else None,
+            first_name=party_values.get("first_name") if party_values else None,
+            max_records=max_records,
+            requested_page=None,
+            unexpected_input_keys=[],
+            pages_requested=run_result["pages_requested"],
+            pages_fetched=0,
+            request_body=criteria.get("request_body") or {},
+            request_urls=[],
+            status_codes=[],
+            records=[],
+            page_infos=[],
+            truncated_notice=None,
+            error_message="\n".join(run_result["errors"]) if run_result["errors"] else None,
+            response_snippets=[],
+            environment=app.config.get("PACER_ENV_CONFIG"),
+            token_diagnostics=None,
+        )
+
+        return _render_pacer_explore_with_result(
+            mode=mode,
+            case_values=case_values,
+            party_values=party_values,
+            run_result=run_result,
+            pacer_authorized=_pacer_token_matches_pcl(),
+        )
+
+    @app.post("/admin/pacer/explore/batch/load")
+    @admin_required
+    def admin_pacer_explore_batch_load():
+        require_csrf()
+        request_id = int(request.form.get("request_id") or 0)
+        search_request = _load_pacer_search_request(request_id)
+        if not search_request:
+            abort(404, description="Batch request not found.")
+
+        search_type = search_request.get("search_type") or "case"
+        mode = "cases" if search_type == "case" else "parties"
+        search_mode = search_request.get("search_mode") or "batch"
+        criteria = _parse_search_request_criteria(search_request.get("criteria_json"))
+        ui_inputs = criteria.get("ui_inputs") or {}
+        case_values, party_values = _hydrate_explore_values(mode, ui_inputs, search_mode)
+        report_id = search_request.get("report_id")
+
+        run_result = {
+            "status": "error",
+            "mode": mode,
+            "search_mode": search_mode,
+            "errors": [],
+            "warnings": [],
+            "logs": [],
+            "receipts": [],
+            "page_infos": [],
+            "cases": [],
+            "parties": [],
+            "observed_fields": [],
+            "party_observed_fields": [],
+            "court_case_observed_fields": [],
+            "cost_summary": {"billable_pages": 0, "fee_totals": {}},
+            "debug_bundle": "",
+            "response_snippets": [],
+            "pages_requested": 0,
+            "pages_fetched": 0,
+            "truncated_notice": None,
+            "endpoint": "",
+            "report_request": None,
+            "page_info": None,
+            "page_number": None,
+            "next_steps": [],
+        }
+
+        if not report_id:
+            run_result["errors"].append("Missing report ID for this batch request.")
+            return _render_pacer_explore_with_result(
+                mode=mode,
+                case_values=case_values,
+                party_values=party_values,
+                run_result=run_result,
+                pacer_authorized=_pacer_token_matches_pcl(),
+            )
+
+        status_payload: Optional[Dict[str, Any]] = None
+        try:
+            if mode == "cases":
+                status_payload = pcl_client.get_case_download_status(str(report_id))
+            else:
+                status_payload = pcl_client.get_party_download_status(str(report_id))
+        except TokenExpired:
+            run_result["errors"].append(
+                "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
+            )
+        except PclApiError as exc:
+            run_result["errors"].append(f"PCL status check failed with status {exc.status_code}.")
+            run_result["errors"].append(exc.message)
+        except Exception as exc:  # pragma: no cover - defensive guardrail
+            run_result["errors"].append("Unexpected error while checking report status.")
+            run_result["errors"].append(str(exc))
+            app.logger.exception("Unexpected PACER batch status error.")
+
+        report_info = _extract_report_info(status_payload or {})
+        report_status = _normalize_report_status(report_info.get("status"))
+        if report_info:
+            _update_pacer_search_request(
+                request_id,
+                report_status=report_status,
+                report_meta=report_info,
+            )
+
+        if report_status != "COMPLETED":
+            run_result["errors"].append("Report is not complete yet. Refresh status and try again.")
+            run_result["report_request"] = {
+                "request_id": request_id,
+                "report_id": report_id,
+                "status": report_status,
+                "info": report_info,
+            }
+            return _render_pacer_explore_with_result(
+                mode=mode,
+                case_values=case_values,
+                party_values=party_values,
+                run_result=run_result,
+                pacer_authorized=_pacer_token_matches_pcl(),
+            )
+
+        payload: Optional[Dict[str, Any]] = None
+        try:
+            if mode == "cases":
+                payload = pcl_client.download_case_report(str(report_id))
+            else:
+                payload = pcl_client.download_party_report(str(report_id))
+        except TokenExpired:
+            run_result["errors"].append(
+                "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
+            )
+        except PclApiError as exc:
+            run_result["errors"].append(f"PCL report download failed with status {exc.status_code}.")
+            run_result["errors"].append(exc.message)
+        except Exception as exc:  # pragma: no cover - defensive guardrail
+            run_result["errors"].append("Unexpected error while downloading report.")
+            run_result["errors"].append(str(exc))
+            app.logger.exception("Unexpected PACER batch download error.")
+
+        records = _extract_case_records(payload or {}) if mode == "cases" else _extract_party_records(payload or {})
+        if payload and not run_result["errors"]:
+            run_result.update(
+                {
+                    "status": "ok",
+                    "cases": records if mode == "cases" else [],
+                    "parties": records if mode == "parties" else [],
+                    "report_request": {
+                        "request_id": request_id,
+                        "report_id": report_id,
+                        "status": report_status,
+                        "info": report_info,
+                    },
+                }
+            )
+
+        max_records, _ = _clamp_max_records(ui_inputs.get("max_records", ""))
+        run_result["pages_requested"] = max(1, math.ceil(max_records / PCL_PAGE_SIZE))
+        run_result["debug_bundle"] = _build_debug_bundle(
+            mode=mode,
+            search_mode=search_mode,
+            court_id=(case_values or party_values or {}).get("court_id", ""),
+            date_filed_from=(case_values or party_values or {}).get("date_filed_from", ""),
+            date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+            last_name=party_values.get("last_name") if party_values else None,
+            exact_name_match=party_values.get("exact_name_match") if party_values else None,
+            first_name=party_values.get("first_name") if party_values else None,
+            max_records=max_records,
+            requested_page=None,
+            unexpected_input_keys=[],
+            pages_requested=run_result["pages_requested"],
+            pages_fetched=0,
+            request_body=criteria.get("request_body") or {},
+            request_urls=[],
+            status_codes=[],
+            records=records,
+            page_infos=[],
+            truncated_notice=None,
+            error_message="\n".join(run_result["errors"]) if run_result["errors"] else None,
+            response_snippets=[],
+            environment=app.config.get("PACER_ENV_CONFIG"),
+            token_diagnostics=None,
+        )
+
+        return _render_pacer_explore_with_result(
+            mode=mode,
+            case_values=case_values,
+            party_values=party_values,
+            run_result=run_result,
+            pacer_authorized=_pacer_token_matches_pcl(),
+        )
+
+    @app.get("/admin/pacer/explore/batch/download/<int:request_id>")
+    @admin_required
+    def admin_pacer_explore_batch_download(request_id: int):
+        search_request = _load_pacer_search_request(request_id)
+        if not search_request:
+            abort(404, description="Batch request not found.")
+        report_id = search_request.get("report_id")
+        if not report_id:
+            abort(404, description="Batch request is missing a report ID.")
+        search_type = search_request.get("search_type") or "case"
+        try:
+            if search_type == "case":
+                payload = pcl_client.download_case_report(str(report_id))
+            else:
+                payload = pcl_client.download_party_report(str(report_id))
+        except TokenExpired as exc:
+            abort(401, description=str(exc))
+        except PclApiError as exc:
+            abort(exc.status_code, description=exc.message)
+
+        response = make_response(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="pcl-report-{report_id}.json"'
+        )
+        return response
 
     @app.post("/admin/pacer/explore/runs/<int:run_id>/delete")
     @admin_required
