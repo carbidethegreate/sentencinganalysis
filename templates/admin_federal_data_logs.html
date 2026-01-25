@@ -4,7 +4,7 @@
   {% if value %}
     <details>
       <summary>{{ label }}</summary>
-      <pre>{{ value | tojson(indent=2) }}</pre>
+      <pre class="json-block">{{ value | tojson(indent=2) }}</pre>
     </details>
   {% else %}
     —
@@ -12,18 +12,92 @@
 {% endmacro %}
 
 {% block federal_content %}
-  <div class="card">
-    <h2>Logs</h2>
-    <p class="small">
-      Showing the most recent {{ limit }} entries for each log type. Add
-      <code>?limit=100</code> to the URL to expand (max 200).
-    </p>
+  <div class="card logs-hero">
+    <div>
+      <h2>Logs</h2>
+      <p class="small">
+        Showing the most recent {{ limit }} entries for each log type. Adjust the limit below
+        (max 200) or export everything into a shareable text file.
+      </p>
+    </div>
+    <div class="logs-hero__actions">
+      <form class="logs-filter" method="get" action="{{ url_for('admin_federal_data_dashboard_logs') }}">
+        <label for="limit">Show</label>
+        <select id="limit" name="limit">
+          {% for option in [25, 50, 100, 150, 200] %}
+            <option value="{{ option }}" {% if option == limit %}selected{% endif %}>
+              {{ option }} entries
+            </option>
+          {% endfor %}
+        </select>
+        <button class="secondary" type="submit">Apply</button>
+      </form>
+      <a class="button secondary" href="{{ url_for('admin_federal_data_dashboard_logs_export', limit=limit) }}">
+        Export logs (.txt)
+      </a>
+    </div>
   </div>
 
-  <div class="card">
-    <h3>Court import runs</h3>
+  <div class="card logs-summary">
+    <div>
+      <h3>At-a-glance</h3>
+      <p class="small">Jump straight to the log group you need.</p>
+    </div>
+    <div class="logs-summary__grid">
+      <a class="logs-summary__item" href="#court-import-runs">
+        <span>Court import runs</span>
+        <strong>{{ court_import_runs | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#pacer-explore-runs">
+        <span>PACER explore runs</span>
+        <strong>{{ pacer_explore_runs | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#pcl-batch-searches">
+        <span>PCL batch searches</span>
+        <strong>{{ pcl_batch_searches | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#pcl-batch-requests">
+        <span>PCL batch requests</span>
+        <strong>{{ pcl_batch_requests | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#pcl-batch-segments">
+        <span>PCL batch segments</span>
+        <strong>{{ pcl_batch_segments | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#pcl-remote-jobs">
+        <span>PCL remote jobs</span>
+        <strong>{{ pcl_remote_jobs | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#pcl-receipts">
+        <span>PCL receipts</span>
+        <strong>{{ pcl_receipts | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#pcl-batch-receipts">
+        <span>PCL batch receipts</span>
+        <strong>{{ pcl_batch_receipts | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#docket-enrichment-jobs">
+        <span>Docket enrichment jobs</span>
+        <strong>{{ docket_enrichment_jobs | length }}</strong>
+      </a>
+      <a class="logs-summary__item" href="#docket-enrichment-receipts">
+        <span>Docket enrichment receipts</span>
+        <strong>{{ docket_enrichment_receipts | length }}</strong>
+      </a>
+    </div>
+  </div>
+
+  <div class="card log-card" id="court-import-runs">
+    <div class="log-card__header">
+      <div>
+        <h3>Court import runs</h3>
+        <p class="small">Track ingest runs and their record counts.</p>
+      </div>
+      <span class="log-count">{{ court_import_runs | length }} entries</span>
+    </div>
     {% if court_import_runs %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -52,16 +126,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No court import runs logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>PACER explore runs</h3>
+  <div class="card log-card" id="pacer-explore-runs">
+    <div class="log-card__header">
+      <div>
+        <h3>PACER explore runs</h3>
+        <p class="small">Exploration history and any errors returned by PACER.</p>
+      </div>
+      <span class="log-count">{{ pacer_explore_runs | length }} entries</span>
+    </div>
     {% if pacer_explore_runs %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -96,16 +178,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No PACER explore runs logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>PCL batch searches</h3>
+  <div class="card log-card" id="pcl-batch-searches">
+    <div class="log-card__header">
+      <div>
+        <h3>PCL batch searches</h3>
+        <p class="small">Saved batch search definitions with filters.</p>
+      </div>
+      <span class="log-count">{{ pcl_batch_searches | length }} entries</span>
+    </div>
     {% if pcl_batch_searches %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -132,16 +222,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No PCL batch searches logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>PCL batch requests</h3>
+  <div class="card log-card" id="pcl-batch-requests">
+    <div class="log-card__header">
+      <div>
+        <h3>PCL batch requests</h3>
+        <p class="small">Batch execution history for request scheduling.</p>
+      </div>
+      <span class="log-count">{{ pcl_batch_requests | length }} entries</span>
+    </div>
     {% if pcl_batch_requests %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -166,16 +264,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No PCL batch requests logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>PCL batch segments</h3>
+  <div class="card log-card" id="pcl-batch-segments">
+    <div class="log-card__header">
+      <div>
+        <h3>PCL batch segments</h3>
+        <p class="small">Segment-level polling, status, and errors.</p>
+      </div>
+      <span class="log-count">{{ pcl_batch_segments | length }} entries</span>
+    </div>
     {% if pcl_batch_segments %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -225,16 +331,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No PCL batch segments logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>PCL remote jobs</h3>
+  <div class="card log-card" id="pcl-remote-jobs">
+    <div class="log-card__header">
+      <div>
+        <h3>PCL remote jobs</h3>
+        <p class="small">Submitted PACER jobs and polling metadata.</p>
+      </div>
+      <span class="log-count">{{ pcl_remote_jobs | length }} entries</span>
+    </div>
     {% if pcl_remote_jobs %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -259,16 +373,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No PCL remote jobs logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>PCL receipts</h3>
+  <div class="card log-card" id="pcl-receipts">
+    <div class="log-card__header">
+      <div>
+        <h3>PCL receipts</h3>
+        <p class="small">Receipt line items and billing metadata.</p>
+      </div>
+      <span class="log-count">{{ pcl_receipts | length }} entries</span>
+    </div>
     {% if pcl_receipts %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -299,16 +421,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No PCL receipts logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>PCL batch receipts</h3>
+  <div class="card log-card" id="pcl-batch-receipts">
+    <div class="log-card__header">
+      <div>
+        <h3>PCL batch receipts</h3>
+        <p class="small">Grouped receipts per batch segment.</p>
+      </div>
+      <span class="log-count">{{ pcl_batch_receipts | length }} entries</span>
+    </div>
     {% if pcl_batch_receipts %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -329,16 +459,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No PCL batch receipts logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>Docket enrichment jobs</h3>
+  <div class="card log-card" id="docket-enrichment-jobs">
+    <div class="log-card__header">
+      <div>
+        <h3>Docket enrichment jobs</h3>
+        <p class="small">Job activity and error summaries.</p>
+      </div>
+      <span class="log-count">{{ docket_enrichment_jobs | length }} entries</span>
+    </div>
     {% if docket_enrichment_jobs %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -369,16 +507,24 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No docket enrichment jobs logged.</p>
     {% endif %}
   </div>
 
-  <div class="card">
-    <h3>Docket enrichment receipts</h3>
+  <div class="card log-card" id="docket-enrichment-receipts">
+    <div class="log-card__header">
+      <div>
+        <h3>Docket enrichment receipts</h3>
+        <p class="small">PACER fees and receipt payloads for enrichment.</p>
+      </div>
+      <span class="log-count">{{ docket_enrichment_receipts | length }} entries</span>
+    </div>
     {% if docket_enrichment_receipts %}
-      <table class="table">
+      <div class="table-wrapper">
+        <table class="table log-table">
         <thead>
           <tr>
             <th>ID</th>
@@ -405,7 +551,8 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+        </table>
+      </div>
     {% else %}
       <p class="small">No docket enrichment receipts logged.</p>
     {% endif %}

@@ -338,6 +338,141 @@ button.danger {
   vertical-align: top;
 }
 
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(140, 132, 128, 0.4);
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.button.secondary {
+  background: rgba(217, 203, 186, 0.4);
+  color: var(--primary-dark);
+}
+
+.button.primary {
+  background: var(--primary);
+  color: #f2f2f2;
+  border: 0;
+  box-shadow: 0 12px 24px rgba(89, 81, 77, 0.25);
+}
+
+.button:hover,
+.button:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(89, 81, 77, 0.2);
+}
+
+.logs-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.logs-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.logs-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.logs-filter label {
+  margin: 0;
+}
+
+.logs-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.logs-summary__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.logs-summary__item {
+  border-radius: 16px;
+  border: 1px solid rgba(140, 132, 128, 0.2);
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-decoration: none;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.logs-summary__item span {
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.logs-summary__item strong {
+  font-size: 1.1rem;
+  color: var(--primary-dark);
+}
+
+.log-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.log-card__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.log-count {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(217, 203, 186, 0.5);
+  color: var(--primary-dark);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.table-wrapper {
+  overflow: auto;
+  border-radius: 16px;
+  border: 1px solid rgba(140, 132, 128, 0.2);
+}
+
+.log-table th {
+  position: sticky;
+  top: 0;
+  background: #f7f4f1;
+  z-index: 1;
+}
+
+.json-block {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 0.85rem;
+  overflow-x: auto;
+}
+
 .small { color: var(--muted); font-size: 0.9rem; }
 
 .coming-soon-card {
