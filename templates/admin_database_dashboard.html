@@ -284,6 +284,27 @@
               <p class="small">Unable to load table data: {{ table_preview_error }}</p>
             </div>
           {% elif table_preview %}
+            <div class="database-preview-toolbar">
+              <div class="database-preview-meta">
+                <span class="database-pill">Columns: {{ table_preview.columns | length }}</span>
+                <span class="database-pill" id="tablePreviewRowCount">
+                  Rows: {{ table_preview.rows | length }}
+                </span>
+              </div>
+              <div class="database-preview-controls">
+                <label class="database-preview-search">
+                  <span class="small">Filter rows</span>
+                  <input id="tablePreviewSearch" type="search" placeholder="Search values">
+                </label>
+                <button class="button secondary small" type="button" id="tablePreviewClear">
+                  Clear
+                </button>
+                <label class="database-preview-toggle">
+                  <input type="checkbox" id="tablePreviewWrap">
+                  <span>Wrap cells</span>
+                </label>
+              </div>
+            </div>
             <div class="database-preview-table">
               <table>
                 <thead>
@@ -296,7 +317,7 @@
                 <tbody>
                   {% if table_preview.rows %}
                     {% for row in table_preview.rows %}
-                      <tr>
+                      <tr data-preview-row>
                         {% for column in table_preview.columns %}
                           <td title="{{ row[column] }}">{{ row[column] }}</td>
                         {% endfor %}
@@ -483,6 +504,71 @@
         checkbox.addEventListener("change", updateSubmitState);
       });
       updateSubmitState();
+    }
+
+    const previewTable = document.querySelector(".database-preview-table");
+    if (previewTable) {
+      const searchInput = document.getElementById("tablePreviewSearch");
+      const clearButton = document.getElementById("tablePreviewClear");
+      const wrapToggle = document.getElementById("tablePreviewWrap");
+      const rowCount = document.getElementById("tablePreviewRowCount");
+      const rows = Array.from(previewTable.querySelectorAll("tbody tr[data-preview-row]"));
+      const totalRows = rows.length;
+
+      const updateRowCount = (visibleCount) => {
+        if (!rowCount) {
+          return;
+        }
+        if (totalRows === 0) {
+          rowCount.textContent = "Rows: 0";
+          return;
+        }
+        const label = visibleCount === totalRows
+          ? `Rows: ${totalRows}`
+          : `Rows: ${visibleCount} of ${totalRows}`;
+        rowCount.textContent = label;
+      };
+
+      const filterRows = () => {
+        if (!searchInput) {
+          updateRowCount(totalRows);
+          return;
+        }
+        const query = searchInput.value.trim().toLowerCase();
+        let visibleCount = 0;
+        rows.forEach((row) => {
+          const haystack = row.textContent.toLowerCase();
+          const matches = !query || haystack.includes(query);
+          row.hidden = !matches;
+          if (matches) {
+            visibleCount += 1;
+          }
+        });
+        updateRowCount(visibleCount);
+      };
+
+      if (searchInput) {
+        searchInput.addEventListener("input", filterRows);
+      }
+
+      if (clearButton && searchInput) {
+        clearButton.addEventListener("click", () => {
+          searchInput.value = "";
+          searchInput.focus();
+          filterRows();
+        });
+      }
+
+      if (wrapToggle) {
+        wrapToggle.addEventListener("change", () => {
+          previewTable.classList.toggle(
+            "database-preview-table--wrap",
+            wrapToggle.checked
+          );
+        });
+      }
+
+      updateRowCount(totalRows);
     }
   </script>
 {% endblock %}
