@@ -29,7 +29,7 @@ class FakePclClient:
             "cases": [
                 {
                     "caseNumber": "1:24-cr-00001",
-                    "courtId": "akd",
+                    "courtId": "akdc",
                     "caseType": "cr",
                     "dateFiled": "2024-01-02",
                     "shortTitle": "USA v. Doe",
@@ -53,11 +53,23 @@ class PclBatchWorkerTests(unittest.TestCase):
         metadata = MetaData()
         self.tables = build_pcl_tables(metadata)
         metadata.create_all(self.engine)
+        with self.engine.begin() as conn:
+            conn.execute(
+                self.tables["pcl_courts"].insert(),
+                [
+                    {
+                        "pcl_court_id": "akdc",
+                        "name": "Alaska District Court",
+                        "active": True,
+                        "source": "PCL Appendix A",
+                    }
+                ],
+            )
 
     def test_end_to_end_happy_path(self):
         planner = PclBatchPlanner(self.engine, self.tables)
         planner.create_batch_request(
-            court_id="akd",
+            court_id="akdc",
             date_filed_from=date(2024, 1, 1),
             date_filed_to=date(2024, 1, 31),
             case_types=["cr", "cv"],
@@ -95,13 +107,13 @@ class PclBatchWorkerTests(unittest.TestCase):
         raw_row = raw[0]
         self.assertEqual(case["case_number_full"], "1:24-cr-00001")
         self.assertEqual(case["last_segment_id"], segments[0]["id"])
-        self.assertEqual(raw_row["court_id"], "akd")
+        self.assertEqual(raw_row["court_id"], "akdc")
         self.assertEqual(raw_row["case_number"], "1:24-cr-00001")
 
     def test_token_expired_marks_failed(self):
         planner = PclBatchPlanner(self.engine, self.tables)
         planner.create_batch_request(
-            court_id="akd",
+            court_id="akdc",
             date_filed_from=date(2024, 2, 1),
             date_filed_to=date(2024, 2, 28),
             case_types=["cr"],

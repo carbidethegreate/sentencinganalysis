@@ -33,7 +33,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.app.testing = True
         self.client = self.app.test_client()
         self.engine = self.app.engine
-        self.courts_table = self.app.federal_courts_table
+        self.courts_table = self.app.pcl_courts_table
         self.explore_runs_table = self.app.pcl_tables["pacer_explore_runs"]
         self._seed_courts()
         self._login_admin()
@@ -52,16 +52,22 @@ class AdminPacerExploreTests(unittest.TestCase):
                 insert(self.courts_table),
                 [
                     {
-                        "court_id": "akd",
-                        "court_name": "District of Alaska",
-                        "title": "U.S. District Court for the District of Alaska",
-                        "raw_json": {},
+                        "pcl_court_id": "akdc",
+                        "name": "Alaska District Court",
+                        "active": True,
+                        "source": "PCL Appendix A",
                     },
                     {
-                        "court_id": "cand",
-                        "court_name": "Northern District of California",
-                        "title": "U.S. District Court for the Northern District of California",
-                        "raw_json": {},
+                        "pcl_court_id": "candc",
+                        "name": "California Northern District Court",
+                        "active": True,
+                        "source": "PCL Appendix A",
+                    },
+                    {
+                        "pcl_court_id": "vi",
+                        "name": "Virgin Islands District Court",
+                        "active": True,
+                        "source": "PCL Appendix A",
                     },
                 ],
             )
@@ -69,19 +75,25 @@ class AdminPacerExploreTests(unittest.TestCase):
     def _seed_courts_for_app(self, app):
         with app.engine.begin() as conn:
             conn.execute(
-                insert(app.federal_courts_table),
+                insert(app.pcl_courts_table),
                 [
                     {
-                        "court_id": "akd",
-                        "court_name": "District of Alaska",
-                        "title": "U.S. District Court for the District of Alaska",
-                        "raw_json": {},
+                        "pcl_court_id": "akdc",
+                        "name": "Alaska District Court",
+                        "active": True,
+                        "source": "PCL Appendix A",
                     },
                     {
-                        "court_id": "cand",
-                        "court_name": "Northern District of California",
-                        "title": "U.S. District Court for the Northern District of California",
-                        "raw_json": {},
+                        "pcl_court_id": "candc",
+                        "name": "California Northern District Court",
+                        "active": True,
+                        "source": "PCL Appendix A",
+                    },
+                    {
+                        "pcl_court_id": "vi",
+                        "name": "Virgin Islands District Court",
+                        "active": True,
+                        "source": "PCL Appendix A",
                     },
                 ],
             )
@@ -111,7 +123,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         payload = {
             "csrf_token": "csrf-token",
             "mode": "cases",
-            "court_id": "akd",
+            "court_id": "akdc",
             "date_filed_from": "2024-01-01",
             "date_filed_to": "2024-01-31",
             "max_records": "54",
@@ -124,8 +136,8 @@ class AdminPacerExploreTests(unittest.TestCase):
         html = response.data.decode("utf-8")
         self.assertEqual(response.status_code, 200)
         self.assertIn("Explore PACER", html)
-        self.assertIn("akd, District of Alaska", html)
-        self.assertIn("cand, Northern District of California", html)
+        self.assertIn("akdc, Alaska District Court", html)
+        self.assertIn("candc, California Northern District Court", html)
 
     def test_post_run_requires_authorization(self):
         with patch.object(self.app.pcl_client, "immediate_case_search") as mock_search:
@@ -167,7 +179,7 @@ class AdminPacerExploreTests(unittest.TestCase):
                     data={
                         "csrf_token": "csrf-token",
                         "mode": "cases",
-                        "court_id": "akd",
+                        "court_id": "akdc",
                         "date_filed_from": "2024-01-01",
                         "date_filed_to": "2024-01-31",
                         "max_records": "54",
@@ -224,6 +236,28 @@ class AdminPacerExploreTests(unittest.TestCase):
         with patch.object(self.app.pcl_client, "immediate_case_search", return_value=fake_response) as mock_search:
             response = self._post_run()
         self.assertEqual(response.status_code, 200)
+        mock_search.assert_called()
+
+    def test_post_run_blocks_invalid_court_id(self):
+        self._authorize_pacer()
+        with patch.object(self.app.pcl_client, "immediate_case_search") as mock_search:
+            response = self._post_run(court_id="vidc")
+        html = response.data.decode("utf-8")
+        self.assertIn("Select a valid court from the list.", html)
+        mock_search.assert_not_called()
+
+    def test_post_run_accepts_known_court_id(self):
+        self._authorize_pacer()
+        payload = {
+            "cases": [],
+            "receipt": {"billablePages": 0},
+            "pageInfo": {"page": 1, "totalPages": 1, "totalRecords": 0},
+        }
+        fake_response = PclJsonResponse(status_code=200, payload=payload, raw_body=b"{}")
+        with patch.object(self.app.pcl_client, "immediate_case_search", return_value=fake_response) as mock_search:
+            response = self._post_run(court_id="vi")
+        html = response.data.decode("utf-8")
+        self.assertIn("Run complete", html)
         mock_search.assert_called()
 
     def test_post_run_success_shows_results_and_observed_fields(self):
@@ -354,7 +388,7 @@ class AdminPacerExploreTests(unittest.TestCase):
     def test_payload_validation_blocks_invalid_keys_before_http(self):
         self._authorize_pacer()
         invalid_payload = {
-            "courtId": ["akd"],
+            "courtId": ["akdc"],
             "dateFiledFrom": "2024-01-01",
             "dateFiledTo": "2024-01-31",
             "pageSize": 54,
@@ -387,7 +421,7 @@ class AdminPacerExploreTests(unittest.TestCase):
             {
                 "last_name_prefix": "doe",
                 "first_name": "jane",
-                "court_id": "akd",
+                "court_id": "akdc",
                 "date_filed_from": "2024-01-01",
                 "date_filed_to": "2024-01-31",
                 "pageSize": "ignored",
@@ -417,12 +451,12 @@ class AdminPacerExploreTests(unittest.TestCase):
                     "lastName": "Doe",
                     "firstName": "Jane",
                     "partyType": "defendant",
-                    "courtCase": {
-                        "caseNumber": "1:24-cr-00003",
-                        "courtId": "akd",
-                        "judgeLastName": "Smith",
-                    },
-                }
+                        "courtCase": {
+                            "caseNumber": "1:24-cr-00003",
+                            "courtId": "akdc",
+                            "judgeLastName": "Smith",
+                        },
+                    }
             ],
             "receipt": {"billablePages": 1, "searchFee": 0.1},
             "pageInfo": {"page": 1, "totalPages": 1, "totalRecords": 1},
@@ -434,7 +468,7 @@ class AdminPacerExploreTests(unittest.TestCase):
                 mode="parties",
                 last_name_prefix="doe",
                 first_name="jane",
-                court_id="akd",
+                court_id="akdc",
             )
 
         html = response.data.decode("utf-8")
@@ -449,7 +483,7 @@ class AdminPacerExploreTests(unittest.TestCase):
             run_id = conn.execute(
                 insert(self.explore_runs_table).values(
                     mode="cases",
-                    court_id="akd",
+                    court_id="akdc",
                     request_params={},
                     pages_fetched=1,
                 )

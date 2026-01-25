@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 
@@ -25,6 +26,15 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
     json_type = JSON().with_variant(JSONB, "postgresql")
     case_types_type = JSON().with_variant(ARRAY(String), "postgresql")
+
+    pcl_courts = Table(
+        "pcl_courts",
+        metadata,
+        Column("pcl_court_id", String(50), primary_key=True),
+        Column("name", Text, nullable=False),
+        Column("active", Boolean, nullable=False, server_default=sa_text("true")),
+        Column("source", Text, nullable=False),
+    )
 
     courts = Table(
         "courts",
@@ -346,6 +356,7 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
     )
 
     return {
+        "pcl_courts": pcl_courts,
         "courts": courts,
         "court_import_runs": court_import_runs,
         "pacer_explore_runs": pacer_explore_runs,

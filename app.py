@@ -756,6 +756,7 @@ def create_app() -> Flask:
     pcl_tables = build_pcl_tables(metadata)
     sentencing_tables = build_sentencing_tables(metadata)
     pcl_tables.update(sentencing_tables)
+    pcl_courts = pcl_tables["pcl_courts"]
 
     # Create the users/newsletter/case_stage1/case_data_one tables if they don't exist.
     try:
@@ -963,6 +964,7 @@ def create_app() -> Flask:
     app.pcl_tables = pcl_tables
     app.engine = engine
     app.federal_courts_table = federal_courts
+    app.pcl_courts_table = pcl_courts
 
     pcl_base_url = pacer_env_config.pcl_base_url
     app.config["PACER_ENV_CONFIG"] = pacer_env_config.as_dict()
@@ -1266,19 +1268,20 @@ def create_app() -> Flask:
     def _load_court_choices() -> List[Dict[str, Any]]:
         stmt = (
             select(
-                federal_courts.c.court_id,
-                federal_courts.c.court_name,
-                federal_courts.c.title,
+                pcl_courts.c.pcl_court_id,
+                pcl_courts.c.name,
             )
-            .order_by(federal_courts.c.court_id.asc())
+            .where(pcl_courts.c.active.is_(True))
+            .order_by(pcl_courts.c.pcl_court_id.asc())
         )
         with engine.begin() as conn:
             rows = conn.execute(stmt).mappings().all()
         choices: List[Dict[str, Any]] = []
         for row in rows:
-            name = row.get("court_name") or row.get("title") or ""
-            label = f"{row['court_id']}, {name}".strip().rstrip(",")
-            choices.append({"court_id": row["court_id"], "name": name, "label": label})
+            name = row.get("name") or ""
+            court_id = row["pcl_court_id"]
+            label = f"{court_id}, {name}".strip().rstrip(",")
+            choices.append({"court_id": court_id, "name": name, "label": label})
         return choices
 
     def _parse_iso_date(value: str) -> Optional[datetime.date]:
@@ -3132,6 +3135,21 @@ def create_app() -> Flask:
         app.logger.info(message)
         print(message)
 
+    @app.cli.command("pcl-courts-seed")
+    def pcl_courts_seed_command() -> None:
+        """Seed the PCL courts catalog from the static Appendix A list."""
+        from pcl_courts_seed import load_pcl_courts_catalog, seed_pcl_courts
+
+        courts = load_pcl_courts_catalog()
+        stats = seed_pcl_courts(engine, pcl_courts, courts)
+        message = (
+            "PCL courts seed complete: "
+            f"{stats['inserted']} inserted, {stats['updated']} updated, "
+            f"{stats['skipped']} skipped."
+        )
+        app.logger.info(message)
+        print(message)
+
     @app.route("/admin/login", methods=["GET", "POST"])
     def admin_login():
         expected_pass = os.environ.get("CPD_ADMIN_KEY")
@@ -4569,8 +4587,10 @@ def create_app() -> Flask:
     def admin_federal_data_dashboard_pcl_batch_search():
         pcl_batch_requests = pcl_tables["pcl_batch_requests"]
         pcl_batch_segments = pcl_tables["pcl_batch_segments"]
-        court_stmt = select(federal_courts.c.court_id, federal_courts.c.title).order_by(
-            federal_courts.c.court_id.asc()
+        court_stmt = (
+            select(pcl_courts.c.pcl_court_id, pcl_courts.c.name)
+            .where(pcl_courts.c.active.is_(True))
+            .order_by(pcl_courts.c.pcl_court_id.asc())
         )
         with engine.connect() as conn:
             batch_rows = (
@@ -4589,12 +4609,13 @@ def create_app() -> Flask:
             segments_by_batch.setdefault(row["batch_request_id"], []).append(row)
         court_options: List[Dict[str, str]] = []
         for row in court_rows:
-            title = row.get("title") or ""
-            label = f"{row['court_id']} — {title}" if title else row["court_id"]
+            name = row.get("name") or ""
+            court_id = row["pcl_court_id"]
+            label = f"{court_id}, {name}".strip().rstrip(",")
             court_options.append(
                 {
-                    "court_id": row["court_id"],
-                    "title": title,
+                    "court_id": court_id,
+                    "name": name,
                     "label": label,
                 }
             )
@@ -4625,8 +4646,9 @@ def create_app() -> Flask:
             court_exists = (
                 conn.execute(
                     select(func.count())
-                    .select_from(federal_courts)
-                    .where(federal_courts.c.court_id == court_id)
+                    .select_from(pcl_courts)
+                    .where(pcl_courts.c.pcl_court_id == court_id)
+                    .where(pcl_courts.c.active.is_(True))
                 ).scalar_one()
                 > 0
             )
