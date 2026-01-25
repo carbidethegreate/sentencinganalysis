@@ -359,6 +359,16 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("receipt_json", Text, nullable=False),
     )
 
+    pacer_response_codes = Table(
+        "pacer_response_codes",
+        metadata,
+        Column("http_status_code", Integer, primary_key=True),
+        Column("reason_phrase", Text, nullable=False),
+        Column("enum_name", Text, nullable=False),
+        Column("application_usage", Text, nullable=False),
+        Column("description", Text, nullable=False),
+    )
+
     return {
         "pcl_courts": pcl_courts,
         "courts": courts,
@@ -374,4 +384,5 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         "pcl_batch_receipts": pcl_batch_receipts,
         "docket_enrichment_jobs": docket_enrichment_jobs,
         "docket_enrichment_receipts": docket_enrichment_receipts,
+        "pacer_response_codes": pacer_response_codes,
     }
