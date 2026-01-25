@@ -47,54 +47,185 @@
     </div>
   </div>
 
-  <div class="database-schema-list">
-    {% if schemas %}
-      {% for schema in schemas %}
-        <section class="card database-schema-card">
-          <div class="database-schema-card__header">
-            <div>
-              <h2>{{ schema.name }}</h2>
-              <p class="small">{{ schema.tables | length }} tables • {{ schema.views | length }} views</p>
-            </div>
-          </div>
+  <div class="database-explorer">
+    <aside class="card database-explorer__nav">
+      <div class="database-explorer__nav-header">
+        <div>
+          <h2>Schema Navigator</h2>
+          <p class="small">Select a table or column to preview live data.</p>
+        </div>
+      </div>
 
-          {% if schema.tables %}
-            <div class="database-table-grid">
-              {% for table in schema.tables %}
-                <article class="database-table-card">
-                  <div class="database-table-card__header">
-                    <h3>{{ table.name }}</h3>
-                    <span class="pill">{{ table.column_count }} columns</span>
+      {% if schemas %}
+        <div class="database-explorer__schema-list">
+          {% for schema in schemas %}
+            <details class="database-schema-item" {% if selected_schema == schema.name %}open{% endif %}>
+              <summary class="database-schema-item__summary">
+                <div>
+                  <span class="database-schema-item__name">{{ schema.name }}</span>
+                  <span class="small">{{ schema.tables | length }} tables • {{ schema.views | length }} views</span>
+                </div>
+                <span class="pill">{{ schema.tables | length }} tables</span>
+              </summary>
+
+              <div class="database-schema-item__content">
+                {% if schema.tables %}
+                  {% for table in schema.tables %}
+                    <article class="database-table-item {% if selected_schema == schema.name and selected_table == table.name %}active{% endif %}">
+                      <div class="database-table-item__header">
+                        <div>
+                          <h3>{{ table.name }}</h3>
+                          <span class="small">{{ table.column_count }} columns</span>
+                        </div>
+                        <a class="button small" href="{{ url_for('admin_database_dashboard', schema=schema.name, table=table.name) }}">View data</a>
+                      </div>
+                      <ul class="database-table-item__columns">
+                        {% for column in table.columns %}
+                          <li>
+                            <div>
+                              <span class="database-column-name">{{ column.name }}</span>
+                              <span class="database-column-type">{{ column.type }}</span>
+                            </div>
+                            <div class="database-column-actions">
+                              {% if not column.nullable %}
+                                <span class="database-column-pill">Required</span>
+                              {% endif %}
+                              <a class="database-column-link" href="{{ url_for('admin_database_dashboard', schema=schema.name, table=table.name, column=column.name) }}">Drill down</a>
+                            </div>
+                          </li>
+                        {% endfor %}
+                      </ul>
+                    </article>
+                  {% endfor %}
+                {% else %}
+                  <p class="small">No tables detected for this schema.</p>
+                {% endif %}
+
+                {% if schema.views %}
+                  <div class="database-view-block">
+                    <p class="small">Views: {{ schema.views | join(", ") }}</p>
                   </div>
-                  <ul class="database-column-list">
-                    {% for column in table.columns %}
-                      <li>
-                        <span class="database-column-name">{{ column.name }}</span>
-                        <span class="database-column-type">{{ column.type }}</span>
-                        {% if not column.nullable %}
-                          <span class="database-column-pill">Required</span>
-                        {% endif %}
-                      </li>
+                {% endif %}
+              </div>
+            </details>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="small">No schemas were found for the current connection.</p>
+      {% endif %}
+    </aside>
+
+    <section class="card database-explorer__detail">
+      <div class="database-detail-header">
+        <div>
+          <h2>Data Preview</h2>
+          <p class="small">Preview real rows and column samples to validate schemas quickly.</p>
+        </div>
+        {% if selected_schema and selected_table %}
+          <div class="database-detail-meta">
+            <span class="pill">{{ selected_schema }}</span>
+            <span class="pill">{{ selected_table }}</span>
+            {% if selected_column %}
+              <span class="pill">{{ selected_column }}</span>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+
+      {% if selected_schema and selected_table %}
+        <div class="database-detail-section">
+          <h3>Table Snapshot</h3>
+          <p class="small">Showing up to {{ preview_limit }} rows from the selected table.</p>
+          {% if table_preview_error %}
+            <div class="error-actions">
+              <p class="small">Unable to load table data: {{ table_preview_error }}</p>
+            </div>
+          {% elif table_preview %}
+            <div class="database-preview-table">
+              <table>
+                <thead>
+                  <tr>
+                    {% for column in table_preview.columns %}
+                      <th>{{ column }}</th>
                     {% endfor %}
-                  </ul>
-                </article>
-              {% endfor %}
+                  </tr>
+                </thead>
+                <tbody>
+                  {% if table_preview.rows %}
+                    {% for row in table_preview.rows %}
+                      <tr>
+                        {% for column in table_preview.columns %}
+                          <td>{{ row[column] }}</td>
+                        {% endfor %}
+                      </tr>
+                    {% endfor %}
+                  {% else %}
+                    <tr>
+                      <td colspan="{{ table_preview.columns | length }}">
+                        <span class="small">No rows returned for this table.</span>
+                      </td>
+                    </tr>
+                  {% endif %}
+                </tbody>
+              </table>
             </div>
           {% else %}
-            <p class="small">No tables detected for this schema.</p>
+            <p class="small">No data available for this table.</p>
           {% endif %}
+        </div>
 
-          {% if schema.views %}
-            <div class="database-view-block">
-              <p class="small">Views: {{ schema.views | join(", ") }}</p>
-            </div>
+        <div class="database-detail-section">
+          <h3>Column Drilldown</h3>
+          <p class="small">Select a column to preview values and metadata.</p>
+          <div class="database-column-summary">
+            {% for column in selected_table_columns %}
+              <a class="database-column-card {% if selected_column == column.name %}active{% endif %}" href="{{ url_for('admin_database_dashboard', schema=selected_schema, table=selected_table, column=column.name) }}">
+                <div>
+                  <strong>{{ column.name }}</strong>
+                  <span class="small">{{ column.type }}</span>
+                </div>
+                <span class="database-column-card__meta">
+                  {% if not column.nullable %}
+                    Required
+                  {% else %}
+                    Optional
+                  {% endif %}
+                </span>
+              </a>
+            {% endfor %}
+          </div>
+
+          {% if selected_column %}
+            {% if column_preview_error %}
+              <div class="error-actions">
+                <p class="small">Unable to load column data: {{ column_preview_error }}</p>
+              </div>
+            {% elif column_preview %}
+              <div class="database-column-preview">
+                <h4>Sample values for {{ column_preview.name }}</h4>
+                {% if column_preview.values %}
+                  <ul>
+                    {% for value in column_preview.values %}
+                      <li>{{ value }}</li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  <p class="small">No values returned for this column.</p>
+                {% endif %}
+              </div>
+            {% else %}
+              <p class="small">Select a column to see sample values.</p>
+            {% endif %}
           {% endif %}
-        </section>
-      {% endfor %}
-    {% else %}
-      <div class="card">
-        <p class="small">No schemas were found for the current connection.</p>
-      </div>
-    {% endif %}
+        </div>
+      {% else %}
+        <div class="database-detail-empty">
+          <h3>Select a table to begin</h3>
+          <p class="small">
+            Pick a schema and table from the left to explore live data, columns, and sample values.
+          </p>
+        </div>
+      {% endif %}
+    </section>
   </div>
 {% endblock %}
