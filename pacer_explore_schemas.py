@@ -19,7 +19,8 @@ EXPLORE_PACER_UI_FIELDS: Dict[str, Set[str]] = {
     },
     "parties": {
         "mode",
-        "last_name_prefix",
+        "last_name",
+        "exact_name_match",
         "first_name",
         "date_filed_from",
         "date_filed_to",
@@ -36,7 +37,8 @@ EXPLORE_PACER_PCL_FIELDS: Dict[str, Set[str]] = {
         "caseType",
     },
     "parties": {
-        "lastNamePrefix",
+        "lastName",
+        "exactNameMatch",
         "firstName",
         "courtId",
         "dateFiledFrom",
@@ -46,7 +48,7 @@ EXPLORE_PACER_PCL_FIELDS: Dict[str, Set[str]] = {
 
 EXPLORE_PACER_PCL_REQUIRED_FIELDS: Dict[str, Set[str]] = {
     "cases": {"courtId", "dateFiledFrom", "dateFiledTo"},
-    "parties": {"lastNamePrefix"},
+    "parties": {"lastName"},
 }
 
 
@@ -111,7 +113,19 @@ def build_party_search_payload(
     *,
     include_date_range: bool = False,
 ) -> Dict[str, Any]:
-    body: Dict[str, Any] = {"lastNamePrefix": ui_inputs.get("last_name_prefix")}
+    last_name = ui_inputs.get("last_name")
+    body: Dict[str, Any] = {"lastName": last_name}
+    exact_match = ui_inputs.get("exact_name_match")
+    if exact_match is not None:
+        if isinstance(exact_match, bool):
+            body["exactNameMatch"] = exact_match
+        else:
+            body["exactNameMatch"] = str(exact_match).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
     if ui_inputs.get("first_name"):
         body["firstName"] = ui_inputs.get("first_name")
     if ui_inputs.get("court_id"):

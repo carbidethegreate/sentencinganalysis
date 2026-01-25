@@ -101,6 +101,7 @@ def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size:
             pcl_cases.c.case_type,
             pcl_cases.c.date_filed,
             pcl_cases.c.date_closed,
+            pcl_cases.c.effective_date_closed,
             pcl_cases.c.short_title,
             pcl_cases.c.case_title,
             pcl_cases.c.judge_last_name,

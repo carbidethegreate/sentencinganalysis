@@ -26,7 +26,7 @@ class FakePclClient:
     def download_case_report(self, report_id):
         self.calls.append(("download", report_id))
         return {
-            "cases": [
+            "content": [
                 {
                     "caseNumber": "1:24-cr-00001",
                     "courtId": "akdc",
