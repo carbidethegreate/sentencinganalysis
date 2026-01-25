@@ -66,8 +66,10 @@ from pacer_logging import redact_tokens
 from pacer_tokens import (
     DatabaseTokenBackend,
     InMemoryTokenBackend,
+    PacerTokenRecord,
     PacerTokenStore,
     build_pacer_token_table,
+    token_fingerprint,
 )
 from pacer_env import (
     build_pacer_environment_config,
@@ -374,6 +376,8 @@ class PacerAuthResult:
     needs_otp: bool
     needs_client_code: bool
     needs_redaction_ack: bool
+    search_disabled: bool
+    search_disabled_reason: Optional[str]
     can_proceed: bool
 
 
@@ -475,7 +479,14 @@ def interpret_pacer_auth_response(
     needs_redaction_ack = bool(
         login_result == "1" and _pacer_mentions_redaction(error_description)
     )
-    can_proceed = bool(login_result == "0" and token and not error_description)
+    token_present = bool(login_result == "0" and token)
+    search_disabled = bool(token_present and needs_client_code)
+    search_disabled_reason = None
+    if search_disabled:
+        search_disabled_reason = (
+            "PACER authenticated, but searching is disabled until a client code is supplied."
+        )
+    can_proceed = bool(token_present and (search_disabled or not error_description))
     return PacerAuthResult(
         token=token if can_proceed else "",
         error_description=error_description,
@@ -483,6 +494,8 @@ def interpret_pacer_auth_response(
         needs_otp=needs_otp,
         needs_client_code=needs_client_code,
         needs_redaction_ack=needs_redaction_ack,
+        search_disabled=search_disabled,
+        search_disabled_reason=search_disabled_reason,
         can_proceed=can_proceed,
     )
 
@@ -959,6 +972,7 @@ def create_app() -> Flask:
         pacer_token_store,
         logger=app.logger,
         expected_environment=pacer_env_config.pcl_env,
+        env_mismatch_reason=pacer_env_config.mismatch_reason if pacer_env_config.mismatch else None,
     )
     pcl_client = PclClient(pcl_http_client, pcl_base_url, logger=app.logger)
     app.pcl_client = pcl_client
@@ -1179,9 +1193,17 @@ def create_app() -> Flask:
         if not record:
             return None
         return {
-            "token": record.token,
             "authorized_at": record.obtained_at.isoformat(),
             "environment": record.environment,
+        }
+
+    def _token_diagnostics(record: Optional[PacerTokenRecord]) -> Dict[str, Any]:
+        fingerprint = token_fingerprint(record.token if record else None)
+        environment = record.environment if record else None
+        return {
+            **fingerprint,
+            "environment": environment,
+            "environment_label": pacer_env_label(environment or "unknown"),
         }
 
     def _set_pacer_session(token: str) -> None:
@@ -1219,6 +1241,14 @@ def create_app() -> Flask:
             f"PACER token environment is unknown while PCL is configured for {expected_label}. "
             "Re-authorize in the correct environment."
         )
+
+    def _pacer_search_disabled() -> bool:
+        return bool(session.get("pacer_search_disabled"))
+
+    def _pacer_search_enabled() -> bool:
+        if app.config.get("PACER_ENV_MISMATCH"):
+            return False
+        return _pacer_token_matches_pcl() and not _pacer_search_disabled()
 
     # Immediate PCL searches always return 54 records per page; pageSize is not valid in /cases/find.
     PCL_PAGE_SIZE = 54
@@ -1366,6 +1396,7 @@ def create_app() -> Flask:
         error_message: Optional[str],
         response_snippets: Sequence[Dict[str, Any]],
         environment: Optional[Dict[str, Any]] = None,
+        token_diagnostics: Optional[Dict[str, Any]] = None,
     ) -> str:
         preamble_lines = [
             "courtdatapro admin debug bundle",
@@ -1397,6 +1428,7 @@ def create_app() -> Flask:
             "response_snippets": list(response_snippets),
             "record_samples": [_truncate_value(record) for record in list(records)[:3]],
             "environment": environment,
+            "token_diagnostics": token_diagnostics,
         }
         preamble = "\n".join(preamble_lines)
         return f"{preamble}\n\n{json.dumps(bundle, indent=2, sort_keys=True, default=str)}"
@@ -3156,6 +3188,9 @@ def create_app() -> Flask:
         pacer_server_creds_available = bool(
             _first_env_or_secret_file("puser") and _first_env_or_secret_file("ppass")
         )
+        pacer_authenticated = bool(pacer_session)
+        pacer_search_disabled = bool(session.get("pacer_search_disabled"))
+        pacer_search_enabled = bool(pacer_authenticated and _pacer_search_enabled())
         env_config = app.config.get("PACER_ENV_CONFIG") or {}
         auth_env = env_config.get("auth_env", "unknown")
         pcl_env = env_config.get("pcl_env", "unknown")
@@ -3168,7 +3203,10 @@ def create_app() -> Flask:
             "admin_federal_data_get_pacer_data.html",
             active_page="federal_data_dashboard",
             active_subnav="get_pacer_data",
-            pacer_authorized=bool(pacer_session),
+            pacer_authenticated=pacer_authenticated,
+            pacer_search_enabled=pacer_search_enabled,
+            pacer_search_disabled=pacer_search_disabled,
+            pacer_search_disabled_reason=session.get("pacer_search_disabled_reason"),
             pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
             pacer_needs_otp=bool(session.get("pacer_needs_otp")),
             pacer_client_code_required=bool(session.get("pacer_client_code_required")),
@@ -3191,6 +3229,9 @@ def create_app() -> Flask:
     @admin_required
     def admin_pacer_explore():
         pacer_session = _get_pacer_session()
+        pacer_authenticated = bool(pacer_session)
+        pacer_search_disabled = bool(session.get("pacer_search_disabled"))
+        pacer_search_enabled = bool(pacer_authenticated and _pacer_search_enabled())
         env_config = app.config.get("PACER_ENV_CONFIG") or {}
         auth_env = env_config.get("auth_env", "unknown")
         pcl_env = env_config.get("pcl_env", "unknown")
@@ -3221,7 +3262,10 @@ def create_app() -> Flask:
             active_page="federal_data_dashboard",
             active_subnav="explore_pacer",
             csrf_token=get_csrf_token(),
-            pacer_authorized=_pacer_token_matches_pcl(),
+            pacer_authenticated=pacer_authenticated,
+            pacer_search_enabled=pacer_search_enabled,
+            pacer_search_disabled=pacer_search_disabled,
+            pacer_search_disabled_reason=session.get("pacer_search_disabled_reason"),
             pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
             pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
             pacer_auth_env_label=pacer_env_label(str(auth_env)),
@@ -3338,6 +3382,9 @@ def create_app() -> Flask:
             "next_steps": [],
         }
 
+        token_record = pacer_token_store.get_token()
+        token_diagnostics = _token_diagnostics(token_record)
+        app.logger.info("PACER explore token diagnostics: %s", token_diagnostics)
         request_body: Dict[str, Any] = {}
         pages_requested = 0
         pages_to_fetch = 0
@@ -3352,7 +3399,10 @@ def create_app() -> Flask:
                 active_page="federal_data_dashboard",
                 active_subnav="explore_pacer",
                 csrf_token=get_csrf_token(),
-                pacer_authorized=pacer_authorized,
+                pacer_authenticated=bool(pacer_session),
+                pacer_search_enabled=bool(pacer_authorized and not _pacer_search_disabled()),
+                pacer_search_disabled=bool(session.get("pacer_search_disabled")),
+                pacer_search_disabled_reason=session.get("pacer_search_disabled_reason"),
                 pacer_authorized_at=(pacer_session or {}).get("authorized_at"),
                 pacer_authorize_url=url_for("admin_federal_data_dashboard_get_pacer_data"),
                 pacer_auth_env_label=pacer_env_label(str(auth_env)),
@@ -3402,6 +3452,7 @@ def create_app() -> Flask:
                 error_message=run_result["errors"][0],
                 response_snippets=[],
                 environment=app.config.get("PACER_ENV_CONFIG"),
+                token_diagnostics=token_diagnostics,
             )
             request_params = {
                 "mode": mode,
@@ -3429,6 +3480,55 @@ def create_app() -> Flask:
                         "date_filed_to": party_values["date_filed_to"],
                     }
                 )
+            _store_pacer_explore_run(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id"),
+                date_from=None,
+                date_to=None,
+                request_params=request_params,
+                pages_fetched=0,
+                receipts=[],
+                observed_fields=None,
+                error_summary=run_result["errors"][0],
+            )
+            return render_response(False)
+
+        if _pacer_search_disabled():
+            run_result["errors"].append(
+                "PACER authenticated, but searching is disabled. "
+                "Next step: add a client code and re-authorize."
+            )
+            run_result["debug_bundle"] = _build_debug_bundle(
+                mode=mode,
+                court_id=(case_values or party_values or {}).get("court_id", ""),
+                date_filed_from=(case_values or party_values or {}).get(
+                    "date_filed_from", ""
+                ),
+                date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
+                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                first_name=party_values.get("first_name") if party_values else None,
+                max_records=max_records,
+                unexpected_input_keys=unexpected_input_keys,
+                pages_requested=0,
+                pages_fetched=0,
+                request_body={},
+                request_urls=[],
+                status_codes=[],
+                records=[],
+                page_infos=[],
+                truncated_notice=None,
+                error_message=run_result["errors"][0],
+                response_snippets=[],
+                environment=app.config.get("PACER_ENV_CONFIG"),
+                token_diagnostics=token_diagnostics,
+            )
+            request_params = {
+                "mode": mode,
+                "max_records": max_records,
+                "page_size": PCL_PAGE_SIZE,
+                "request_body": {},
+                "response_samples": [],
+            }
             _store_pacer_explore_run(
                 mode=mode,
                 court_id=(case_values or party_values or {}).get("court_id"),
@@ -3471,6 +3571,7 @@ def create_app() -> Flask:
                 error_message=run_result["errors"][0],
                 response_snippets=[],
                 environment=app.config.get("PACER_ENV_CONFIG"),
+                token_diagnostics=token_diagnostics,
             )
             request_params = {
                 "mode": mode,
@@ -3492,7 +3593,6 @@ def create_app() -> Flask:
             )
             return render_response(False)
 
-        token_record = pacer_token_store.get_token()
         if token_record and not _pacer_token_matches_pcl():
             run_result["errors"].append(
                 _pacer_token_mismatch_message(token_record.environment)
@@ -3519,6 +3619,7 @@ def create_app() -> Flask:
                 error_message=run_result["errors"][0],
                 response_snippets=[],
                 environment=app.config.get("PACER_ENV_CONFIG"),
+                token_diagnostics=token_diagnostics,
             )
             request_params = {
                 "mode": mode,
@@ -3645,6 +3746,7 @@ def create_app() -> Flask:
                 error_message="; ".join(run_result["errors"]),
                 response_snippets=[],
                 environment=app.config.get("PACER_ENV_CONFIG"),
+                token_diagnostics=token_diagnostics,
             )
             request_params = {
                 "mode": mode,
@@ -4000,6 +4102,7 @@ def create_app() -> Flask:
             error_message="\n".join(run_result["errors"]) if run_result["errors"] else None,
             response_snippets=response_snippets,
             environment=app.config.get("PACER_ENV_CONFIG"),
+            token_diagnostics=token_diagnostics,
         )
         if trace_text and run_result["errors"]:
             run_result["debug_bundle"] += f"\n\ntraceback:\n{trace_text}"
@@ -4259,6 +4362,8 @@ def create_app() -> Flask:
                 session["pacer_needs_otp"] = False
                 session["pacer_client_code_required"] = False
                 session["pacer_redaction_required"] = False
+                session["pacer_search_disabled"] = False
+                session["pacer_search_disabled_reason"] = None
                 message = (
                     "PACER credentials are not configured. Set Render env var puser and "
                     "secret file ppass, or use manual mode."
@@ -4281,6 +4386,8 @@ def create_app() -> Flask:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
             session["pacer_redaction_required"] = False
+            session["pacer_search_disabled"] = False
+            session["pacer_search_disabled_reason"] = None
             message = (
                 "Those look like CourtDataPro admin creds. Enter PACER credentials instead."
             )
@@ -4306,6 +4413,8 @@ def create_app() -> Flask:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
             session["pacer_redaction_required"] = True
+            session["pacer_search_disabled"] = False
+            session["pacer_search_disabled_reason"] = None
             message = (
                 "You must acknowledge the PACER redaction rules before authorizing a filer account."
             )
@@ -4335,6 +4444,8 @@ def create_app() -> Flask:
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = False
             session["pacer_redaction_required"] = False
+            session["pacer_search_disabled"] = False
+            session["pacer_search_disabled_reason"] = None
             if wants_json:
                 return (
                     jsonify(
@@ -4352,21 +4463,32 @@ def create_app() -> Flask:
         if result.can_proceed:
             _set_pacer_session(result.token)
             session["pacer_needs_otp"] = False
-            session["pacer_client_code_required"] = False
+            session["pacer_client_code_required"] = bool(result.needs_client_code)
             session["pacer_redaction_required"] = False
+            session["pacer_search_disabled"] = bool(result.search_disabled)
+            session["pacer_search_disabled_reason"] = result.search_disabled_reason
             if wants_json:
                 return jsonify(
                     {
                         "authorized": True,
                         "timestamp": datetime.utcnow().isoformat(),
                         "status": "authorized",
+                        "search_enabled": not result.search_disabled,
                     }
                 )
-            flash("PACER authentication successful.", "success")
+            if result.search_disabled:
+                flash(
+                    "PACER authenticated, but searching is disabled until a client code is supplied.",
+                    "warning",
+                )
+            else:
+                flash("PACER authentication successful.", "success")
         else:
             session["pacer_needs_otp"] = bool(result.needs_otp)
             session["pacer_client_code_required"] = bool(result.needs_client_code)
             session["pacer_redaction_required"] = bool(result.needs_redaction_ack)
+            session["pacer_search_disabled"] = False
+            session["pacer_search_disabled_reason"] = None
             status = "error"
             if result.needs_otp:
                 status = "needs_otp"
@@ -4407,6 +4529,8 @@ def create_app() -> Flask:
         session["pacer_client_code_required"] = False
         session["pacer_redaction_required"] = False
         session["pacer_redaction_acknowledged"] = False
+        session["pacer_search_disabled"] = False
+        session["pacer_search_disabled_reason"] = None
         flash("PACER session cleared.", "success")
         return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 

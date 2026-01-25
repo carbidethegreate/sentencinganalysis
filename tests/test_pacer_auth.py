@@ -100,6 +100,7 @@ class PacerAuthTests(unittest.TestCase):
         )
         self.assertTrue(response.can_proceed)
         self.assertEqual(response.token, "token")
+        self.assertFalse(response.search_disabled)
 
     def test_interpret_invalid_credentials(self):
         response = interpret_pacer_auth_response(
@@ -125,8 +126,9 @@ class PacerAuthTests(unittest.TestCase):
             },
             None,
         )
-        self.assertFalse(response.can_proceed)
+        self.assertTrue(response.can_proceed)
         self.assertTrue(response.needs_client_code)
+        self.assertTrue(response.search_disabled)
 
     def test_interpret_needs_otp_when_one_time_passcode_missing(self):
         response = interpret_pacer_auth_response(
@@ -187,6 +189,8 @@ class FederalDataDashboardTests(unittest.TestCase):
             needs_otp=False,
             needs_client_code=False,
             needs_redaction_ack=False,
+            search_disabled=False,
+            search_disabled_reason=None,
             can_proceed=True,
         )
 
@@ -230,6 +234,8 @@ class FederalDataDashboardTests(unittest.TestCase):
             needs_otp=True,
             needs_client_code=False,
             needs_redaction_ack=False,
+            search_disabled=False,
+            search_disabled_reason=None,
             can_proceed=False,
         )
 
@@ -265,6 +271,8 @@ class FederalDataDashboardTests(unittest.TestCase):
             needs_otp=False,
             needs_client_code=True,
             needs_redaction_ack=False,
+            search_disabled=False,
+            search_disabled_reason=None,
             can_proceed=False,
         )
 
@@ -288,6 +296,46 @@ class FederalDataDashboardTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertFalse(payload["authorized"])
                 self.assertEqual(payload["status"], "needs_client_code")
+
+    def test_pacer_auth_json_search_disabled_requires_client_code(self):
+        app = create_app()
+        app.testing = True
+
+        result = PacerAuthResult(
+            token="next-gen-token",
+            error_description="Required client code not entered.",
+            login_result="0",
+            needs_otp=False,
+            needs_client_code=True,
+            needs_redaction_ack=False,
+            search_disabled=True,
+            search_disabled_reason="PACER authenticated, but searching is disabled.",
+            can_proceed=True,
+        )
+
+        with patch("app.PacerAuthClient.authenticate", return_value=result):
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["is_admin"] = True
+                    sess["csrf_token"] = "csrf-token"
+
+                response = client.post(
+                    "/admin/federal-data-dashboard/pacer-auth",
+                    json={
+                        "csrf_token": "csrf-token",
+                        "username": "user",
+                        "password": "pass",
+                        "pacer_redaction_ack": True,
+                    },
+                )
+
+                payload = response.get_json()
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(payload["authorized"])
+                self.assertFalse(payload["search_enabled"])
+
+                with client.session_transaction() as sess:
+                    self.assertTrue(sess.get("pacer_search_disabled"))
 
     def test_pacer_auth_requires_redaction_acknowledgement(self):
         with patch(
@@ -325,6 +373,8 @@ class FederalDataDashboardTests(unittest.TestCase):
             needs_otp=False,
             needs_client_code=False,
             needs_redaction_ack=True,
+            search_disabled=False,
+            search_disabled_reason=None,
             can_proceed=False,
         )
 
@@ -367,6 +417,8 @@ class FederalDataDashboardTests(unittest.TestCase):
                 needs_otp=False,
                 needs_client_code=False,
                 needs_redaction_ack=False,
+                search_disabled=False,
+                search_disabled_reason=None,
                 can_proceed=True,
             )
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 import urllib.error
 
-from pacer_http import PacerHttpClient, TokenExpired
+from pacer_http import PacerEnvironmentMismatch, PacerHttpClient, TokenExpired
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class PclClient:
                 headers=headers,
                 data=body,
             )
-        except TokenExpired:
+        except (PacerEnvironmentMismatch, TokenExpired):
             raise
         except urllib.error.HTTPError as exc:
             return self._handle_http_error(exc)

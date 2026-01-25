@@ -14,6 +14,10 @@ class TokenExpired(Exception):
     """Raised when the PACER token is missing or expired."""
 
 
+class PacerEnvironmentMismatch(Exception):
+    """Raised when PACER auth and PCL environments do not align."""
+
+
 @dataclass(frozen=True)
 class PacerHttpResponse:
     status_code: int
@@ -28,11 +32,13 @@ class PacerHttpClient:
         logger: Optional[Any] = None,
         token_cookie_name: str = "NextGenCSO",
         expected_environment: Optional[str] = None,
+        env_mismatch_reason: Optional[str] = None,
     ) -> None:
         self._token_store = token_store
         self._logger = logger
         self._token_cookie_name = token_cookie_name
         self._expected_environment = expected_environment
+        self._env_mismatch_reason = env_mismatch_reason
 
     def request(
         self,
@@ -44,6 +50,9 @@ class PacerHttpClient:
         timeout: int = 30,
         include_cookie: bool = False,
     ) -> PacerHttpResponse:
+        if self._env_mismatch_reason:
+            raise PacerEnvironmentMismatch(self._env_mismatch_reason)
+
         token_record = self._token_store.get_token(
             expected_environment=self._expected_environment
         )

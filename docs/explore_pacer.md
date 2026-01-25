@@ -27,6 +27,18 @@ The **Explore PACER** page is an admin-only playground for PACER Case Locator (P
 * It does **not** download documents.
 * It does **not** expose PACER tokens (`nextGenCSO`) to the browser.
 
+## Environment alignment and search permissions
+
+PACER authentication and PCL search endpoints have separate QA and Production environments. QA and
+Production require **different accounts**, and the base URLs must align or PCL will reject requests.
+
+Explore PACER will block runs if:
+
+* `PACER_AUTH_BASE_URL` (auth) and `PCL_BASE_URL` (search) point to different environments, or
+* PACER returns a token but indicates a **client code is required for searching**.
+
+In the second case you are authenticated, but search is disabled. Add the PACER client code and re-authorize.
+
 ## Cost controls and safety caps
 
 Each page request is a billable PACER search.
@@ -69,7 +81,8 @@ To copy the debug bundle:
 2. Click **Copy debug bundle**.
 3. Paste the bundle into your issue, fix request, or investigation notes.
 
-The debug bundle intentionally excludes secrets and tokens.
+The debug bundle intentionally excludes secrets and tokens. It includes safe token diagnostics
+(present/length/SHA256 prefix) plus environment labels to help debug mismatches without exposing credentials.
 
 ## Input and payload validation
 

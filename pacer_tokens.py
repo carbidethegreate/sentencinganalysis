@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, delete, insert, select
@@ -14,6 +15,17 @@ class PacerTokenRecord:
     obtained_at: datetime
     expires_at: Optional[datetime] = None
     environment: Optional[str] = None
+
+
+def token_fingerprint(token: Optional[str], prefix_len: int = 12) -> Dict[str, Any]:
+    if not token:
+        return {"present": False, "length": 0, "sha256_prefix": ""}
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return {
+        "present": True,
+        "length": len(token),
+        "sha256_prefix": digest[:prefix_len],
+    }
 
 
 def build_pacer_token_table(metadata: MetaData) -> Table:

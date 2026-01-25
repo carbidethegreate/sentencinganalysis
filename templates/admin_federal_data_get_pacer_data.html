@@ -22,14 +22,14 @@
         </div>
       {% endif %}
     </div>
-    {% if pacer_authorized %}
+    {% if pacer_authenticated %}
       <div class="card pacer-status-card">
         <div class="pacer-status-card__header">
           <div>
             <p class="pacer-eyebrow">PACER access</p>
             <h2 class="pacer-status-card__title">Session active</h2>
             <p class="small pacer-status-card__lead">
-              You're authorized to make PACER Case Locator requests. Choose your next step.
+              Authenticated: {{ 'Yes' if pacer_authenticated else 'No' }} · Search enabled: {{ 'Yes' if pacer_search_enabled else 'No' }}
             </p>
             {% if pacer_authorized_at %}
               <p class="small pacer-status-card__meta">
@@ -39,9 +39,15 @@
           </div>
           <div class="pacer-status-card__badge" role="status" aria-live="polite">
             <span class="pacer-status-card__badge-dot" aria-hidden="true"></span>
-            Connected
+            {% if pacer_search_enabled %}Search enabled{% else %}Search disabled{% endif %}
           </div>
         </div>
+        {% if pacer_search_disabled %}
+          <div class="flash warning">
+            <strong>Search disabled:</strong>
+            PACER returned a token but requires a client code to enable searching. Add the client code and re-authorize.
+          </div>
+        {% endif %}
         <div class="pacer-action-grid">
           <a class="pacer-action-tile" href="{{ url_for('admin_federal_data_dashboard_pcl_batch_search') }}">
             <span class="pacer-action-tile__title">PCL Batch Search</span>
