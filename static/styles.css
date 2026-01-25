@@ -910,6 +910,13 @@ button.danger {
   border: 1px dashed rgba(239, 68, 68, 0.25);
 }
 
+.database-search-highlight {
+  background: rgba(250, 204, 21, 0.4);
+  color: inherit;
+  border-radius: 6px;
+  padding: 0 2px;
+}
+
 .database-toolbar__actions {
   display: flex;
   flex-direction: column;

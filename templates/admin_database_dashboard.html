@@ -379,6 +379,28 @@
       const searchCount = document.getElementById("databaseSearchCount");
       const searchClear = document.getElementById("databaseSearchClear");
       const searchEmpty = document.getElementById("databaseSearchEmpty");
+      const highlightTargets = Array.from(
+        document.querySelectorAll(
+          ".database-table-item h3, .database-column-name, .database-table-item__columns-preview"
+        )
+      );
+      const escapeRegExp = (value) =>
+        value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const updateHighlights = (query) => {
+        highlightTargets.forEach((target) => {
+          const originalText = target.dataset.searchOriginal || target.textContent;
+          target.dataset.searchOriginal = originalText;
+          if (!query) {
+            target.textContent = originalText;
+            return;
+          }
+          const regex = new RegExp(`(${escapeRegExp(query)})`, "ig");
+          target.innerHTML = originalText.replace(
+            regex,
+            '<span class="database-search-highlight">$1</span>'
+          );
+        });
+      };
       const updateSearchMeta = () => {
         let visibleTables = 0;
         schemaItems.forEach((schemaItem) => {
@@ -415,6 +437,7 @@
           }
         });
         updateSearchMeta();
+        updateHighlights(query);
       });
       if (searchClear) {
         searchClear.addEventListener("click", () => {
@@ -424,6 +447,7 @@
         });
       }
       updateSearchMeta();
+      updateHighlights(searchInput.value.trim());
     }
 
     const exportForm = document.querySelector(".database-export-form");
