@@ -42,11 +42,11 @@
             {% if pacer_search_enabled %}Search enabled{% else %}Search disabled{% endif %}
           </div>
         </div>
-        {% if pacer_search_disabled %}
+        {% if pacer_client_code_required %}
           <div class="flash warning">
-            <strong>Search disabled:</strong>
-            PACER returned a token but requires a client code to enable searching. Re-authorize using the client-code-only form
-            below (when server credentials are configured), or switch to manual mode to enter full credentials and a client code.
+            <strong>Client code required by PACER:</strong>
+            PACER indicated that a client code is required for this account. Searches remain enabled, but you should
+            re-authorize with a client code to ensure billable activity is tracked correctly.
             <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
               Re-authenticate in manual mode →
             </a>
