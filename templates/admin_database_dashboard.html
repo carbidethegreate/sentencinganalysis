@@ -146,22 +146,46 @@
                           <p class="small">We could not load column details for this table.</p>
                         </div>
                       {% else %}
-                        <ul class="database-table-item__columns">
-                          {% for column in table.columns %}
-                            <li>
-                              <div>
-                                <span class="database-column-name">{{ column.name }}</span>
-                                <span class="database-column-type">{{ column.type }}</span>
-                              </div>
-                              <div class="database-column-actions">
-                                {% if not column.nullable %}
-                                  <span class="database-column-pill">Required</span>
+                        {% set preview_limit = 5 %}
+                        {% set preview_columns = table.columns[:preview_limit] %}
+                        <details class="database-table-item__columns">
+                          <summary class="database-table-item__columns-summary">
+                            <div class="database-table-item__columns-summary-text">
+                              <span class="small">{{ table.column_count }} columns</span>
+                              <span class="database-table-item__columns-preview">
+                                {% for column in preview_columns %}
+                                  {{ column.name }}{% if not loop.last %}, {% endif %}
+                                {% endfor %}
+                                {% if table.column_count > preview_limit %}
+                                  , ...
                                 {% endif %}
-                                <a class="database-column-link" href="{{ url_for('admin_database_dashboard', schema=schema.name, table=table.name, column=column.name) }}">Drill down</a>
-                              </div>
-                            </li>
-                          {% endfor %}
-                        </ul>
+                              </span>
+                            </div>
+                            <span class="database-table-item__columns-toggle">
+                              {% if table.column_count > preview_limit %}
+                                Show all columns
+                              {% else %}
+                                Show columns
+                              {% endif %}
+                            </span>
+                          </summary>
+                          <ul class="database-table-item__columns-list">
+                            {% for column in table.columns %}
+                              <li>
+                                <div>
+                                  <span class="database-column-name">{{ column.name }}</span>
+                                  <span class="database-column-type">{{ column.type }}</span>
+                                </div>
+                                <div class="database-column-actions">
+                                  {% if not column.nullable %}
+                                    <span class="database-column-pill">Required</span>
+                                  {% endif %}
+                                  <a class="database-column-link" href="{{ url_for('admin_database_dashboard', schema=schema.name, table=table.name, column=column.name) }}">Drill down</a>
+                                </div>
+                              </li>
+                            {% endfor %}
+                          </ul>
+                        </details>
                       {% endif %}
                     </article>
                   {% endfor %}
