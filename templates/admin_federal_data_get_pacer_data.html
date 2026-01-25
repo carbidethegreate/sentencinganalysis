@@ -45,8 +45,87 @@
         {% if pacer_search_disabled %}
           <div class="flash warning">
             <strong>Search disabled:</strong>
-            PACER returned a token but requires a client code to enable searching. Add the client code and re-authorize.
+            PACER returned a token but requires a client code to enable searching. Re-authorize using the client-code-only form
+            below (when server credentials are configured), or switch to manual mode to enter full credentials and a client code.
+            <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
+              Re-authenticate in manual mode →
+            </a>
           </div>
+        {% endif %}
+        {% if pacer_search_disabled and pacer_server_creds_available %}
+          <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off" class="pacer-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="pacer-form__section">
+              <label for="pacer-client-code-reauth">Client code (required to enable search)</label>
+              <input
+                id="pacer-client-code-reauth"
+                name="pacer_client_code"
+                autocomplete="off"
+                {% if pacer_client_code_required %}class="input-error"{% endif %}
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-bwignore="true"
+              >
+              {% if pacer_client_code_required %}
+                <p class="small pacer-field-error">
+                  Client code required for this account. Enter the PACER-provided client code and try again.
+                </p>
+              {% endif %}
+            </div>
+            {% if pacer_needs_otp %}
+              <div class="pacer-form__section">
+                <label for="pacer-otp-code-reauth">2FA code (required if your PACER account uses MFA)</label>
+                <input
+                  id="pacer-otp-code-reauth"
+                  name="pacer_otp_code"
+                  autocomplete="one-time-code"
+                  inputmode="numeric"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-bwignore="true"
+                >
+              </div>
+            {% endif %}
+            <div class="pacer-ack">
+              <label class="pacer-ack__label" for="pacer-redaction-ack-reauth">
+                <input
+                  id="pacer-redaction-ack-reauth"
+                  name="pacer_redaction_ack"
+                  type="checkbox"
+                  value="1"
+                  required
+                  {% if pacer_redaction_acknowledged %}checked{% endif %}
+                >
+                <span>
+                  I have read the PACER redaction requirements and will comply by redacting all required sensitive information before filing.
+                </span>
+              </label>
+              {% if pacer_redaction_required %}
+                <p class="small pacer-field-error">
+                  PACER filer accounts require this acknowledgement. Check the box above and retry.
+                </p>
+              {% endif %}
+            </div>
+            <div class="actions pacer-form__actions">
+              <button class="primary pacer-form__submit" type="submit" id="pacer-authorize-button" disabled>Re-authorize</button>
+            </div>
+          </form>
+          <script>
+            (function () {
+              const form = document.querySelector(
+                'form[action="{{ url_for("admin_federal_data_dashboard_pacer_auth") }}"]'
+              );
+              if (!form) return;
+              const checkbox = form.querySelector("#pacer-redaction-ack-reauth");
+              const submitButton = form.querySelector("#pacer-authorize-button");
+              if (!checkbox || !submitButton) return;
+              const toggleSubmit = function () {
+                submitButton.disabled = !checkbox.checked;
+              };
+              checkbox.addEventListener("change", toggleSubmit);
+              toggleSubmit();
+            })();
+          </script>
         {% endif %}
         <div class="pacer-action-grid">
           <a class="pacer-action-tile" href="{{ url_for('admin_federal_data_dashboard_pcl_batch_search') }}">
@@ -93,18 +172,75 @@
             </div>
           {% endif %}
 
-          <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off" class="pacer-form">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            {% if pacer_server_creds_available and not manual_mode %}
-              <div class="pacer-server-creds">
-                <p class="small">
-                  PACER credentials are configured on the server; they are not shown in the browser.
-                </p>
-                <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
-                  Enter PACER username/password manually
-                </a>
+          {% if pacer_server_creds_available and not manual_mode %}
+            <div class="pacer-server-creds">
+              <p class="small">
+                PACER credentials are configured on the server; they are not shown in the browser.
+              </p>
+              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
+                Enter PACER username/password manually
+              </a>
+            </div>
+            <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off" class="pacer-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <div class="pacer-form__section">
+                <label for="pacer-client-code">Client code (optional)</label>
+                <input
+                  id="pacer-client-code"
+                  name="pacer_client_code"
+                  autocomplete="off"
+                  {% if pacer_client_code_required %}class="input-error"{% endif %}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-bwignore="true"
+                >
+                {% if pacer_client_code_required %}
+                  <p class="small pacer-field-error">
+                    Client code required for this account. Enter the PACER-provided client code and try again.
+                  </p>
+                {% endif %}
               </div>
-            {% else %}
+              {% if pacer_needs_otp %}
+                <div class="pacer-form__section">
+                  <label for="pacer-otp-code">2FA code (required if your PACER account uses MFA)</label>
+                  <input
+                    id="pacer-otp-code"
+                    name="pacer_otp_code"
+                    autocomplete="one-time-code"
+                    inputmode="numeric"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-bwignore="true"
+                  >
+                </div>
+              {% endif %}
+              <div class="pacer-ack">
+                <label class="pacer-ack__label" for="pacer-redaction-ack">
+                  <input
+                    id="pacer-redaction-ack"
+                    name="pacer_redaction_ack"
+                    type="checkbox"
+                    value="1"
+                    required
+                    {% if pacer_redaction_acknowledged %}checked{% endif %}
+                  >
+                  <span>
+                    I have read the PACER redaction requirements and will comply by redacting all required sensitive information before filing.
+                  </span>
+                </label>
+                {% if pacer_redaction_required %}
+                  <p class="small pacer-field-error">
+                    PACER filer accounts require this acknowledgement. Check the box above and retry.
+                  </p>
+                {% endif %}
+              </div>
+              <div class="actions pacer-form__actions">
+                <button class="primary pacer-form__submit" type="submit" id="pacer-authorize-button" disabled>Authorize</button>
+              </div>
+            </form>
+          {% else %}
+            <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_auth') }}" autocomplete="off" class="pacer-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               {% if manual_mode %}
                 <input type="hidden" name="manual_mode" value="1">
               {% endif %}
@@ -153,64 +289,64 @@
                   >
                 </div>
               </div>
-            {% endif %}
 
-            <div class="pacer-form__section">
-              <label for="pacer-client-code">Client code (optional)</label>
-              <input
-                id="pacer-client-code"
-                name="pacer_client_code"
-                autocomplete="off"
-                {% if pacer_client_code_required %}class="input-error"{% endif %}
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-bwignore="true"
-              >
-              {% if pacer_client_code_required %}
-                <p class="small pacer-field-error">
-                  Client code required for this account. Enter the PACER-provided client code and try again.
-                </p>
-              {% endif %}
-            </div>
-
-            <div class="pacer-form__section">
-              <label for="pacer-otp-code">2FA code (required if your PACER account uses MFA)</label>
-              <input
-                id="pacer-otp-code"
-                name="pacer_otp_code"
-                autocomplete="one-time-code"
-                inputmode="numeric"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-bwignore="true"
-              >
-            </div>
-
-            <div class="pacer-ack">
-              <label class="pacer-ack__label" for="pacer-redaction-ack">
+              <div class="pacer-form__section">
+                <label for="pacer-client-code">Client code (optional)</label>
                 <input
-                  id="pacer-redaction-ack"
-                  name="pacer_redaction_ack"
-                  type="checkbox"
-                  value="1"
-                  required
-                  {% if pacer_redaction_acknowledged %}checked{% endif %}
+                  id="pacer-client-code"
+                  name="pacer_client_code"
+                  autocomplete="off"
+                  {% if pacer_client_code_required %}class="input-error"{% endif %}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-bwignore="true"
                 >
-                <span>
-                  I have read the PACER redaction requirements and will comply by redacting all required sensitive information before filing.
-                </span>
-              </label>
-              {% if pacer_redaction_required %}
-                <p class="small pacer-field-error">
-                  PACER filer accounts require this acknowledgement. Check the box above and retry.
-                </p>
-              {% endif %}
-            </div>
+                {% if pacer_client_code_required %}
+                  <p class="small pacer-field-error">
+                    Client code required for this account. Enter the PACER-provided client code and try again.
+                  </p>
+                {% endif %}
+              </div>
 
-            <div class="actions pacer-form__actions">
-              <button class="primary pacer-form__submit" type="submit" id="pacer-authorize-button" disabled>Authorize</button>
-            </div>
-          </form>
+              <div class="pacer-form__section">
+                <label for="pacer-otp-code">2FA code (required if your PACER account uses MFA)</label>
+                <input
+                  id="pacer-otp-code"
+                  name="pacer_otp_code"
+                  autocomplete="one-time-code"
+                  inputmode="numeric"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-bwignore="true"
+                >
+              </div>
+
+              <div class="pacer-ack">
+                <label class="pacer-ack__label" for="pacer-redaction-ack">
+                  <input
+                    id="pacer-redaction-ack"
+                    name="pacer_redaction_ack"
+                    type="checkbox"
+                    value="1"
+                    required
+                    {% if pacer_redaction_acknowledged %}checked{% endif %}
+                  >
+                  <span>
+                    I have read the PACER redaction requirements and will comply by redacting all required sensitive information before filing.
+                  </span>
+                </label>
+                {% if pacer_redaction_required %}
+                  <p class="small pacer-field-error">
+                    PACER filer accounts require this acknowledgement. Check the box above and retry.
+                  </p>
+                {% endif %}
+              </div>
+
+              <div class="actions pacer-form__actions">
+                <button class="primary pacer-form__submit" type="submit" id="pacer-authorize-button" disabled>Authorize</button>
+              </div>
+            </form>
+          {% endif %}
 
           <p class="small pacer-endpoint">
             PACER authentication endpoint: {{ pacer_base_url }} (set <code>PACER_AUTH_BASE_URL</code> to switch environments).
