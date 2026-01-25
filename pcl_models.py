@@ -237,7 +237,11 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
             "case_type in ('cr','crim','ncrim','dcrim')",
             name="ck_pcl_cases_case_type",
         ),
-        UniqueConstraint("court_id", "case_number", name="uq_pcl_cases_court_case"),
+        UniqueConstraint(
+            "court_id",
+            "case_number_full",
+            name="uq_pcl_cases_court_case_number_full",
+        ),
         Index("ix_pcl_cases_court_date", "court_id", "date_filed"),
         Index(
             "ix_pcl_cases_court_case_number_full",
