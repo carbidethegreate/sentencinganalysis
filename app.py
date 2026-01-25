@@ -59,7 +59,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert as pg_insert
 from sqlalchemy import text as sa_text
-from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError
+from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError, SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from pacer_http import PacerHttpClient, TokenExpired
@@ -3209,6 +3209,7 @@ def create_app() -> Flask:
             return False
 
         schemas: List[Dict[str, Any]] = []
+        schema_table_map: Dict[str, List[str]] = {}
         total_tables = 0
         total_columns = 0
         total_views = 0
@@ -3219,6 +3220,7 @@ def create_app() -> Flask:
             table_entries: List[Dict[str, Any]] = []
             table_names = sorted(inspector.get_table_names(schema=schema_name))
             view_names = sorted(inspector.get_view_names(schema=schema_name))
+            schema_table_map[schema_name] = table_names
             for table_name in table_names:
                 columns = inspector.get_columns(table_name, schema=schema_name)
                 column_entries = [
@@ -3248,6 +3250,73 @@ def create_app() -> Flask:
                 }
             )
 
+        selected_schema = request.args.get("schema")
+        selected_table = request.args.get("table")
+        selected_column = request.args.get("column")
+        preview_limit = request.args.get("limit", "25")
+        try:
+            preview_limit_value = int(preview_limit)
+        except ValueError:
+            preview_limit_value = 25
+        preview_limit_value = max(5, min(preview_limit_value, 100))
+
+        table_preview: Optional[Dict[str, Any]] = None
+        column_preview: Optional[Dict[str, Any]] = None
+        selected_table_columns: List[Dict[str, Any]] = []
+        table_preview_error: Optional[str] = None
+        column_preview_error: Optional[str] = None
+
+        if selected_schema and selected_table:
+            available_tables = schema_table_map.get(selected_schema, [])
+            if selected_table in available_tables:
+                selected_table_columns = [
+                    {
+                        "name": column["name"],
+                        "type": str(column["type"]),
+                        "nullable": column.get("nullable", True),
+                        "default": column.get("default"),
+                    }
+                    for column in inspector.get_columns(selected_table, schema=selected_schema)
+                ]
+                preparer = engine.dialect.identifier_preparer
+                schema_identifier = preparer.quote(selected_schema)
+                table_identifier = preparer.quote(selected_table)
+                full_table_identifier = f"{schema_identifier}.{table_identifier}"
+                try:
+                    with engine.connect() as connection:
+                        result = connection.execute(
+                            sa_text(f"SELECT * FROM {full_table_identifier} LIMIT :limit"),
+                            {"limit": preview_limit_value},
+                        )
+                        rows = [dict(row._mapping) for row in result]
+                        table_preview = {"columns": list(result.keys()), "rows": rows}
+                except SQLAlchemyError as exc:
+                    table_preview_error = str(exc)
+
+                if selected_column:
+                    column_names = {column["name"] for column in selected_table_columns}
+                    if selected_column in column_names:
+                        column_identifier = preparer.quote(selected_column)
+                        try:
+                            with engine.connect() as connection:
+                                result = connection.execute(
+                                    sa_text(
+                                        "SELECT {column} FROM {table} "
+                                        "WHERE {column} IS NOT NULL LIMIT :limit".format(
+                                            column=column_identifier,
+                                            table=full_table_identifier,
+                                        )
+                                    ),
+                                    {"limit": preview_limit_value},
+                                )
+                                values = [row[0] for row in result]
+                                column_preview = {
+                                    "name": selected_column,
+                                    "values": values,
+                                }
+                        except SQLAlchemyError as exc:
+                            column_preview_error = str(exc)
+
         database_url = engine.url.render_as_string(hide_password=True)
         return render_template(
             "admin_database_dashboard.html",
@@ -3260,6 +3329,15 @@ def create_app() -> Flask:
             total_tables=total_tables,
             total_columns=total_columns,
             total_views=total_views,
+            selected_schema=selected_schema,
+            selected_table=selected_table,
+            selected_column=selected_column,
+            preview_limit=preview_limit_value,
+            table_preview=table_preview,
+            column_preview=column_preview,
+            table_preview_error=table_preview_error,
+            column_preview_error=column_preview_error,
+            selected_table_columns=selected_table_columns,
         )
 
     @app.get("/admin/federal-data-dashboard")
