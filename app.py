@@ -2260,8 +2260,12 @@ def create_app() -> Flask:
             )
             .limit(limit)
         )
-        with engine.begin() as conn:
-            rows = conn.execute(stmt).mappings().all()
+        try:
+            with engine.begin() as conn:
+                rows = conn.execute(stmt).mappings().all()
+        except SQLAlchemyError as exc:
+            app.logger.warning("PACER saved searches unavailable: %s", exc)
+            return []
         saved: List[Dict[str, Any]] = []
         for row in rows:
             criteria = _parse_search_request_criteria(row.get("criteria_json"))
