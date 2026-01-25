@@ -135,6 +135,10 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("receipt_json", Text, nullable=False),
         Column("page_info_json", Text, nullable=True),
         Column("raw_response_json", Text, nullable=True),
+        Column("cases_inserted", Integer, nullable=True),
+        Column("cases_updated", Integer, nullable=True),
+        Column("parties_inserted", Integer, nullable=True),
+        Column("parties_updated", Integer, nullable=True),
         CheckConstraint(
             "search_type in ('case','party')",
             name="ck_pacer_search_runs_type",

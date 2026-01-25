@@ -282,7 +282,7 @@
 
   {% if run_result %}
     <section class="stack" aria-live="polite">
-      {% if run_result.errors %}
+        {% if run_result.errors %}
         <div class="flash error">
           <strong>Run failed.</strong>
           <ul>
@@ -304,6 +304,13 @@
           <div class="flash success">
             <strong>Run complete.</strong>
             Pulled {{ (run_result.cases|length) if run_result.mode == 'cases' else (run_result.parties|length) }} records across {{ run_result.pages_fetched }} page(s).
+          </div>
+        {% endif %}
+        {% if run_result.save_summary %}
+          <div class="flash success">
+            <strong>Saved search results.</strong>
+            New cases: {{ run_result.save_summary.cases_inserted }} · Updated cases: {{ run_result.save_summary.cases_updated }}
+            · New parties: {{ run_result.save_summary.parties_inserted }} · Updated parties: {{ run_result.save_summary.parties_updated }}
           </div>
         {% endif %}
       {% endif %}
@@ -442,17 +449,25 @@
                       <th>Date filed</th>
                       <th>Short title</th>
                       <th>Court</th>
+                      <th>Saved?</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {% for case in run_result.cases %}
+                    {% for case in run_result.cases_view or run_result.cases %}
                       <tr>
                         <td>{{ loop.index }}</td>
-                        <td>{{ case.caseNumber or case.case_number or case.cs_case_number or '—' }}</td>
-                        <td>{{ case.caseType or case.case_type or '—' }}</td>
-                        <td>{{ case.dateFiled or case.date_filed or '—' }}</td>
-                        <td>{{ case.shortTitle or case.short_title or case.cs_short_title or '—' }}</td>
-                        <td>{{ case.courtId or case.court_id or case_values.court_id }}</td>
+                        <td>{{ case.case_number or case.caseNumber or case.case_number_full or case.cs_case_number or '—' }}</td>
+                        <td>{{ case.case_type or case.caseType or '—' }}</td>
+                        <td>{{ case.date_filed or case.dateFiled or '—' }}</td>
+                        <td>{{ case.short_title or case.shortTitle or case.cs_short_title or '—' }}</td>
+                        <td>{{ case.court_id or case.courtId or case_values.court_id }}</td>
+                        <td>
+                          {% if case.already_indexed %}
+                            <span class="pill">Already indexed</span>
+                          {% else %}
+                            <span class="pill primary">New</span>
+                          {% endif %}
+                        </td>
                       </tr>
                     {% endfor %}
                   </tbody>
@@ -839,6 +854,42 @@
       })();
     </script>
   {% endif %}
+
+  <section class="card stack">
+    <p class="pacer-eyebrow">Saved searches</p>
+    <h3>Stored PACER search runs</h3>
+    <p class="small">
+      These runs represent stored data in the database. Use this list to confirm deduping and traceability.
+    </p>
+    {% if search_run_history %}
+      <div class="stack">
+        {% for run in search_run_history %}
+          <div class="card">
+            <div class="row" style="justify-content: space-between; align-items: center;">
+              <div>
+                <p class="small"><strong>{{ run.search_type|capitalize }}</strong> · {{ run.search_mode|capitalize }} · {{ run.created_at_display }}</p>
+                <p class="small">
+                  Court: <code>{{ run.court_id or 'All' }}</code>
+                  {% if run.date_from or run.date_to %}
+                    · Date range: {{ run.date_from or '—' }} → {{ run.date_to or '—' }}
+                  {% endif %}
+                </p>
+                <p class="small">
+                  New cases: {{ run.cases_inserted or 0 }} · Updated cases: {{ run.cases_updated or 0 }}
+                  · New parties: {{ run.parties_inserted or 0 }} · Updated parties: {{ run.parties_updated or 0 }}
+                </p>
+                {% if run.report_id %}
+                  <p class="small">Report ID: <code>{{ run.report_id }}</code> · Status: {{ run.report_status or '—' }}</p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="small">No saved runs yet.</p>
+    {% endif %}
+  </section>
 
   <section class="card stack">
     <p class="pacer-eyebrow">Recent runs</p>

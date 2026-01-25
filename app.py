@@ -69,6 +69,7 @@ from sqlalchemy import (
     literal_column,
     or_,
     select,
+    tuple_,
     update,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert as pg_insert
@@ -857,6 +858,16 @@ def create_app() -> Flask:
         label="case_data_one",
     )
     _ensure_table_columns(
+        "pacer_search_runs",
+        {
+            "cases_inserted": "INTEGER",
+            "cases_updated": "INTEGER",
+            "parties_inserted": "INTEGER",
+            "parties_updated": "INTEGER",
+        },
+        label="pacer_search_runs",
+    )
+    _ensure_table_columns(
         "pacer_tokens",
         {"environment": "VARCHAR(20)"},
         label="pacer_tokens",
@@ -1442,6 +1453,7 @@ def create_app() -> Flask:
             case_values=case_values,
             party_values=party_values,
             run_history=_load_pacer_explore_runs(),
+            search_run_history=_load_pacer_search_runs(),
         )
 
     def _load_court_choices() -> List[Dict[str, Any]]:
@@ -2006,7 +2018,12 @@ def create_app() -> Flask:
         report_status: Optional[str] = None,
     ) -> Dict[str, int]:
         pacer_search_runs = pcl_tables["pacer_search_runs"]
-        counts = {"cases_inserted": 0, "cases_updated": 0, "parties_inserted": 0, "parties_updated": 0}
+        counts = {
+            "cases_inserted": 0,
+            "cases_updated": 0,
+            "parties_inserted": 0,
+            "parties_updated": 0,
+        }
         normalized_receipts = _normalize_receipt_payloads(receipts)
         normalized_page_info = _normalize_page_info(page_info)
         criteria_json = json.dumps(criteria, default=str)
@@ -2017,18 +2034,6 @@ def create_app() -> Flask:
         )
         default_court_id = (criteria.get("ui_inputs") or {}).get("court_id")
         with engine.begin() as conn:
-            conn.execute(
-                insert(pacer_search_runs).values(
-                    search_type=search_type,
-                    search_mode=search_mode,
-                    criteria_json=criteria_json,
-                    report_id=report_id,
-                    report_status=report_status,
-                    receipt_json=receipt_json,
-                    page_info_json=page_info_json,
-                    raw_response_json=raw_response_json,
-                )
-            )
             if search_type == "case":
                 for record in results:
                     if not isinstance(record, dict):
@@ -2066,7 +2071,131 @@ def create_app() -> Flask:
                         counts["parties_inserted"] += 1
                     else:
                         counts["parties_updated"] += 1
+
+            conn.execute(
+                insert(pacer_search_runs).values(
+                    search_type=search_type,
+                    search_mode=search_mode,
+                    criteria_json=criteria_json,
+                    report_id=report_id,
+                    report_status=report_status,
+                    receipt_json=receipt_json,
+                    page_info_json=page_info_json,
+                    raw_response_json=raw_response_json,
+                    cases_inserted=counts["cases_inserted"],
+                    cases_updated=counts["cases_updated"],
+                    parties_inserted=counts["parties_inserted"],
+                    parties_updated=counts["parties_updated"],
+                )
+            )
         return counts
+
+    def _build_case_key(
+        record: Dict[str, Any], *, default_court_id: Optional[str]
+    ) -> Optional[Tuple[str, str]]:
+        court_id = record.get("courtId") or record.get("court_id") or default_court_id
+        case_number = (
+            record.get("caseNumberFull")
+            or record.get("case_number_full")
+            or record.get("caseNumber")
+            or record.get("case_number")
+        )
+        if not court_id or not case_number:
+            return None
+        return (str(court_id), str(case_number))
+
+    def _load_existing_case_keys(
+        records: Sequence[Dict[str, Any]], *, default_court_id: Optional[str]
+    ) -> Set[Tuple[str, str]]:
+        keys: List[Tuple[str, str]] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            key = _build_case_key(record, default_court_id=default_court_id)
+            if key:
+                keys.append(key)
+        if not keys:
+            return set()
+        pcl_cases = pcl_tables["pcl_cases"]
+        with engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    select(pcl_cases.c.court_id, pcl_cases.c.case_number_full).where(
+                        tuple_(pcl_cases.c.court_id, pcl_cases.c.case_number_full).in_(
+                            keys
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return {(row["court_id"], row["case_number_full"]) for row in rows}
+
+    def _build_case_view_rows(
+        records: Sequence[Dict[str, Any]], *, default_court_id: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        existing_keys = _load_existing_case_keys(
+            records, default_court_id=default_court_id
+        )
+        rows: List[Dict[str, Any]] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            key = _build_case_key(record, default_court_id=default_court_id)
+            rows.append(
+                {
+                    "case_number": record.get("caseNumber")
+                    or record.get("case_number")
+                    or record.get("caseNumberFull")
+                    or record.get("case_number_full")
+                    or "—",
+                    "case_type": record.get("caseType")
+                    or record.get("case_type")
+                    or "—",
+                    "date_filed": record.get("dateFiled") or record.get("date_filed") or "—",
+                    "short_title": record.get("shortTitle")
+                    or record.get("short_title")
+                    or "—",
+                    "court_id": record.get("courtId")
+                    or record.get("court_id")
+                    or default_court_id
+                    or "—",
+                    "already_indexed": key in existing_keys if key else False,
+                }
+            )
+        return rows
+
+    def _load_pacer_search_runs(limit: int = 12) -> List[Dict[str, Any]]:
+        pacer_search_runs = pcl_tables["pacer_search_runs"]
+        stmt = (
+            select(pacer_search_runs)
+            .order_by(
+                pacer_search_runs.c.created_at.desc(),
+                pacer_search_runs.c.id.desc(),
+            )
+            .limit(limit)
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        runs: List[Dict[str, Any]] = []
+        for row in rows:
+            created_at = row.get("created_at")
+            criteria = _parse_search_request_criteria(row.get("criteria_json"))
+            ui_inputs = criteria.get("ui_inputs") if isinstance(criteria, dict) else {}
+            runs.append(
+                {
+                    **row,
+                    "created_at_display": (
+                        created_at.isoformat().replace("T", " ")
+                        if isinstance(created_at, datetime)
+                        else str(created_at or "")
+                    ),
+                    "court_id": ui_inputs.get("court_id"),
+                    "date_from": ui_inputs.get("date_filed_from"),
+                    "date_to": ui_inputs.get("date_filed_to"),
+                }
+            )
+        return runs
 
     def _hydrate_explore_values(
         mode: str, ui_inputs: Mapping[str, Any], search_mode: str
@@ -5174,6 +5303,11 @@ def create_app() -> Flask:
                 "endpoint": endpoint_base,
                 "page_number": requested_page,
                 "raw_response": last_payload,
+                "cases_view": _build_case_view_rows(
+                    records_limited, default_court_id=default_court_id
+                )
+                if mode == "cases" and records_limited
+                else None,
             }
         )
         if page_infos:
@@ -5674,6 +5808,7 @@ def create_app() -> Flask:
             report_id=str(report_id) if report_id is not None else None,
             report_status=report_status,
         )
+        run_result["save_summary"] = counts
 
         if mode == "cases":
             run_result["cases"] = results
