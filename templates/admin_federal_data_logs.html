@@ -1,0 +1,413 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% macro json_details(value, label="View details") %}
+  {% if value %}
+    <details>
+      <summary>{{ label }}</summary>
+      <pre>{{ value | tojson(indent=2) }}</pre>
+    </details>
+  {% else %}
+    —
+  {% endif %}
+{% endmacro %}
+
+{% block federal_content %}
+  <div class="card">
+    <h2>Logs</h2>
+    <p class="small">
+      Showing the most recent {{ limit }} entries for each log type. Add
+      <code>?limit=100</code> to the URL to expand (max 200).
+    </p>
+  </div>
+
+  <div class="card">
+    <h3>Court import runs</h3>
+    {% if court_import_runs %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Status</th>
+            <th>Source</th>
+            <th>Records</th>
+            <th>Completed</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in court_import_runs %}
+            <tr>
+              <td>{{ run.id }}</td>
+              <td>{{ run.created_at or '—' }}</td>
+              <td>{{ run.status or '—' }}</td>
+              <td>{{ run.source or '—' }}</td>
+              <td>
+                fetched: {{ run.records_fetched if run.records_fetched is not none else '—' }}<br />
+                inserted: {{ run.records_inserted if run.records_inserted is not none else '—' }}<br />
+                updated: {{ run.records_updated if run.records_updated is not none else '—' }}
+              </td>
+              <td>{{ run.completed_at or '—' }}</td>
+              <td>{{ json_details(run.details) }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No court import runs logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>PACER explore runs</h3>
+    {% if pacer_explore_runs %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Created by</th>
+            <th>Mode</th>
+            <th>Court</th>
+            <th>Date range</th>
+            <th>Pages fetched</th>
+            <th>Error summary</th>
+            <th>Request</th>
+            <th>Receipts</th>
+            <th>Observed fields</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in pacer_explore_runs %}
+            <tr>
+              <td>{{ run.id }}</td>
+              <td>{{ run.created_at or '—' }}</td>
+              <td>{{ run.created_by or '—' }}</td>
+              <td>{{ run.mode or '—' }}</td>
+              <td>{{ run.court_id or '—' }}</td>
+              <td>
+                {{ run.date_from or '—' }} → {{ run.date_to or '—' }}
+              </td>
+              <td>{{ run.pages_fetched if run.pages_fetched is not none else '—' }}</td>
+              <td>{{ run.error_summary or '—' }}</td>
+              <td>{{ json_details(run.request_params, "Request params") }}</td>
+              <td>{{ json_details(run.receipts, "Receipts") }}</td>
+              <td>{{ json_details(run.observed_fields, "Observed fields") }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No PACER explore runs logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>PCL batch searches</h3>
+    {% if pcl_batch_searches %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Status</th>
+            <th>Court</th>
+            <th>Date range</th>
+            <th>Case types</th>
+            <th>Advanced filters</th>
+            <th>Created by</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for search in pcl_batch_searches %}
+            <tr>
+              <td>{{ search.id }}</td>
+              <td>{{ search.created_at or '—' }}</td>
+              <td>{{ search.status or '—' }}</td>
+              <td>{{ search.court_id or '—' }}</td>
+              <td>{{ search.date_filed_from or '—' }} → {{ search.date_filed_to or '—' }}</td>
+              <td>{{ search.case_types or '—' }}</td>
+              <td>{{ json_details(search.advanced_filters, "Filters") }}</td>
+              <td>{{ search.created_by or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No PCL batch searches logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>PCL batch requests</h3>
+    {% if pcl_batch_requests %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Status</th>
+            <th>Court</th>
+            <th>Date range</th>
+            <th>Case types</th>
+            <th>Last run</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for request_row in pcl_batch_requests %}
+            <tr>
+              <td>{{ request_row.id }}</td>
+              <td>{{ request_row.created_at or '—' }}</td>
+              <td>{{ request_row.status or '—' }}</td>
+              <td>{{ request_row.court_id or '—' }}</td>
+              <td>{{ request_row.date_filed_from or '—' }} → {{ request_row.date_filed_to or '—' }}</td>
+              <td>{{ request_row.case_types or '—' }}</td>
+              <td>{{ request_row.last_run_at or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No PCL batch requests logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>PCL batch segments</h3>
+    {% if pcl_batch_segments %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Batch request</th>
+            <th>Batch search</th>
+            <th>Parent segment</th>
+            <th>Status</th>
+            <th>Court</th>
+            <th>Date range</th>
+            <th>Report</th>
+            <th>Remote status</th>
+            <th>Attempts</th>
+            <th>Polling</th>
+            <th>Errors</th>
+            <th>Submitted</th>
+            <th>Completed</th>
+            <th>Next poll</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for segment in pcl_batch_segments %}
+            <tr>
+              <td>{{ segment.id }}</td>
+              <td>{{ segment.batch_request_id or '—' }}</td>
+              <td>{{ segment.batch_search_id or '—' }}</td>
+              <td>{{ segment.parent_segment_id or '—' }}</td>
+              <td>{{ segment.status or '—' }}</td>
+              <td>{{ segment.court_id or '—' }}</td>
+              <td>{{ segment.date_filed_from or '—' }} → {{ segment.date_filed_to or '—' }}</td>
+              <td>{{ segment.report_id or '—' }}</td>
+              <td>
+                {{ segment.remote_status or '—' }}<br />
+                <span class="small">{{ segment.remote_status_message or '' }}</span>
+              </td>
+              <td>
+                attempt_count: {{ segment.attempt_count if segment.attempt_count is not none else '—' }}<br />
+                attempts: {{ segment.attempts if segment.attempts is not none else '—' }}
+              </td>
+              <td>{{ segment.poll_attempts if segment.poll_attempts is not none else '—' }}</td>
+              <td>
+                {{ segment.error_message or '—' }}<br />
+                <span class="small">{{ segment.last_error or '' }}</span>
+              </td>
+              <td>{{ segment.submitted_at or '—' }}</td>
+              <td>{{ segment.completed_at or '—' }}</td>
+              <td>{{ segment.next_poll_at or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No PCL batch segments logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>PCL remote jobs</h3>
+    {% if pcl_remote_jobs %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Segment</th>
+            <th>Remote job ID</th>
+            <th>Submitted</th>
+            <th>Last polled</th>
+            <th>Status</th>
+            <th>Deleted from PACER</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in pcl_remote_jobs %}
+            <tr>
+              <td>{{ job.id }}</td>
+              <td>{{ job.segment_id or '—' }}</td>
+              <td>{{ job.remote_job_id or '—' }}</td>
+              <td>{{ job.submitted_at or '—' }}</td>
+              <td>{{ job.last_polled_at or '—' }}</td>
+              <td>{{ job.remote_status or '—' }}</td>
+              <td>{{ job.deleted_from_pacer_at or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No PCL remote jobs logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>PCL receipts</h3>
+    {% if pcl_receipts %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Segment</th>
+            <th>Remote job</th>
+            <th>Billable pages</th>
+            <th>Fee</th>
+            <th>Client code</th>
+            <th>Description</th>
+            <th>Report</th>
+            <th>Payload</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for receipt in pcl_receipts %}
+            <tr>
+              <td>{{ receipt.id }}</td>
+              <td>{{ receipt.created_at or '—' }}</td>
+              <td>{{ receipt.segment_id or '—' }}</td>
+              <td>{{ receipt.remote_job_id or '—' }}</td>
+              <td>{{ receipt.billable_pages if receipt.billable_pages is not none else '—' }}</td>
+              <td>{{ receipt.fee if receipt.fee is not none else '—' }}</td>
+              <td>{{ receipt.client_code or '—' }}</td>
+              <td>{{ receipt.description or '—' }}</td>
+              <td>{{ receipt.report_id or '—' }}</td>
+              <td>{{ json_details(receipt.raw_payload, "Payload") }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No PCL receipts logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>PCL batch receipts</h3>
+    {% if pcl_batch_receipts %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Segment</th>
+            <th>Report</th>
+            <th>Receipt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for receipt in pcl_batch_receipts %}
+            <tr>
+              <td>{{ receipt.id }}</td>
+              <td>{{ receipt.created_at or '—' }}</td>
+              <td>{{ receipt.segment_id or '—' }}</td>
+              <td>{{ receipt.report_id or '—' }}</td>
+              <td>{{ json_details(receipt.receipt_json, "Receipt") }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No PCL batch receipts logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Docket enrichment jobs</h3>
+    {% if docket_enrichment_jobs %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Updated</th>
+            <th>Case</th>
+            <th>Status</th>
+            <th>Attempts</th>
+            <th>Include docket text</th>
+            <th>Started</th>
+            <th>Finished</th>
+            <th>Last error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in docket_enrichment_jobs %}
+            <tr>
+              <td>{{ job.id }}</td>
+              <td>{{ job.created_at or '—' }}</td>
+              <td>{{ job.updated_at or '—' }}</td>
+              <td>{{ job.case_id or '—' }}</td>
+              <td>{{ job.status or '—' }}</td>
+              <td>{{ job.attempts if job.attempts is not none else '—' }}</td>
+              <td>{{ 'Yes' if job.include_docket_text else 'No' }}</td>
+              <td>{{ job.started_at or '—' }}</td>
+              <td>{{ job.finished_at or '—' }}</td>
+              <td>{{ job.last_error or '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No docket enrichment jobs logged.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Docket enrichment receipts</h3>
+    {% if docket_enrichment_receipts %}
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Created</th>
+            <th>Job</th>
+            <th>Billable pages</th>
+            <th>Fee</th>
+            <th>Description</th>
+            <th>Client code</th>
+            <th>Receipt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for receipt in docket_enrichment_receipts %}
+            <tr>
+              <td>{{ receipt.id }}</td>
+              <td>{{ receipt.created_at or '—' }}</td>
+              <td>{{ receipt.job_id or '—' }}</td>
+              <td>{{ receipt.billable_pages if receipt.billable_pages is not none else '—' }}</td>
+              <td>{{ receipt.fee if receipt.fee is not none else '—' }}</td>
+              <td>{{ receipt.description or '—' }}</td>
+              <td>{{ receipt.client_code or '—' }}</td>
+              <td>{{ json_details(receipt.receipt_json, "Receipt") }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="small">No docket enrichment receipts logged.</p>
+    {% endif %}
+  </div>
+{% endblock %}
