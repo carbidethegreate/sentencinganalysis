@@ -4571,7 +4571,207 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard/logs")
     @admin_required
     def admin_federal_data_dashboard_logs():
-        return _render_federal_data_placeholder("Logs", "logs")
+        limit_raw = (request.args.get("limit") or "50").strip()
+        try:
+            limit = int(limit_raw)
+        except ValueError:
+            limit = 50
+        limit = max(1, min(limit, 200))
+
+        court_import_runs = pcl_tables["court_import_runs"]
+        pacer_explore_runs = pcl_tables["pacer_explore_runs"]
+        pcl_batch_searches = pcl_tables["pcl_batch_searches"]
+        pcl_batch_requests = pcl_tables["pcl_batch_requests"]
+        pcl_batch_segments = pcl_tables["pcl_batch_segments"]
+        pcl_remote_jobs = pcl_tables["pcl_remote_jobs"]
+        pcl_receipts = pcl_tables["pcl_receipts"]
+        pcl_batch_receipts = pcl_tables["pcl_batch_receipts"]
+        docket_enrichment_jobs = pcl_tables["docket_enrichment_jobs"]
+        docket_enrichment_receipts = pcl_tables["docket_enrichment_receipts"]
+
+        def _format_dt(value: Any) -> Optional[str]:
+            if value is None:
+                return None
+            if hasattr(value, "isoformat"):
+                try:
+                    return value.isoformat(sep=" ", timespec="seconds")
+                except TypeError:
+                    return value.isoformat()
+            return str(value)
+
+        def _parse_json_value(value: Any) -> Any:
+            if value is None:
+                return None
+            if isinstance(value, (dict, list)):
+                return value
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except json.JSONDecodeError:
+                    return value
+            return value
+
+        def _serialize_rows(
+            rows: Sequence[Dict[str, Any]],
+            dt_fields: Sequence[str],
+            json_fields: Sequence[str],
+        ) -> List[Dict[str, Any]]:
+            serialized: List[Dict[str, Any]] = []
+            for row in rows:
+                payload = dict(row)
+                for field in dt_fields:
+                    if field in payload:
+                        payload[field] = _format_dt(payload.get(field))
+                for field in json_fields:
+                    if field in payload:
+                        payload[field] = _parse_json_value(payload.get(field))
+                serialized.append(payload)
+            return serialized
+
+        with engine.connect() as conn:
+            court_import_rows = conn.execute(
+                select(court_import_runs)
+                .order_by(court_import_runs.c.created_at.desc(), court_import_runs.c.id.desc())
+                .limit(limit)
+            ).mappings().all()
+            pacer_explore_rows = conn.execute(
+                select(pacer_explore_runs)
+                .order_by(pacer_explore_runs.c.created_at.desc(), pacer_explore_runs.c.id.desc())
+                .limit(limit)
+            ).mappings().all()
+            pcl_batch_search_rows = conn.execute(
+                select(pcl_batch_searches)
+                .order_by(pcl_batch_searches.c.created_at.desc(), pcl_batch_searches.c.id.desc())
+                .limit(limit)
+            ).mappings().all()
+            pcl_batch_request_rows = conn.execute(
+                select(pcl_batch_requests)
+                .order_by(pcl_batch_requests.c.created_at.desc(), pcl_batch_requests.c.id.desc())
+                .limit(limit)
+            ).mappings().all()
+            pcl_batch_segment_rows = conn.execute(
+                select(pcl_batch_segments)
+                .order_by(pcl_batch_segments.c.created_at.desc(), pcl_batch_segments.c.id.desc())
+                .limit(limit)
+            ).mappings().all()
+            pcl_remote_job_rows = conn.execute(
+                select(pcl_remote_jobs)
+                .order_by(pcl_remote_jobs.c.submitted_at.desc(), pcl_remote_jobs.c.id.desc())
+                .limit(limit)
+            ).mappings().all()
+            pcl_receipt_rows = conn.execute(
+                select(pcl_receipts)
+                .order_by(pcl_receipts.c.created_at.desc(), pcl_receipts.c.id.desc())
+                .limit(limit)
+            ).mappings().all()
+            pcl_batch_receipt_rows = conn.execute(
+                select(pcl_batch_receipts)
+                .order_by(
+                    pcl_batch_receipts.c.created_at.desc(),
+                    pcl_batch_receipts.c.id.desc(),
+                )
+                .limit(limit)
+            ).mappings().all()
+            docket_enrichment_job_rows = conn.execute(
+                select(docket_enrichment_jobs)
+                .order_by(
+                    docket_enrichment_jobs.c.created_at.desc(),
+                    docket_enrichment_jobs.c.id.desc(),
+                )
+                .limit(limit)
+            ).mappings().all()
+            docket_enrichment_receipt_rows = conn.execute(
+                select(docket_enrichment_receipts)
+                .order_by(
+                    docket_enrichment_receipts.c.created_at.desc(),
+                    docket_enrichment_receipts.c.id.desc(),
+                )
+                .limit(limit)
+            ).mappings().all()
+
+        court_import_runs_data = _serialize_rows(
+            court_import_rows,
+            dt_fields=["created_at", "completed_at"],
+            json_fields=["details"],
+        )
+        pacer_explore_runs_data = _serialize_rows(
+            pacer_explore_rows,
+            dt_fields=["created_at", "date_from", "date_to"],
+            json_fields=["request_params", "receipts", "observed_fields"],
+        )
+        pcl_batch_searches_data = _serialize_rows(
+            pcl_batch_search_rows,
+            dt_fields=["created_at", "updated_at", "date_filed_from", "date_filed_to"],
+            json_fields=["advanced_filters"],
+        )
+        pcl_batch_requests_data = _serialize_rows(
+            pcl_batch_request_rows,
+            dt_fields=[
+                "created_at",
+                "updated_at",
+                "date_filed_from",
+                "date_filed_to",
+                "last_run_at",
+            ],
+            json_fields=[],
+        )
+        pcl_batch_segments_data = _serialize_rows(
+            pcl_batch_segment_rows,
+            dt_fields=[
+                "created_at",
+                "updated_at",
+                "date_filed_from",
+                "date_filed_to",
+                "segment_from",
+                "segment_to",
+                "submitted_at",
+                "completed_at",
+                "next_poll_at",
+            ],
+            json_fields=[],
+        )
+        pcl_remote_jobs_data = _serialize_rows(
+            pcl_remote_job_rows,
+            dt_fields=["submitted_at", "last_polled_at", "deleted_from_pacer_at"],
+            json_fields=[],
+        )
+        pcl_receipts_data = _serialize_rows(
+            pcl_receipt_rows,
+            dt_fields=["created_at"],
+            json_fields=["raw_payload"],
+        )
+        pcl_batch_receipts_data = _serialize_rows(
+            pcl_batch_receipt_rows,
+            dt_fields=["created_at"],
+            json_fields=["receipt_json"],
+        )
+        docket_enrichment_jobs_data = _serialize_rows(
+            docket_enrichment_job_rows,
+            dt_fields=["created_at", "updated_at", "started_at", "finished_at"],
+            json_fields=[],
+        )
+        docket_enrichment_receipts_data = _serialize_rows(
+            docket_enrichment_receipt_rows,
+            dt_fields=["created_at"],
+            json_fields=["receipt_json"],
+        )
+
+        return render_template(
+            "admin_federal_data_logs.html",
+            active_page="federal_data_dashboard",
+            active_subnav="logs",
+            limit=limit,
+            court_import_runs=court_import_runs_data,
+            pacer_explore_runs=pacer_explore_runs_data,
+            pcl_batch_searches=pcl_batch_searches_data,
+            pcl_batch_requests=pcl_batch_requests_data,
+            pcl_batch_segments=pcl_batch_segments_data,
+            pcl_remote_jobs=pcl_remote_jobs_data,
+            pcl_receipts=pcl_receipts_data,
+            pcl_batch_receipts=pcl_batch_receipts_data,
+            docket_enrichment_jobs=docket_enrichment_jobs_data,
+            docket_enrichment_receipts=docket_enrichment_receipts_data,
+        )
 
     @app.get("/admin/federal-data-dashboard/health-checks")
     @admin_required
