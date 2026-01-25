@@ -1363,17 +1363,25 @@ def create_app() -> Flask:
         return parsed, warning
 
     def _extract_case_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        for key in ("cases", "caseList", "caseResults", "results", "data"):
-            value = payload.get(key)
+        if "content" in payload:
+            value = payload.get("content")
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
+            return []
+        for key in ("cases", "caseList", "caseResults", "results", "data"):
+            if key in payload and isinstance(payload.get(key), list):
+                return [item for item in payload[key] if isinstance(item, dict)]
         return []
 
     def _extract_party_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-        for key in ("parties", "partyList", "partyResults", "results", "data"):
-            value = payload.get(key)
+        if "content" in payload:
+            value = payload.get("content")
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
+            return []
+        for key in ("parties", "partyList", "partyResults", "results", "data"):
+            if key in payload and isinstance(payload.get(key), list):
+                return [item for item in payload[key] if isinstance(item, dict)]
         return []
 
     def _is_non_empty(value: Any) -> bool:
@@ -1436,7 +1444,8 @@ def create_app() -> Flask:
         court_id: str,
         date_filed_from: str,
         date_filed_to: str,
-        last_name_prefix: Optional[str],
+        last_name: Optional[str],
+        exact_name_match: Optional[bool],
         first_name: Optional[str],
         max_records: int,
         unexpected_input_keys: Sequence[str],
@@ -1466,7 +1475,8 @@ def create_app() -> Flask:
                 "court_id": court_id,
                 "date_filed_from": date_filed_from,
                 "date_filed_to": date_filed_to,
-                "last_name_prefix": last_name_prefix,
+                "last_name": last_name,
+                "exact_name_match": exact_name_match,
                 "first_name": first_name,
                 "max_records": max_records,
                 "page_size": PCL_PAGE_SIZE,
@@ -3568,7 +3578,8 @@ def create_app() -> Flask:
             "case_types": [],
         }
         party_defaults = {
-            "last_name_prefix": "",
+            "last_name": "",
+            "exact_name_match": False,
             "first_name": "",
             "date_filed_from": "",
             "date_filed_to": "",
@@ -3644,7 +3655,8 @@ def create_app() -> Flask:
             "case_types": [],
         }
         party_defaults = {
-            "last_name_prefix": "",
+            "last_name": "",
+            "exact_name_match": False,
             "first_name": "",
             "date_filed_from": "",
             "date_filed_to": "",
@@ -3666,8 +3678,20 @@ def create_app() -> Flask:
                 case_values["max_records"]
             )
         else:
+            raw_exact_name_match = ui_inputs.get("exact_name_match")
+            exact_name_match = False
+            if isinstance(raw_exact_name_match, bool):
+                exact_name_match = raw_exact_name_match
+            elif raw_exact_name_match is not None:
+                exact_name_match = str(raw_exact_name_match).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
             party_values = {
-                "last_name_prefix": ui_inputs.get("last_name_prefix", ""),
+                "last_name": ui_inputs.get("last_name", ""),
+                "exact_name_match": exact_name_match,
                 "first_name": ui_inputs.get("first_name", ""),
                 "date_filed_from": ui_inputs.get("date_filed_from", ""),
                 "date_filed_to": ui_inputs.get("date_filed_to", ""),
@@ -3756,7 +3780,8 @@ def create_app() -> Flask:
                     "date_filed_from", ""
                 ),
                 date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
-                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                last_name=party_values.get("last_name") if party_values else None,
+                exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
                 unexpected_input_keys=unexpected_input_keys,
@@ -3793,7 +3818,8 @@ def create_app() -> Flask:
                 request_params.update(
                     {
                         "court_id": party_values["court_id"],
-                        "last_name_prefix": party_values["last_name_prefix"],
+                        "last_name": party_values["last_name"],
+                        "exact_name_match": party_values["exact_name_match"],
                         "first_name": party_values["first_name"],
                         "date_filed_from": party_values["date_filed_from"],
                         "date_filed_to": party_values["date_filed_to"],
@@ -3824,7 +3850,8 @@ def create_app() -> Flask:
                     "date_filed_from", ""
                 ),
                 date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
-                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                last_name=party_values.get("last_name") if party_values else None,
+                exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
                 unexpected_input_keys=unexpected_input_keys,
@@ -3875,7 +3902,8 @@ def create_app() -> Flask:
                     "date_filed_from", ""
                 ),
                 date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
-                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                last_name=party_values.get("last_name") if party_values else None,
+                exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
                 unexpected_input_keys=unexpected_input_keys,
@@ -3923,7 +3951,8 @@ def create_app() -> Flask:
                     "date_filed_from", ""
                 ),
                 date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
-                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                last_name=party_values.get("last_name") if party_values else None,
+                exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
                 unexpected_input_keys=unexpected_input_keys,
@@ -3977,8 +4006,8 @@ def create_app() -> Flask:
         else:
             if party_values["court_id"] and party_values["court_id"] not in court_ids:
                 run_result["errors"].append("Select a valid court from the list.")
-            if not party_values["last_name_prefix"]:
-                run_result["errors"].append("Last name prefix is required.")
+            if not party_values["last_name"]:
+                run_result["errors"].append("Last name is required.")
             date_from = _parse_iso_date(party_values["date_filed_from"])
             date_to = _parse_iso_date(party_values["date_filed_to"])
             if party_values["date_filed_from"] or party_values["date_filed_to"]:
@@ -4050,7 +4079,8 @@ def create_app() -> Flask:
                 date_filed_to=(case_values or party_values or {}).get(
                     "date_filed_to", ""
                 ),
-                last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+                last_name=party_values.get("last_name") if party_values else None,
+                exact_name_match=party_values.get("exact_name_match") if party_values else None,
                 first_name=party_values.get("first_name") if party_values else None,
                 max_records=max_records,
                 unexpected_input_keys=unexpected_input_keys,
@@ -4088,7 +4118,8 @@ def create_app() -> Flask:
                 request_params.update(
                     {
                         "court_id": party_values["court_id"],
-                        "last_name_prefix": party_values["last_name_prefix"],
+                        "last_name": party_values["last_name"],
+                        "exact_name_match": party_values["exact_name_match"],
                         "first_name": party_values["first_name"],
                         "date_filed_from": party_values["date_filed_from"],
                         "date_filed_to": party_values["date_filed_to"],
@@ -4123,9 +4154,9 @@ def create_app() -> Flask:
             )
         else:
             app.logger.info(
-                "PACER explore run mode=parties court=%s last_name_prefix=%s pages=%s",
+                "PACER explore run mode=parties court=%s last_name=%s pages=%s",
                 party_values["court_id"],
-                party_values["last_name_prefix"],
+                party_values["last_name"],
                 pages_to_fetch,
             )
 
@@ -4181,7 +4212,8 @@ def create_app() -> Flask:
                 else:
                     request_summary = {
                         "courtId": request_body.get("courtId"),
-                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "lastName": request_body.get("lastName"),
+                        "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
@@ -4214,7 +4246,8 @@ def create_app() -> Flask:
                 else:
                     request_summary = {
                         "courtId": request_body.get("courtId"),
-                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "lastName": request_body.get("lastName"),
+                        "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
@@ -4279,7 +4312,8 @@ def create_app() -> Flask:
                 else:
                     request_summary = {
                         "courtId": request_body.get("courtId"),
-                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "lastName": request_body.get("lastName"),
+                        "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
@@ -4313,7 +4347,8 @@ def create_app() -> Flask:
                 else:
                     request_summary = {
                         "courtId": request_body.get("courtId"),
-                        "lastNamePrefix": request_body.get("lastNamePrefix"),
+                        "lastName": request_body.get("lastName"),
+                        "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "dateFiledFrom": request_body.get("dateFiledFrom"),
                         "dateFiledTo": request_body.get("dateFiledTo"),
@@ -4406,7 +4441,8 @@ def create_app() -> Flask:
             court_id=(case_values or party_values or {}).get("court_id", ""),
             date_filed_from=(case_values or party_values or {}).get("date_filed_from", ""),
             date_filed_to=(case_values or party_values or {}).get("date_filed_to", ""),
-            last_name_prefix=party_values.get("last_name_prefix") if party_values else None,
+            last_name=party_values.get("last_name") if party_values else None,
+            exact_name_match=party_values.get("exact_name_match") if party_values else None,
             first_name=party_values.get("first_name") if party_values else None,
             max_records=max_records,
             unexpected_input_keys=unexpected_input_keys,
@@ -4460,7 +4496,8 @@ def create_app() -> Flask:
             request_params.update(
                 {
                     "court_id": party_values["court_id"],
-                    "last_name_prefix": party_values["last_name_prefix"],
+                    "last_name": party_values["last_name"],
+                    "exact_name_match": party_values["exact_name_match"],
                     "first_name": party_values["first_name"],
                     "date_filed_from": party_values["date_filed_from"],
                     "date_filed_to": party_values["date_filed_to"],

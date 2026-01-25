@@ -159,9 +159,13 @@
 
         <div class="grid two">
           <div>
-            <label for="party-last-name">Last name prefix</label>
-            <input id="party-last-name" name="last_name_prefix" type="text" value="{{ party_values.last_name_prefix if party_values else '' }}" required>
-            <p class="small">Required. Example: <code>doe</code>.</p>
+            <label for="party-last-name">Last name</label>
+            <input id="party-last-name" name="last_name" type="text" value="{{ party_values.last_name if party_values else '' }}" required>
+            <p class="small">Required. Defaults to a “starts with” search.</p>
+            <label class="small">
+              <input type="checkbox" name="exact_name_match" value="true" {% if party_values and party_values.exact_name_match %}checked{% endif %}>
+              Exact name match
+            </label>
           </div>
           <div>
             <label for="party-first-name">First name (optional)</label>

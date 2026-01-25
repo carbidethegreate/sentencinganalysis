@@ -22,7 +22,13 @@
           <div><dt>Case number</dt><dd>{{ case_detail.case_number }}</dd></div>
           <div><dt>Case number full</dt><dd>{{ case_detail.case_number_full or "—" }}</dd></div>
           <div><dt>Date filed</dt><dd>{{ case_detail.date_filed.isoformat() if case_detail.date_filed else "—" }}</dd></div>
-          <div><dt>Date closed</dt><dd>{{ case_detail.date_closed.isoformat() if case_detail.date_closed else "—" }}</dd></div>
+          <div>
+            <dt>Date closed</dt>
+            <dd>
+              {% set closed_date = case_detail.effective_date_closed or case_detail.date_closed %}
+              {{ closed_date.isoformat() if closed_date else "—" }}
+            </dd>
+          </div>
           <div><dt>Judge last name</dt><dd>{{ case_detail.judge_last_name or "—" }}</dd></div>
           <div><dt>Record hash</dt><dd class="pcl-mono">{{ case_detail.record_hash or "—" }}</dd></div>
           <div><dt>Last updated</dt><dd>{{ case_detail.updated_at.isoformat() if case_detail.updated_at else "—" }}</dd></div>

@@ -472,8 +472,8 @@ class PclBatchWorker:
     def _build_payload(self, segment: Dict[str, Any]) -> Dict[str, Any]:
         case_types = json.loads(segment["case_types"])
         payload = {
-            "courtId": segment["court_id"],
-            "caseTypes": case_types,
+            "courtId": [segment["court_id"]],
+            "caseType": case_types,
             "dateFiledFrom": segment["date_filed_from"].isoformat(),
             "dateFiledTo": segment["date_filed_to"].isoformat(),
         }
@@ -498,11 +498,15 @@ class PclBatchWorker:
 
 
 def _extract_case_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    for key in ("cases", "caseList", "caseResults", "results", "data"):
-        value = payload.get(key)
+    if "content" in payload:
+        value = payload.get("content")
         if isinstance(value, list):
             return value
-    if isinstance(payload.get("case"), list):
+        return []
+    for key in ("cases", "caseList", "caseResults", "results", "data"):
+        if key in payload and isinstance(payload.get(key), list):
+            return payload[key]
+    if "case" in payload and isinstance(payload.get("case"), list):
         return payload["case"]
     return []
 
@@ -549,7 +553,12 @@ def _normalize_case_record(record: Dict[str, Any], default_court_id: str) -> Dic
     effective_date_closed = _parse_date(
         record.get("effectiveDateClosed") or record.get("effective_date_closed")
     )
-    case_office, case_year, _ = _parse_case_number_parts(case_number_full)
+    case_year = record.get("caseYear") or record.get("case_year")
+    case_office = record.get("caseOffice") or record.get("case_office")
+    if not case_year or not case_office:
+        parsed_office, parsed_year, _ = _parse_case_number_parts(case_number_full)
+        case_office = case_office or parsed_office
+        case_year = case_year or parsed_year
     judge_last_name = _normalize_judge_last_name(
         record.get("judgeLastName")
         or record.get("judge_last_name")
@@ -568,8 +577,8 @@ def _normalize_case_record(record: Dict[str, Any], default_court_id: str) -> Dic
         "short_title": short_title,
         "case_title": case_title,
         "case_link": case_link,
-        "case_year": case_year,
-        "case_office": case_office,
+        "case_year": str(case_year) if case_year is not None else None,
+        "case_office": str(case_office) if case_office is not None else None,
         "judge_last_name": judge_last_name,
         "case_id": str(case_id) if case_id else None,
         "source_last_seen_at": datetime.utcnow(),
@@ -585,7 +594,10 @@ def _parse_case_number_parts(case_number: Any) -> Tuple[Optional[str], Optional[
     cleaned = case_number.strip()
     if not cleaned:
         return None, None, None
-    match = re.match(r"^(?P<office>\\d+):(?P<year>\\d{2,4})-[a-z]+-(?P<number>\\d+)", cleaned)
+    match = re.match(
+        r"^(?P<office>\d+):(?P<year>\d{2,4})-[A-Za-z]+-(?P<number>\d+)",
+        cleaned,
+    )
     if not match:
         return None, None, None
     return match.group("office"), match.group("year"), match.group("number")

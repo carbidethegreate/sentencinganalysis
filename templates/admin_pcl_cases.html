@@ -99,7 +99,10 @@
             </div>
             <div>
               <dt>Date closed</dt>
-              <dd>{{ case.date_closed.isoformat() if case.date_closed else "—" }}</dd>
+              <dd>
+                {% set closed_date = case.effective_date_closed or case.date_closed %}
+                {{ closed_date.isoformat() if closed_date else "—" }}
+              </dd>
             </div>
             <div>
               <dt>Court</dt>

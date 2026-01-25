@@ -200,7 +200,7 @@ class AdminPacerExploreTests(unittest.TestCase):
     def test_post_run_allows_matching_environment(self):
         self._authorize_pacer()
         payload = {
-            "cases": [],
+            "content": [],
             "receipt": {"billablePages": 0},
             "pageInfo": {"page": 1, "totalPages": 1, "totalRecords": 0},
         }
@@ -221,7 +221,7 @@ class AdminPacerExploreTests(unittest.TestCase):
     def test_post_run_accepts_known_court_id(self):
         self._authorize_pacer()
         payload = {
-            "cases": [],
+            "content": [],
             "receipt": {"billablePages": 0},
             "pageInfo": {"page": 1, "totalPages": 1, "totalRecords": 0},
         }
@@ -235,7 +235,7 @@ class AdminPacerExploreTests(unittest.TestCase):
     def test_post_run_success_shows_results_and_observed_fields(self):
         self._authorize_pacer()
         payload = {
-            "cases": [
+            "content": [
                 {
                     "caseNumber": "1:24-cr-00001",
                     "caseType": "cr",
@@ -286,7 +286,7 @@ class AdminPacerExploreTests(unittest.TestCase):
             captured["payload"] = payload
             return PclJsonResponse(
                 status_code=200,
-                payload={"cases": [], "pageInfo": {"page": 0}},
+                payload={"content": [], "pageInfo": {"page": 0}},
                 raw_body=b"{}",
             )
 
@@ -304,7 +304,7 @@ class AdminPacerExploreTests(unittest.TestCase):
             pages.append(page)
             return PclJsonResponse(
                 status_code=200,
-                payload={"cases": [], "pageInfo": {"page": page}},
+                payload={"content": [], "pageInfo": {"page": page}},
                 raw_body=b"{}",
             )
 
@@ -377,7 +377,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         self._authorize_pacer()
         fake_response = PclJsonResponse(
             status_code=200,
-            payload={"cases": [], "pageInfo": {"page": 0}},
+            payload={"content": [], "pageInfo": {"page": 0}},
             raw_body=b"{}",
         )
         with patch.object(self.app.pcl_client, "immediate_case_search", return_value=fake_response):
@@ -391,7 +391,8 @@ class AdminPacerExploreTests(unittest.TestCase):
     def test_party_builder_and_validation_enforce_allowlist(self):
         payload = build_party_search_payload(
             {
-                "last_name_prefix": "doe",
+                "last_name": "doe",
+                "exact_name_match": "true",
                 "first_name": "jane",
                 "court_id": "akdc",
                 "date_filed_from": "2024-01-01",
@@ -413,12 +414,12 @@ class AdminPacerExploreTests(unittest.TestCase):
         valid, invalid_keys, missing_keys = validate_pcl_payload("parties", invalid_payload)
         self.assertFalse(valid)
         self.assertEqual(invalid_keys, [])
-        self.assertIn("lastNamePrefix", missing_keys)
+        self.assertIn("lastName", missing_keys)
 
     def test_party_mode_renders_results_and_nested_fields(self):
         self._authorize_pacer()
         payload = {
-            "parties": [
+            "content": [
                 {
                     "lastName": "Doe",
                     "firstName": "Jane",
@@ -438,7 +439,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         with patch.object(self.app.pcl_client, "immediate_party_search", return_value=fake_response):
             response = self._post_run(
                 mode="parties",
-                last_name_prefix="doe",
+                last_name="doe",
                 first_name="jane",
                 court_id="akdc",
             )
