@@ -1,4 +1,5 @@
 import csv
+import io
 import json
 import hmac
 import math
@@ -3195,18 +3196,18 @@ def create_app() -> Flask:
     def admin_home():
         return render_template("admin_home.html")
 
+    def _is_system_schema(schema_name: str) -> bool:
+        if engine.dialect.name == "postgresql":
+            return schema_name in {"information_schema", "pg_catalog"}
+        if engine.dialect.name == "sqlite":
+            return schema_name.startswith("sqlite")
+        return False
+
     @app.get("/admin/database-dashboard")
     @admin_required
     def admin_database_dashboard():
         inspector = inspect(engine)
         schema_names = sorted(inspector.get_schema_names())
-
-        def _is_system_schema(schema_name: str) -> bool:
-            if engine.dialect.name == "postgresql":
-                return schema_name in {"information_schema", "pg_catalog"}
-            if engine.dialect.name == "sqlite":
-                return schema_name.startswith("sqlite")
-            return False
 
         schemas: List[Dict[str, Any]] = []
         schema_table_map: Dict[str, List[str]] = {}
@@ -3339,6 +3340,70 @@ def create_app() -> Flask:
             column_preview_error=column_preview_error,
             selected_table_columns=selected_table_columns,
         )
+
+    @app.get("/admin/database-dashboard/export")
+    @admin_required
+    def admin_database_dashboard_export():
+        inspector = inspect(engine)
+        schema = request.args.get("schema")
+        table = request.args.get("table")
+        if not schema or not table:
+            abort(400)
+        if _is_system_schema(schema):
+            abort(404)
+        table_names = inspector.get_table_names(schema=schema)
+        if table not in table_names:
+            abort(404)
+        available_columns = [column["name"] for column in inspector.get_columns(table, schema=schema)]
+        requested_columns = request.args.getlist("columns")
+        if not requested_columns:
+            columns_param = request.args.get("columns")
+            if columns_param:
+                requested_columns = [
+                    name.strip() for name in columns_param.split(",") if name.strip()
+                ]
+        selected_columns = (
+            [column for column in requested_columns if column in available_columns]
+            if requested_columns
+            else available_columns
+        )
+        if not selected_columns:
+            abort(400)
+        export_limit = request.args.get("limit", "1000")
+        try:
+            export_limit_value = int(export_limit)
+        except ValueError:
+            export_limit_value = 1000
+        export_limit_value = max(1, min(export_limit_value, 5000))
+
+        preparer = engine.dialect.identifier_preparer
+        schema_identifier = preparer.quote(schema)
+        table_identifier = preparer.quote(table)
+        column_identifiers = ", ".join(preparer.quote(column) for column in selected_columns)
+        full_table_identifier = f"{schema_identifier}.{table_identifier}"
+        try:
+            with engine.connect() as connection:
+                result = connection.execute(
+                    sa_text(
+                        f"SELECT {column_identifiers} FROM {full_table_identifier} LIMIT :limit"
+                    ),
+                    {"limit": export_limit_value},
+                )
+                rows = [row._mapping for row in result]
+        except SQLAlchemyError as exc:
+            abort(500, description=str(exc))
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(selected_columns)
+        for row in rows:
+            writer.writerow([row.get(column) for column in selected_columns])
+
+        filename = f"{schema}.{table}.csv"
+        response = make_response(output.getvalue())
+        response.headers["Content-Type"] = "text/csv"
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
 
     @app.get("/admin/federal-data-dashboard")
     @admin_required
