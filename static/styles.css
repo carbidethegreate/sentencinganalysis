@@ -1044,6 +1044,17 @@ button.danger {
   flex-direction: column;
   gap: 16px;
   padding: 16px;
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+}
+
+.database-explorer__nav-header {
+  position: sticky;
+  top: 0;
+  margin: -16px -16px 0;
+  padding: 16px 16px 12px;
+  background: rgba(242, 242, 242, 0.95);
+  z-index: 1;
 }
 
 .database-explorer__nav-header h2 {
