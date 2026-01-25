@@ -265,6 +265,11 @@
           </script>
         {% endif %}
         <div class="pacer-action-grid">
+          <a class="pacer-action-tile" href="{{ url_for('admin_pacer_explore') }}">
+            <span class="pacer-action-tile__title">Immediate Search</span>
+            <span class="pacer-action-tile__desc">Run live Case Locator searches and review results instantly.</span>
+            <span class="pacer-action-tile__cta">Open immediate search →</span>
+          </a>
           <a class="pacer-action-tile" href="{{ url_for('admin_federal_data_dashboard_pcl_batch_search') }}">
             <span class="pacer-action-tile__title">PCL Batch Search</span>
             <span class="pacer-action-tile__desc">Run bulk Case Locator searches with queue visibility.</span>
