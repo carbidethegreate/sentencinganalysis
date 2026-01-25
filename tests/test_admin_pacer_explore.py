@@ -255,7 +255,7 @@ class AdminPacerExploreTests(unittest.TestCase):
         }
         fake_response = PclJsonResponse(status_code=200, payload=payload, raw_body=b"{}")
         with patch.object(self.app.pcl_client, "immediate_case_search", return_value=fake_response) as mock_search:
-            response = self._post_run(court_id="vi")
+            response = self._post_run(court_id="VI")
         html = response.data.decode("utf-8")
         self.assertIn("Run complete", html)
         mock_search.assert_called()

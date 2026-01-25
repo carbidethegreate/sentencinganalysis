@@ -91,7 +91,7 @@ class AdminPclBatchSearchTests(unittest.TestCase):
             "/admin/federal-data-dashboard/pcl-batch-search/create",
             data={
                 "csrf_token": "csrf-token",
-                "court_id": "vi",
+                "court_id": "VI",
                 "date_filed_from": "2024-01-01",
                 "date_filed_to": "2024-01-31",
                 "case_types": "cr",

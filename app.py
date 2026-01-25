@@ -3329,6 +3329,7 @@ def create_app() -> Flask:
             request.form.to_dict(flat=False),
             multi_keys={"case_types"},
         )
+        ui_inputs["court_id"] = (ui_inputs.get("court_id") or "").strip().lower()
         unexpected_input_keys = validate_ui_inputs(mode, ui_inputs)
         if unexpected_input_keys:
             app.logger.info(
@@ -4635,7 +4636,7 @@ def create_app() -> Flask:
     @admin_required
     def admin_federal_data_dashboard_pcl_batch_search_create():
         require_csrf()
-        court_id = (request.form.get("court_id") or "").strip()
+        court_id = (request.form.get("court_id") or "").strip().lower()
         date_from = (request.form.get("date_filed_from") or "").strip()
         date_to = (request.form.get("date_filed_to") or "").strip()
         case_types = request.form.getlist("case_types")
