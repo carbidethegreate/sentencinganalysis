@@ -332,8 +332,8 @@ def build_database_url() -> str:
         return _normalize_database_url(url)
 
     # Fall back to discrete parts if present.
-    host = _first_env_or_secret_file("Hostname", "HOSTNAME")
-    port = _first_env_or_secret_file("Port", "PORT")
+    host = _first_env_or_secret_file("Hostname", "DB_HOST")
+    port = _first_env_or_secret_file("Port", "DB_PORT")
     dbname = _first_env_or_secret_file("Database", "DB_NAME")
     user = _first_env_or_secret_file("Username", "DB_USER")
     password = _first_env_or_secret_file("Password", "DB_PASSWORD")
