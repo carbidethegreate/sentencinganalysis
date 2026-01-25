@@ -4,7 +4,7 @@ from datetime import datetime
 from unittest.mock import patch
 import urllib.error
 
-from pacer_http import PacerHttpClient, TokenExpired
+from pacer_http import PacerEnvironmentMismatch, PacerHttpClient, TokenExpired
 from pacer_tokens import InMemoryTokenBackend, PacerTokenStore
 
 
@@ -68,6 +68,45 @@ class PacerHttpClientTests(unittest.TestCase):
         with patch("pacer_http.urllib.request.urlopen", side_effect=fake_urlopen):
             with self.assertRaises(TokenExpired):
                 client.request("GET", "https://example.test/pcl")
+
+    def test_missing_token_blocks_without_http(self):
+        session = {"pacer_session_key": "session-1"}
+        store = PacerTokenStore(InMemoryTokenBackend(), session_accessor=lambda: session)
+        client = PacerHttpClient(store)
+
+        with patch("pacer_http.urllib.request.urlopen") as mock_urlopen:
+            with self.assertRaises(TokenExpired):
+                client.request("GET", "https://example.test/pcl")
+        mock_urlopen.assert_not_called()
+
+    def test_env_mismatch_blocks_without_http(self):
+        session = {"pacer_session_key": "session-1"}
+        store = PacerTokenStore(InMemoryTokenBackend(), session_accessor=lambda: session)
+        store.save_token("initial-token", obtained_at=datetime.utcnow())
+        client = PacerHttpClient(store, env_mismatch_reason="Mismatch")
+
+        with patch("pacer_http.urllib.request.urlopen") as mock_urlopen:
+            with self.assertRaises(PacerEnvironmentMismatch):
+                client.request("GET", "https://example.test/pcl")
+        mock_urlopen.assert_not_called()
+
+    def test_request_includes_next_gen_header(self):
+        session = {"pacer_session_key": "session-1"}
+        store = PacerTokenStore(InMemoryTokenBackend(), session_accessor=lambda: session)
+        store.save_token("initial-token", obtained_at=datetime.utcnow())
+        client = PacerHttpClient(store)
+
+        captured = {}
+
+        def fake_urlopen(request, timeout=30):
+            captured["headers"] = dict(request.header_items())
+            return DummyResponse(b"ok")
+
+        with patch("pacer_http.urllib.request.urlopen", side_effect=fake_urlopen):
+            client.request("GET", "https://example.test/pcl")
+
+        headers = {key.lower(): value for key, value in captured["headers"].items()}
+        self.assertEqual(headers.get("x-next-gen-cso"), "initial-token")
 
 
 if __name__ == "__main__":

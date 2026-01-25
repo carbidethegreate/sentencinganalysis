@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 from sqlalchemy import Table, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from pacer_http import TokenExpired
+from pacer_http import PacerEnvironmentMismatch, TokenExpired
 from pcl_client import PclApiError, PclClient
 
 CRIMINAL_CASE_TYPES = {"cr", "crim", "ncrim", "dcrim"}
@@ -193,6 +193,9 @@ class PclBatchWorker:
         payload = self._build_payload(segment)
         try:
             response = self._client.start_case_download(payload)
+        except PacerEnvironmentMismatch as exc:
+            self._mark_failed(segment, str(exc))
+            return segment
         except TokenExpired:
             self._mark_needs_reauth(segment)
             return segment
@@ -225,6 +228,9 @@ class PclBatchWorker:
 
         try:
             status_payload = self._client.get_case_download_status(report_id)
+        except PacerEnvironmentMismatch as exc:
+            self._handle_status_error(segment, str(exc))
+            return
         except TokenExpired:
             self._mark_needs_reauth(segment)
             return

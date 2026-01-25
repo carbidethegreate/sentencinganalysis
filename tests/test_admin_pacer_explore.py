@@ -199,6 +199,20 @@ class AdminPacerExploreTests(unittest.TestCase):
         self.assertIn("Re-authorize in the correct environment", html)
         mock_search.assert_not_called()
 
+    def test_post_run_blocks_when_search_disabled(self):
+        self._authorize_pacer()
+        with self.client.session_transaction() as sess:
+            sess["pacer_search_disabled"] = True
+            sess["pacer_search_disabled_reason"] = (
+                "PACER authenticated, but searching is disabled."
+            )
+        with patch.object(self.app.pcl_client, "immediate_case_search") as mock_search:
+            response = self._post_run()
+        html = response.data.decode("utf-8")
+        self.assertIn("searching is disabled", html)
+        self.assertIn("client code", html)
+        mock_search.assert_not_called()
+
     def test_post_run_allows_matching_environment(self):
         self._authorize_pacer()
         payload = {
