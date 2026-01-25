@@ -22,15 +22,6 @@ projects:
         sync: false
       region: oregon
       autoDeployTrigger: commit
-    - type: web
-      name: sentencinganalysis_node
-      runtime: node
-      repo: https://github.com/carbidethegreate/sentencinganalysis
-      plan: starter
-      region: oregon
-      buildCommand: yarn
-      startCommand: yarn start
-      autoDeployTrigger: commit
     - type: worker
       name: sentencinganalysis
       runtime: docker
