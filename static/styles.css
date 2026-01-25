@@ -1041,7 +1041,8 @@ button.danger {
 
 .database-explorer {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(0, 2.2fr);
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;
   gap: 18px;
   align-items: start;
 }
@@ -1476,10 +1477,6 @@ button.danger {
 }
 
 @media (max-width: 1100px) {
-  .database-explorer {
-    grid-template-columns: 1fr;
-  }
-
   .database-toolbar {
     grid-template-columns: 1fr;
   }
