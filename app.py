@@ -25,6 +25,7 @@ from flask import (
     flash,
     g,
     jsonify,
+    make_response,
     redirect,
     render_template,
     request,
@@ -4630,21 +4631,15 @@ def create_app() -> Flask:
             page_title=page_title,
         )
 
-    @app.get("/admin/federal-data-dashboard/case-cards")
-    @admin_required
-    def admin_federal_data_dashboard_case_cards():
-        return _render_federal_data_placeholder("Case Cards", "case_cards")
-
-    @app.get("/admin/federal-data-dashboard/logs")
-    @admin_required
-    def admin_federal_data_dashboard_logs():
+    def _parse_federal_logs_limit() -> int:
         limit_raw = (request.args.get("limit") or "50").strip()
         try:
             limit = int(limit_raw)
         except ValueError:
             limit = 50
-        limit = max(1, min(limit, 200))
+        return max(1, min(limit, 200))
 
+    def _get_federal_data_logs(limit: int) -> Dict[str, Any]:
         court_import_runs = pcl_tables["court_import_runs"]
         pacer_explore_runs = pcl_tables["pacer_explore_runs"]
         pcl_batch_searches = pcl_tables["pcl_batch_searches"]
@@ -4696,65 +4691,123 @@ def create_app() -> Flask:
             return serialized
 
         with engine.connect() as conn:
-            court_import_rows = conn.execute(
-                select(court_import_runs)
-                .order_by(court_import_runs.c.created_at.desc(), court_import_runs.c.id.desc())
-                .limit(limit)
-            ).mappings().all()
-            pacer_explore_rows = conn.execute(
-                select(pacer_explore_runs)
-                .order_by(pacer_explore_runs.c.created_at.desc(), pacer_explore_runs.c.id.desc())
-                .limit(limit)
-            ).mappings().all()
-            pcl_batch_search_rows = conn.execute(
-                select(pcl_batch_searches)
-                .order_by(pcl_batch_searches.c.created_at.desc(), pcl_batch_searches.c.id.desc())
-                .limit(limit)
-            ).mappings().all()
-            pcl_batch_request_rows = conn.execute(
-                select(pcl_batch_requests)
-                .order_by(pcl_batch_requests.c.created_at.desc(), pcl_batch_requests.c.id.desc())
-                .limit(limit)
-            ).mappings().all()
-            pcl_batch_segment_rows = conn.execute(
-                select(pcl_batch_segments)
-                .order_by(pcl_batch_segments.c.created_at.desc(), pcl_batch_segments.c.id.desc())
-                .limit(limit)
-            ).mappings().all()
-            pcl_remote_job_rows = conn.execute(
-                select(pcl_remote_jobs)
-                .order_by(pcl_remote_jobs.c.submitted_at.desc(), pcl_remote_jobs.c.id.desc())
-                .limit(limit)
-            ).mappings().all()
-            pcl_receipt_rows = conn.execute(
-                select(pcl_receipts)
-                .order_by(pcl_receipts.c.created_at.desc(), pcl_receipts.c.id.desc())
-                .limit(limit)
-            ).mappings().all()
-            pcl_batch_receipt_rows = conn.execute(
-                select(pcl_batch_receipts)
-                .order_by(
-                    pcl_batch_receipts.c.created_at.desc(),
-                    pcl_batch_receipts.c.id.desc(),
+            court_import_rows = (
+                conn.execute(
+                    select(court_import_runs)
+                    .order_by(
+                        court_import_runs.c.created_at.desc(),
+                        court_import_runs.c.id.desc(),
+                    )
+                    .limit(limit)
                 )
-                .limit(limit)
-            ).mappings().all()
-            docket_enrichment_job_rows = conn.execute(
-                select(docket_enrichment_jobs)
-                .order_by(
-                    docket_enrichment_jobs.c.created_at.desc(),
-                    docket_enrichment_jobs.c.id.desc(),
+                .mappings()
+                .all()
+            )
+            pacer_explore_rows = (
+                conn.execute(
+                    select(pacer_explore_runs)
+                    .order_by(
+                        pacer_explore_runs.c.created_at.desc(),
+                        pacer_explore_runs.c.id.desc(),
+                    )
+                    .limit(limit)
                 )
-                .limit(limit)
-            ).mappings().all()
-            docket_enrichment_receipt_rows = conn.execute(
-                select(docket_enrichment_receipts)
-                .order_by(
-                    docket_enrichment_receipts.c.created_at.desc(),
-                    docket_enrichment_receipts.c.id.desc(),
+                .mappings()
+                .all()
+            )
+            pcl_batch_search_rows = (
+                conn.execute(
+                    select(pcl_batch_searches)
+                    .order_by(
+                        pcl_batch_searches.c.created_at.desc(),
+                        pcl_batch_searches.c.id.desc(),
+                    )
+                    .limit(limit)
                 )
-                .limit(limit)
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
+            pcl_batch_request_rows = (
+                conn.execute(
+                    select(pcl_batch_requests)
+                    .order_by(
+                        pcl_batch_requests.c.created_at.desc(),
+                        pcl_batch_requests.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            pcl_batch_segment_rows = (
+                conn.execute(
+                    select(pcl_batch_segments)
+                    .order_by(
+                        pcl_batch_segments.c.created_at.desc(),
+                        pcl_batch_segments.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            pcl_remote_job_rows = (
+                conn.execute(
+                    select(pcl_remote_jobs)
+                    .order_by(
+                        pcl_remote_jobs.c.submitted_at.desc(),
+                        pcl_remote_jobs.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            pcl_receipt_rows = (
+                conn.execute(
+                    select(pcl_receipts)
+                    .order_by(pcl_receipts.c.created_at.desc(), pcl_receipts.c.id.desc())
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            pcl_batch_receipt_rows = (
+                conn.execute(
+                    select(pcl_batch_receipts)
+                    .order_by(
+                        pcl_batch_receipts.c.created_at.desc(),
+                        pcl_batch_receipts.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            docket_enrichment_job_rows = (
+                conn.execute(
+                    select(docket_enrichment_jobs)
+                    .order_by(
+                        docket_enrichment_jobs.c.created_at.desc(),
+                        docket_enrichment_jobs.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            docket_enrichment_receipt_rows = (
+                conn.execute(
+                    select(docket_enrichment_receipts)
+                    .order_by(
+                        docket_enrichment_receipts.c.created_at.desc(),
+                        docket_enrichment_receipts.c.id.desc(),
+                    )
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
 
         court_import_runs_data = _serialize_rows(
             court_import_rows,
@@ -4823,22 +4876,120 @@ def create_app() -> Flask:
             json_fields=["receipt_json"],
         )
 
+        return {
+            "limit": limit,
+            "court_import_runs": court_import_runs_data,
+            "pacer_explore_runs": pacer_explore_runs_data,
+            "pcl_batch_searches": pcl_batch_searches_data,
+            "pcl_batch_requests": pcl_batch_requests_data,
+            "pcl_batch_segments": pcl_batch_segments_data,
+            "pcl_remote_jobs": pcl_remote_jobs_data,
+            "pcl_receipts": pcl_receipts_data,
+            "pcl_batch_receipts": pcl_batch_receipts_data,
+            "docket_enrichment_jobs": docket_enrichment_jobs_data,
+            "docket_enrichment_receipts": docket_enrichment_receipts_data,
+        }
+
+    @app.get("/admin/federal-data-dashboard/case-cards")
+    @admin_required
+    def admin_federal_data_dashboard_case_cards():
+        return _render_federal_data_placeholder("Case Cards", "case_cards")
+
+    @app.get("/admin/federal-data-dashboard/logs")
+    @admin_required
+    def admin_federal_data_dashboard_logs():
+        limit = _parse_federal_logs_limit()
+        logs_payload = _get_federal_data_logs(limit)
+
         return render_template(
             "admin_federal_data_logs.html",
             active_page="federal_data_dashboard",
             active_subnav="logs",
-            limit=limit,
-            court_import_runs=court_import_runs_data,
-            pacer_explore_runs=pacer_explore_runs_data,
-            pcl_batch_searches=pcl_batch_searches_data,
-            pcl_batch_requests=pcl_batch_requests_data,
-            pcl_batch_segments=pcl_batch_segments_data,
-            pcl_remote_jobs=pcl_remote_jobs_data,
-            pcl_receipts=pcl_receipts_data,
-            pcl_batch_receipts=pcl_batch_receipts_data,
-            docket_enrichment_jobs=docket_enrichment_jobs_data,
-            docket_enrichment_receipts=docket_enrichment_receipts_data,
+            **logs_payload,
         )
+
+    @app.get("/admin/federal-data-dashboard/logs/export")
+    @admin_required
+    def admin_federal_data_dashboard_logs_export():
+        limit = _parse_federal_logs_limit()
+        logs_payload = _get_federal_data_logs(limit)
+        generated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+        filename = f"federal-data-logs-{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}.txt"
+
+        def _format_value(value: Any) -> str:
+            if value is None:
+                return "—"
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, indent=2, sort_keys=True)
+            return str(value)
+
+        def _append_field(lines: List[str], key: str, value: Any) -> None:
+            rendered = _format_value(value)
+            if "\n" in rendered:
+                lines.append(f"{key}:")
+                for line in rendered.splitlines():
+                    lines.append(f"  {line}")
+            else:
+                lines.append(f"{key}: {rendered}")
+
+        def _append_section(lines: List[str], title: str, rows: List[Dict[str, Any]]) -> None:
+            lines.append("")
+            lines.append(f"## {title} ({len(rows)} records)")
+            if not rows:
+                lines.append("No records found.")
+                return
+            for index, row in enumerate(rows, start=1):
+                lines.append("")
+                lines.append(f"Record {index}")
+                for key in sorted(row.keys()):
+                    _append_field(lines, key, row.get(key))
+
+        requested_by = "Admin"
+        if g.current_user:
+            requested_by = (
+                g.current_user.get("email")
+                or g.current_user.get("name")
+                or str(g.current_user.get("id") or "Admin")
+            )
+
+        lines = [
+            "# Federal Data Dashboard Logs Export",
+            f"Generated at: {generated_at}",
+            f"Limit per section: {limit}",
+            f"Requested by: {requested_by}",
+            "",
+            "Summary counts:",
+            f"- Court import runs: {len(logs_payload['court_import_runs'])}",
+            f"- PACER explore runs: {len(logs_payload['pacer_explore_runs'])}",
+            f"- PCL batch searches: {len(logs_payload['pcl_batch_searches'])}",
+            f"- PCL batch requests: {len(logs_payload['pcl_batch_requests'])}",
+            f"- PCL batch segments: {len(logs_payload['pcl_batch_segments'])}",
+            f"- PCL remote jobs: {len(logs_payload['pcl_remote_jobs'])}",
+            f"- PCL receipts: {len(logs_payload['pcl_receipts'])}",
+            f"- PCL batch receipts: {len(logs_payload['pcl_batch_receipts'])}",
+            f"- Docket enrichment jobs: {len(logs_payload['docket_enrichment_jobs'])}",
+            f"- Docket enrichment receipts: {len(logs_payload['docket_enrichment_receipts'])}",
+        ]
+
+        _append_section(lines, "Court import runs", logs_payload["court_import_runs"])
+        _append_section(lines, "PACER explore runs", logs_payload["pacer_explore_runs"])
+        _append_section(lines, "PCL batch searches", logs_payload["pcl_batch_searches"])
+        _append_section(lines, "PCL batch requests", logs_payload["pcl_batch_requests"])
+        _append_section(lines, "PCL batch segments", logs_payload["pcl_batch_segments"])
+        _append_section(lines, "PCL remote jobs", logs_payload["pcl_remote_jobs"])
+        _append_section(lines, "PCL receipts", logs_payload["pcl_receipts"])
+        _append_section(lines, "PCL batch receipts", logs_payload["pcl_batch_receipts"])
+        _append_section(lines, "Docket enrichment jobs", logs_payload["docket_enrichment_jobs"])
+        _append_section(
+            lines,
+            "Docket enrichment receipts",
+            logs_payload["docket_enrichment_receipts"],
+        )
+
+        response = make_response("\n".join(lines))
+        response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        return response
 
     @app.get("/admin/federal-data-dashboard/health-checks")
     @admin_required
