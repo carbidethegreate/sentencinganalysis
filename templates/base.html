@@ -32,6 +32,7 @@
 
           {% if is_admin %}
             <a href="{{ url_for('admin_federal_data_dashboard') }}" class="{% if active_page == 'federal_data_dashboard' %}active{% endif %}">Federal Data Dashboard</a>
+            <a href="{{ url_for('admin_database_dashboard') }}" class="{% if active_page == 'database_dashboard' %}active{% endif %}">Database</a>
             <a href="{{ url_for('admin_case_data_one_upload') }}">Add Data</a>
             <a href="{{ url_for('admin_case_data_one_list') }}">Case Reports</a>
           {% endif %}

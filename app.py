@@ -3194,6 +3194,73 @@ def create_app() -> Flask:
     def admin_home():
         return render_template("admin_home.html")
 
+    @app.get("/admin/database-dashboard")
+    @admin_required
+    def admin_database_dashboard():
+        inspector = inspect(engine)
+        schema_names = sorted(inspector.get_schema_names())
+
+        def _is_system_schema(schema_name: str) -> bool:
+            if engine.dialect.name == "postgresql":
+                return schema_name in {"information_schema", "pg_catalog"}
+            if engine.dialect.name == "sqlite":
+                return schema_name.startswith("sqlite")
+            return False
+
+        schemas: List[Dict[str, Any]] = []
+        total_tables = 0
+        total_columns = 0
+        total_views = 0
+
+        for schema_name in schema_names:
+            if _is_system_schema(schema_name):
+                continue
+            table_entries: List[Dict[str, Any]] = []
+            table_names = sorted(inspector.get_table_names(schema=schema_name))
+            view_names = sorted(inspector.get_view_names(schema=schema_name))
+            for table_name in table_names:
+                columns = inspector.get_columns(table_name, schema=schema_name)
+                column_entries = [
+                    {
+                        "name": column["name"],
+                        "type": str(column["type"]),
+                        "nullable": column.get("nullable", True),
+                        "default": column.get("default"),
+                    }
+                    for column in columns
+                ]
+                table_entries.append(
+                    {
+                        "name": table_name,
+                        "columns": column_entries,
+                        "column_count": len(column_entries),
+                    }
+                )
+                total_columns += len(column_entries)
+            total_tables += len(table_entries)
+            total_views += len(view_names)
+            schemas.append(
+                {
+                    "name": schema_name,
+                    "tables": table_entries,
+                    "views": view_names,
+                }
+            )
+
+        database_url = engine.url.render_as_string(hide_password=True)
+        return render_template(
+            "admin_database_dashboard.html",
+            active_page="database_dashboard",
+            database_url=database_url,
+            database_dialect=engine.dialect.name,
+            database_driver=engine.url.drivername,
+            schemas=schemas,
+            total_schemas=len(schemas),
+            total_tables=total_tables,
+            total_columns=total_columns,
+            total_views=total_views,
+        )
+
     @app.get("/admin/federal-data-dashboard")
     @admin_required
     def admin_federal_data_dashboard():

@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Database Dashboard | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="page-header database-header">
+    <div>
+      <h1>Database Explorer</h1>
+      <p class="small">
+        Review the active connection and browse schemas, tables, and columns available to admins.
+      </p>
+    </div>
+  </div>
+
+  <section class="card database-connection-card">
+    <div class="database-connection-card__header">
+      <div>
+        <h2>Active Connection</h2>
+        <p class="small">Connected via {{ database_dialect | title }}</p>
+      </div>
+      <span class="pill">{{ database_driver }}</span>
+    </div>
+    <div class="database-connection-card__body">
+      <div>
+        <p class="label">Database URL</p>
+        <code class="code-block">{{ database_url }}</code>
+      </div>
+    </div>
+  </section>
+
+  <div class="stat-grid database-stat-grid">
+    <div class="stat-card">
+      <span class="small">Schemas</span>
+      <strong>{{ total_schemas }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="small">Tables</span>
+      <strong>{{ total_tables }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="small">Columns</span>
+      <strong>{{ total_columns }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="small">Views</span>
+      <strong>{{ total_views }}</strong>
+    </div>
+  </div>
+
+  <div class="database-schema-list">
+    {% if schemas %}
+      {% for schema in schemas %}
+        <section class="card database-schema-card">
+          <div class="database-schema-card__header">
+            <div>
+              <h2>{{ schema.name }}</h2>
+              <p class="small">{{ schema.tables | length }} tables • {{ schema.views | length }} views</p>
+            </div>
+          </div>
+
+          {% if schema.tables %}
+            <div class="database-table-grid">
+              {% for table in schema.tables %}
+                <article class="database-table-card">
+                  <div class="database-table-card__header">
+                    <h3>{{ table.name }}</h3>
+                    <span class="pill">{{ table.column_count }} columns</span>
+                  </div>
+                  <ul class="database-column-list">
+                    {% for column in table.columns %}
+                      <li>
+                        <span class="database-column-name">{{ column.name }}</span>
+                        <span class="database-column-type">{{ column.type }}</span>
+                        {% if not column.nullable %}
+                          <span class="database-column-pill">Required</span>
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="small">No tables detected for this schema.</p>
+          {% endif %}
+
+          {% if schema.views %}
+            <div class="database-view-block">
+              <p class="small">Views: {{ schema.views | join(", ") }}</p>
+            </div>
+          {% endif %}
+        </section>
+      {% endfor %}
+    {% else %}
+      <div class="card">
+        <p class="small">No schemas were found for the current connection.</p>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}
