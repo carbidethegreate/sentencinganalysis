@@ -17,7 +17,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 from urllib.parse import quote_plus
 
 import requests
@@ -877,8 +888,21 @@ def create_app() -> Flask:
         label="pcl_batch_segments",
     )
 
-    def _ensure_indexes(statements: Dict[str, str], *, label: str) -> None:
+    def _ensure_indexes(
+        statements: Dict[str, str], *, label: str, required_tables: Optional[Set[str]] = None
+    ) -> None:
         try:
+            if required_tables:
+                inspector = inspect(engine)
+                existing_tables = set(inspector.get_table_names())
+                missing_tables = required_tables - existing_tables
+                if missing_tables:
+                    app.logger.warning(
+                        "Skipping %s indexes; missing tables: %s",
+                        label,
+                        ", ".join(sorted(missing_tables)),
+                    )
+                    return
             with engine.begin() as conn:
                 for statement in statements.values():
                     conn.execute(sa_text(statement))
@@ -906,6 +930,12 @@ def create_app() -> Flask:
                 "ix_sentencing_evidence_event_source": "CREATE INDEX IF NOT EXISTS ix_sentencing_evidence_event_source ON sentencing_evidence (sentencing_event_id, source_type)",
             },
             label="sentencing",
+            required_tables={
+                "judges",
+                "case_judges",
+                "sentencing_events",
+                "sentencing_evidence",
+            },
         )
 
     _ensure_indexes(
