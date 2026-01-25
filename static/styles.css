@@ -1375,7 +1375,18 @@ button.danger {
 .database-preview-table table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 0.85rem;
+}
+
+.database-preview-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.database-preview-table tbody tr:nth-child(even) {
+  background: rgba(217, 203, 186, 0.25);
 }
 
 .database-preview-table th,
@@ -1384,6 +1395,10 @@ button.danger {
   border-bottom: 1px solid rgba(140, 132, 128, 0.15);
   text-align: left;
   vertical-align: top;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .database-preview-table th {

@@ -298,7 +298,7 @@
                     {% for row in table_preview.rows %}
                       <tr>
                         {% for column in table_preview.columns %}
-                          <td>{{ row[column] }}</td>
+                          <td title="{{ row[column] }}">{{ row[column] }}</td>
                         {% endfor %}
                       </tr>
                     {% endfor %}
