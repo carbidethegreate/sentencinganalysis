@@ -141,6 +141,7 @@ class PclBatchWorker:
         poll_base_seconds: float = 5.0,
         poll_jitter_seconds: float = 2.0,
         max_poll_attempts: int = 6,
+        claim_timeout_minutes: int = 30,
     ) -> None:
         self._engine = engine
         self._tables = tables
@@ -151,6 +152,7 @@ class PclBatchWorker:
         self._poll_base_seconds = poll_base_seconds
         self._poll_jitter_seconds = poll_jitter_seconds
         self._max_poll_attempts = max_poll_attempts
+        self._claim_timeout_minutes = claim_timeout_minutes
         self._rng = random.Random()
 
     def run_once(self, max_segments: int = 1) -> int:
@@ -162,28 +164,69 @@ class PclBatchWorker:
         return processed
 
     def _load_segments(self, max_segments: int) -> List[Dict[str, Any]]:
-        segments: List[Dict[str, Any]] = []
         segment_table = self._tables["pcl_batch_segments"]
+        now = self._now()
         with self._engine.begin() as conn:
-            rows = (
-                conn.execute(
-                    select(segment_table)
-                    .where(
-                        segment_table.c.status.in_(
-                            ["queued", "submitted", "running"]
-                        )
-                    )
-                    .order_by(segment_table.c.created_at.asc())
-                    .limit(max_segments)
+            if conn.dialect.name == "postgresql":
+                stale_cutoff = now - timedelta(minutes=self._claim_timeout_minutes)
+                claimable = segment_table.c.status.in_(
+                    ["queued", "submitted", "running"]
                 )
-                .mappings()
-                .all()
+                reclaimable = (segment_table.c.status == "processing") & (
+                    segment_table.c.updated_at < stale_cutoff
+                )
+                # Use transactional claiming to prevent two workers from processing
+                # the same segment concurrently. Stale processing rows are reclaimed
+                # so a crashed worker does not leave segments stuck forever.
+                rows = (
+                    conn.execute(
+                        select(segment_table)
+                        .where(claimable | reclaimable)
+                        .order_by(segment_table.c.created_at.asc())
+                        .limit(max_segments)
+                        .with_for_update(skip_locked=True)
+                    )
+                    .mappings()
+                    .all()
+                )
+            else:
+                rows = (
+                    conn.execute(
+                        select(segment_table)
+                        .where(
+                            segment_table.c.status.in_(
+                                ["queued", "submitted", "running"]
+                            )
+                        )
+                        .order_by(segment_table.c.created_at.asc())
+                        .limit(max_segments)
+                    )
+                    .mappings()
+                    .all()
+                )
+            if not rows:
+                return []
+            segment_ids = [row["id"] for row in rows]
+            # Mark claimed rows as processing so other workers skip them outside
+            # of the current transaction.
+            conn.execute(
+                update(segment_table)
+                .where(segment_table.c.id.in_(segment_ids))
+                .values(
+                    status="processing",
+                    updated_at=now,
+                )
             )
-            segments.extend(dict(row) for row in rows)
-        return segments
+            return [dict(row) for row in rows]
 
     def _process_segment(self, segment: Dict[str, Any]) -> None:
         status = segment["status"]
+        if status == "processing":
+            if segment.get("report_id"):
+                self._poll_segment(segment)
+            else:
+                segment = self._submit_segment(segment)
+            return
         if status == "queued":
             segment = self._submit_segment(segment)
         if segment["status"] in {"submitted", "running"}:
@@ -365,35 +408,66 @@ class PclBatchWorker:
         case_table = self._tables["pcl_cases"]
         if conn.dialect.name == "postgresql":
             stmt = pg_insert(case_table).values(**normalized)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["court_id", "case_number"],
-                set_={
-                    "case_number_full": stmt.excluded.case_number_full,
-                    "case_type": stmt.excluded.case_type,
-                    "date_filed": stmt.excluded.date_filed,
-                    "date_closed": stmt.excluded.date_closed,
-                    "effective_date_closed": stmt.excluded.effective_date_closed,
-                    "short_title": stmt.excluded.short_title,
-                    "case_title": stmt.excluded.case_title,
-                    "case_link": stmt.excluded.case_link,
-                    "case_year": stmt.excluded.case_year,
-                    "case_office": stmt.excluded.case_office,
-                    "judge_last_name": stmt.excluded.judge_last_name,
-                    "case_id": stmt.excluded.case_id,
-                    "source_last_seen_at": stmt.excluded.source_last_seen_at,
-                    "record_hash": stmt.excluded.record_hash,
-                    "last_segment_id": stmt.excluded.last_segment_id,
-                    "data_json": stmt.excluded.data_json,
-                    "updated_at": datetime.utcnow(),
-                },
-            )
+            if normalized.get("case_id"):
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["court_id", "case_id"],
+                    index_where=case_table.c.case_id.isnot(None),
+                    set_={
+                        "case_number": stmt.excluded.case_number,
+                        "case_number_full": stmt.excluded.case_number_full,
+                        "case_type": stmt.excluded.case_type,
+                        "date_filed": stmt.excluded.date_filed,
+                        "date_closed": stmt.excluded.date_closed,
+                        "effective_date_closed": stmt.excluded.effective_date_closed,
+                        "short_title": stmt.excluded.short_title,
+                        "case_title": stmt.excluded.case_title,
+                        "case_link": stmt.excluded.case_link,
+                        "case_year": stmt.excluded.case_year,
+                        "case_office": stmt.excluded.case_office,
+                        "judge_last_name": stmt.excluded.judge_last_name,
+                        "source_last_seen_at": stmt.excluded.source_last_seen_at,
+                        "record_hash": stmt.excluded.record_hash,
+                        "last_segment_id": stmt.excluded.last_segment_id,
+                        "data_json": stmt.excluded.data_json,
+                        "updated_at": datetime.utcnow(),
+                    },
+                )
+            else:
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["court_id", "case_number_full"],
+                    index_where=case_table.c.case_number_full.isnot(None),
+                    set_={
+                        "case_number": stmt.excluded.case_number,
+                        "case_number_full": stmt.excluded.case_number_full,
+                        "case_type": stmt.excluded.case_type,
+                        "date_filed": stmt.excluded.date_filed,
+                        "date_closed": stmt.excluded.date_closed,
+                        "effective_date_closed": stmt.excluded.effective_date_closed,
+                        "short_title": stmt.excluded.short_title,
+                        "case_title": stmt.excluded.case_title,
+                        "case_link": stmt.excluded.case_link,
+                        "case_year": stmt.excluded.case_year,
+                        "case_office": stmt.excluded.case_office,
+                        "judge_last_name": stmt.excluded.judge_last_name,
+                        "case_id": stmt.excluded.case_id,
+                        "source_last_seen_at": stmt.excluded.source_last_seen_at,
+                        "record_hash": stmt.excluded.record_hash,
+                        "last_segment_id": stmt.excluded.last_segment_id,
+                        "data_json": stmt.excluded.data_json,
+                        "updated_at": datetime.utcnow(),
+                    },
+                )
             conn.execute(stmt)
             return
-        existing = conn.execute(
-            select(case_table.c.id).where(
-                case_table.c.court_id == normalized["court_id"],
-                case_table.c.case_number == normalized["case_number"],
+        lookup_filters = [case_table.c.court_id == normalized["court_id"]]
+        if normalized.get("case_id"):
+            lookup_filters.append(case_table.c.case_id == normalized["case_id"])
+        else:
+            lookup_filters.append(
+                case_table.c.case_number_full == normalized["case_number_full"]
             )
+        existing = conn.execute(
+            select(case_table.c.id).where(*lookup_filters)
         ).fetchone()
         if existing:
             conn.execute(
@@ -411,6 +485,8 @@ class PclBatchWorker:
                     case_year=normalized["case_year"],
                     case_office=normalized["case_office"],
                     judge_last_name=normalized["judge_last_name"],
+                    case_number=normalized["case_number"],
+                    case_number_full=normalized["case_number_full"],
                     case_id=normalized["case_id"],
                     source_last_seen_at=normalized["source_last_seen_at"],
                     record_hash=normalized["record_hash"],
@@ -465,7 +541,14 @@ class PclBatchWorker:
     def _handle_status_error(self, segment: Dict[str, Any], message: str) -> None:
         if _looks_like_too_many_results(message):
             planner = PclBatchPlanner(self._engine, self._tables)
-            planner.split_segment(segment, reason=message)
+            inserted_ids = planner.split_segment(segment, reason=message)
+            if not inserted_ids:
+                # If the segment is already at the smallest possible range,
+                # fail it to avoid an infinite retry loop.
+                self._mark_failed(
+                    segment,
+                    "Segment cannot be split further; marking failed to avoid retry loop.",
+                )
             return
         self._mark_failed(segment, message)
 
@@ -548,6 +631,8 @@ def _normalize_case_record(record: Dict[str, Any], default_court_id: str) -> Dic
         or record.get("fullCaseNumber")
         or case_number
     )
+    if isinstance(case_number_full, str) and not case_number_full.strip():
+        case_number_full = case_number
     case_id = record.get("caseId") or record.get("case_id")
     case_link = record.get("caseLink") or record.get("case_link")
     effective_date_closed = _parse_date(
