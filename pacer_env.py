@@ -101,3 +101,18 @@ def build_pacer_environment_config(
         mismatch=mismatch,
         mismatch_reason=mismatch_reason,
     )
+
+
+def validate_pacer_environment_config(
+    pacer_auth_base_url: str, pcl_base_url: str
+) -> PacerEnvironmentConfig:
+    config = build_pacer_environment_config(pacer_auth_base_url, pcl_base_url)
+    auth_host = _extract_host(pacer_auth_base_url)
+    pcl_host = _extract_host(pcl_base_url)
+    if "qa-pcl.uscourts.gov" in pcl_host and "qa-login.uscourts.gov" not in auth_host:
+        raise ValueError(_mismatch_reason(ENV_PROD, ENV_QA) or "")
+    if "pcl.uscourts.gov" in pcl_host and "pacer.login.uscourts.gov" not in auth_host:
+        raise ValueError(_mismatch_reason(ENV_QA, ENV_PROD) or "")
+    if config.mismatch and config.mismatch_reason:
+        raise ValueError(config.mismatch_reason)
+    return config

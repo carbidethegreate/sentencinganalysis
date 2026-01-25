@@ -158,37 +158,9 @@ class AdminPacerExploreTests(unittest.TestCase):
             os.environ["SECRET_KEY_PATH"] = os.path.join(tmpdir.name, ".secret_key")
             os.environ["PACER_AUTH_BASE_URL"] = "https://pacer.login.uscourts.gov"
             os.environ["PCL_BASE_URL"] = "https://qa-pcl.uscourts.gov/pcl-public-api/rest"
-            app = create_app()
-            app.testing = True
-            client = app.test_client()
-            self._seed_courts_for_app(app)
-            self._login_admin_for_client(client)
-            with client.session_transaction() as sess:
-                sess["pacer_session_key"] = "session-key"
-            app.pacer_token_store._backend.save_token(
-                "session-key",
-                PacerTokenRecord(
-                    token="server-side-token",
-                    obtained_at=datetime.utcnow(),
-                    environment="prod",
-                ),
-            )
-            with patch.object(app.pcl_client, "immediate_case_search") as mock_search:
-                response = client.post(
-                    "/admin/pacer/explore/run",
-                    data={
-                        "csrf_token": "csrf-token",
-                        "mode": "cases",
-                        "court_id": "akdc",
-                        "date_filed_from": "2024-01-01",
-                        "date_filed_to": "2024-01-31",
-                        "max_records": "54",
-                    },
-                )
-            html = response.data.decode("utf-8")
-            self.assertIn("PACER environments mismatch", html)
-            self.assertIn("PACER_AUTH_BASE_URL", html)
-            mock_search.assert_not_called()
+            with self.assertRaises(ValueError) as ctx:
+                create_app()
+            self.assertIn("PACER_AUTH_BASE_URL=https://qa-login.uscourts.gov", str(ctx.exception))
         finally:
             tmpdir.cleanup()
             os.environ.clear()

@@ -49,6 +49,65 @@ class PacerHttpClientTests(unittest.TestCase):
         self.assertIsNotNone(refreshed)
         self.assertEqual(refreshed.token, "refreshed-token")
 
+    def test_401_reauth_retries_once(self):
+        session = {"pacer_session_key": "session-1"}
+        store = PacerTokenStore(InMemoryTokenBackend(), session_accessor=lambda: session)
+        store.save_token("initial-token", obtained_at=datetime.utcnow())
+        refresh_calls = []
+
+        def refresher():
+            refresh_calls.append("refresh")
+            return store.save_token("new-token", obtained_at=datetime.utcnow())
+
+        client = PacerHttpClient(store, token_refresher=refresher)
+        calls = {"count": 0}
+
+        def fake_urlopen(request, timeout=30):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    401,
+                    "Unauthorized",
+                    {},
+                    io.BytesIO(b"unauthorized"),
+                )
+            return DummyResponse(b"ok")
+
+        with patch("pacer_http.urllib.request.urlopen", side_effect=fake_urlopen):
+            response = client.request("GET", "https://example.test/pcl")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(len(refresh_calls), 1)
+
+    def test_401_reauth_stops_after_second_failure(self):
+        session = {"pacer_session_key": "session-1"}
+        store = PacerTokenStore(InMemoryTokenBackend(), session_accessor=lambda: session)
+        store.save_token("initial-token", obtained_at=datetime.utcnow())
+        refresh_calls = []
+
+        def refresher():
+            refresh_calls.append("refresh")
+            return store.save_token("new-token", obtained_at=datetime.utcnow())
+
+        client = PacerHttpClient(store, token_refresher=refresher)
+
+        def fake_urlopen(request, timeout=30):
+            raise urllib.error.HTTPError(
+                request.full_url,
+                401,
+                "Unauthorized",
+                {},
+                io.BytesIO(b"unauthorized"),
+            )
+
+        with patch("pacer_http.urllib.request.urlopen", side_effect=fake_urlopen):
+            with self.assertRaises(TokenExpired):
+                client.request("GET", "https://example.test/pcl")
+
+        self.assertEqual(len(refresh_calls), 1)
+
     def test_401_raises_token_expired(self):
         session = {"pacer_session_key": "session-1"}
         store = PacerTokenStore(InMemoryTokenBackend(), session_accessor=lambda: session)

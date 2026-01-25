@@ -25,6 +25,7 @@ from flask import (
     abort,
     flash,
     g,
+    has_request_context,
     jsonify,
     make_response,
     redirect,
@@ -74,11 +75,11 @@ from pacer_tokens import (
     token_fingerprint,
 )
 from pacer_env import (
-    build_pacer_environment_config,
     infer_pacer_env,
     pacer_env_billable,
     pacer_env_host,
     pacer_env_label,
+    validate_pacer_environment_config,
 )
 from docket_enrichment import DocketEnrichmentWorker
 from pcl_batch import CRIMINAL_CASE_TYPES, PclBatchPlanner, PclBatchWorker
@@ -939,13 +940,12 @@ def create_app() -> Flask:
     pacer_auth_base_url = _normalize_pacer_base_url(
         os.environ.get("PACER_AUTH_BASE_URL", "https://pacer.login.uscourts.gov")
     )
-    pacer_env_config = build_pacer_environment_config(
+    pcl_base_url_env = _normalize_pacer_base_url(
+        os.environ.get("PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest")
+    )
+    pacer_env_config = validate_pacer_environment_config(
         pacer_auth_base_url,
-        _normalize_pacer_base_url(
-            os.environ.get(
-                "PCL_BASE_URL", "https://qa-pcl.uscourts.gov/pcl-public-api/rest"
-            )
-        ),
+        pcl_base_url_env,
     )
     pacer_auth_env = pacer_env_config.auth_env
     pacer_auth_client = PacerAuthClient(
@@ -972,11 +972,45 @@ def create_app() -> Flask:
     app.config["PACER_ENV_CONFIG"] = pacer_env_config.as_dict()
     app.config["PACER_ENV_MISMATCH"] = pacer_env_config.mismatch
     app.config["PACER_ENV_MISMATCH_REASON"] = pacer_env_config.mismatch_reason
+    def _refresh_pacer_token() -> Optional[str]:
+        if not has_request_context():
+            return None
+        login_id, password = get_configured_pacer_credentials()
+        if not login_id or not password:
+            return None
+        session_key = session.get("pacer_session_key")
+        if not session_key:
+            session_key = secrets.token_urlsafe(16)
+            session["pacer_session_key"] = session_key
+        pacer_token_store.initialize_session(session_key)
+        try:
+            result = pacer_auth_client.authenticate(
+                login_id,
+                password,
+                redact_flag=True,
+            )
+        except ValueError:
+            return None
+        if not result.can_proceed or not result.token:
+            return None
+        pacer_token_store.save_token(
+            result.token,
+            obtained_at=datetime.utcnow(),
+            environment=pacer_auth_env,
+        )
+        session["pacer_needs_otp"] = bool(result.needs_otp)
+        session["pacer_client_code_required"] = bool(result.needs_client_code)
+        session["pacer_redaction_required"] = bool(result.needs_redaction_ack)
+        session["pacer_search_disabled"] = bool(result.search_disabled)
+        session["pacer_search_disabled_reason"] = result.search_disabled_reason
+        return result.token
+
     pcl_http_client = PacerHttpClient(
         pacer_token_store,
         logger=app.logger,
         expected_environment=pacer_env_config.pcl_env,
         env_mismatch_reason=pacer_env_config.mismatch_reason if pacer_env_config.mismatch else None,
+        token_refresher=_refresh_pacer_token,
     )
     pcl_client = PclClient(pcl_http_client, pcl_base_url, logger=app.logger)
     app.pcl_client = pcl_client
