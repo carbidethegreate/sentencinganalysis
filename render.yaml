@@ -10,6 +10,7 @@ projects:
       runtime: image
       image:
         url: docker.io/ankane/pghero:latest
+      healthCheckPath: /assets/pghero/favicon.png
       plan: free
       envVars:
       - key: WEB_CONCURRENCY
