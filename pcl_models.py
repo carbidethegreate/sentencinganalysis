@@ -335,7 +335,7 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("record_hash", String(128), nullable=False),
         Column("data_json", Text, nullable=False),
         UniqueConstraint("record_hash", name="uq_pcl_parties_record_hash"),
-        Index("ix_pcl_parties_case_id", "case_id"),
+        Index("ix_pcl_parties_case_id", "case_id", postgresql_if_not_exists=True),
     )
 
     pcl_remote_jobs = Table(

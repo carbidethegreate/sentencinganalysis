@@ -73,7 +73,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert as pg_insert
 from sqlalchemy import text as sa_text
-from sqlalchemy.exc import IntegrityError, NoSuchTableError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import (
+    IntegrityError,
+    NoSuchTableError,
+    OperationalError,
+    ProgrammingError,
+    SQLAlchemyError,
+)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from pacer_http import PacerHttpClient, TokenExpired
@@ -97,6 +103,7 @@ from pacer_env import (
     pacer_env_billable,
     pacer_env_host,
     pacer_env_label,
+    build_pacer_environment_config,
     validate_pacer_environment_config,
 )
 from docket_enrichment import DocketEnrichmentWorker
@@ -776,24 +783,29 @@ def create_app() -> Flask:
     pcl_courts = pcl_tables["pcl_courts"]
 
     # Create the users/newsletter/case_stage1/case_data_one tables if they don't exist.
-    try:
-        metadata.create_all(
-            engine,
-            tables=[
-                users,
-                newsletter_subscriptions,
-                case_stage1,
-                case_data_one,
-                pacer_tokens,
-                federal_courts,
-                *pcl_tables.values(),
-            ],
-        )
-    except OperationalError as exc:
-        if "already exists" in str(exc).lower():
-            app.logger.warning("Database tables already exist; skipping create_all.")
-        else:
-            raise
+    bootstrap_setting = os.environ.get("DB_BOOTSTRAP", "true").strip().lower()
+    if bootstrap_setting not in {"0", "false", "no"}:
+        try:
+            metadata.create_all(
+                engine,
+                tables=[
+                    users,
+                    newsletter_subscriptions,
+                    case_stage1,
+                    case_data_one,
+                    pacer_tokens,
+                    federal_courts,
+                    *pcl_tables.values(),
+                ],
+            )
+        except (OperationalError, ProgrammingError) as exc:
+            message = str(exc).lower()
+            if "already exists" in message or "duplicate" in message:
+                app.logger.warning("Database tables already exist; skipping create_all.")
+            else:
+                raise
+    else:
+        app.logger.info("DB_BOOTSTRAP disabled; skipping create_all.")
 
     def _ensure_table_columns(
         table_name: str, column_specs: Dict[str, str], *, label: str
@@ -990,10 +1002,17 @@ def create_app() -> Flask:
             pcl_base_url_candidate = DEFAULT_PCL_BASE_URL_PROD
         elif inferred_env == ENV_QA:
             pcl_base_url_candidate = DEFAULT_PCL_BASE_URL
-    pacer_env_config = validate_pacer_environment_config(
-        pacer_auth_base_url,
-        pcl_base_url_candidate,
-    )
+    try:
+        pacer_env_config = validate_pacer_environment_config(
+            pacer_auth_base_url,
+            pcl_base_url_candidate,
+        )
+    except ValueError as exc:
+        app.logger.error("PACER environment mismatch: %s", exc)
+        pacer_env_config = build_pacer_environment_config(
+            pacer_auth_base_url,
+            pcl_base_url_candidate,
+        )
     pacer_auth_env = pacer_env_config.auth_env
     pacer_auth_client = PacerAuthClient(
         pacer_auth_base_url, logger=app.logger, redact_flag=False
