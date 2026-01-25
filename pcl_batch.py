@@ -190,6 +190,11 @@ class PclBatchWorker:
             self._poll_segment(segment)
 
     def _submit_segment(self, segment: Dict[str, Any]) -> Dict[str, Any]:
+        if not self._court_id_is_valid(segment.get("court_id")):
+            self._mark_failed(
+                segment, "Court ID is not recognized. Please select a valid court."
+            )
+            return segment
         payload = self._build_payload(segment)
         try:
             response = self._client.start_case_download(payload)
@@ -214,6 +219,20 @@ class PclBatchWorker:
         self._update_segment(segment["id"], updates)
         segment.update(updates)
         return segment
+
+    def _court_id_is_valid(self, court_id: Optional[str]) -> bool:
+        if not court_id:
+            return False
+        table = self._tables.get("pcl_courts")
+        if table is None:
+            return True
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(table.c.pcl_court_id)
+                .where(table.c.pcl_court_id == court_id)
+                .where(table.c.active.is_(True))
+            ).first()
+        return row is not None
 
     def _poll_segment(self, segment: Dict[str, Any]) -> None:
         now = self._now()

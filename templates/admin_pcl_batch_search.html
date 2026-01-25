@@ -9,13 +9,13 @@
       <div class="grid two">
         <div>
           <label for="court-id">Court ID</label>
-          <input id="court-id" name="court_id" list="court-id-options" placeholder="akd" required>
+          <input id="court-id" name="court_id" list="court-id-options" placeholder="akdc" required>
           <datalist id="court-id-options">
             {% for court in court_options %}
               <option value="{{ court.court_id }}">{{ court.label }}</option>
             {% endfor %}
           </datalist>
-          <p class="small" style="margin-top: 6px;">Start typing a court ID or title to search. Suggestions show “court_id — title”.</p>
+          <p class="small" style="margin-top: 6px;">Start typing a court ID or name to search. Suggestions show “court_id, name”.</p>
         </div>
         <div>
           <label for="case-types">Case types</label>
