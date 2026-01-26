@@ -59,6 +59,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    and_,
     bindparam,
     create_engine,
     delete,
