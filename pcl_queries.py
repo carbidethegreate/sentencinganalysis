@@ -416,7 +416,7 @@ def _load_raw_payloads(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, A
 def _load_case_fields(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
     pcl_case_fields = tables.get("pcl_case_fields")
     case_id = detail.get("id")
-    if not pcl_case_fields or not case_id:
+    if pcl_case_fields is None or not case_id:
         return []
     stmt = (
         select(
