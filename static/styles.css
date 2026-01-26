@@ -2107,12 +2107,32 @@ button.danger {
 .pacer-status-pill {
   display: inline-flex;
   align-items: center;
+  gap: 8px;
   padding: 6px 12px;
   border-radius: 999px;
   border: 1px solid rgba(140, 132, 128, 0.35);
   background: rgba(217, 203, 186, 0.35);
   font-weight: 700;
   color: var(--primary-dark);
+}
+
+.pacer-status-pill::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--muted);
+}
+
+.pacer-status-pill--enabled::before {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.pacer-status-pill--disabled::before {
+  background: var(--muted);
+  border-color: var(--muted);
 }
 
 .pacer-status-details {

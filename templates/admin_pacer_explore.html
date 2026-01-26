@@ -28,7 +28,7 @@
     <details class="pacer-status-summary" {% if pacer_env_mismatch %}open{% endif %}>
       <summary>
         <div class="pacer-status-summary__row">
-          <span class="pacer-status-pill" role="status" aria-live="polite">
+          <span class="pacer-status-pill {% if pacer_search_enabled %}pacer-status-pill--enabled{% else %}pacer-status-pill--disabled{% endif %}" role="status" aria-live="polite">
             {% if pacer_search_enabled %}Search enabled{% else %}Search disabled{% endif %}
           </span>
           <span class="pacer-status-summary__text">
@@ -75,7 +75,7 @@
                   <p class="small">Authorized at {{ pacer_authorized_at.replace('T', ' ') }} UTC.</p>
                 {% endif %}
               </div>
-              <div class="pacer-status-pill" role="status" aria-live="polite">
+              <div class="pacer-status-pill {% if pacer_search_enabled %}pacer-status-pill--enabled{% else %}pacer-status-pill--disabled{% endif %}" role="status" aria-live="polite">
                 {% if pacer_search_enabled %}Search enabled{% else %}Search disabled{% endif %}
               </div>
             </div>
