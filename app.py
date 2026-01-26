@@ -2106,7 +2106,7 @@ def create_app() -> Flask:
         conn: Any, case_id: int, record: Dict[str, Any]
     ) -> Tuple[int, int]:
         pcl_case_fields = pcl_tables.get("pcl_case_fields")
-        if not pcl_case_fields:
+        if pcl_case_fields is None:
             return 0, 0
         fields = _normalize_case_fields(record)
         if not fields:
