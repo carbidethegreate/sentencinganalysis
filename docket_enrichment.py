@@ -431,6 +431,18 @@ def _build_docket_report_url(
     return f"{base}?{urlencode(params)}"
 
 
+def _extract_case_id_from_url(url: str) -> Optional[str]:
+    parsed = urlparse(url)
+    raw_query = parsed.query or ""
+    if raw_query.isdigit():
+        return raw_query
+    for token in raw_query.split("&"):
+        if token.startswith("case_id="):
+            return token.split("=", 1)[1]
+    match = re.search(r"(\\d+)", raw_query)
+    return match.group(1) if match else None
+
+
 def _extract_docket_payload(
     body: bytes,
     content_type: str,
@@ -501,8 +513,8 @@ def _looks_like_docket_shell(text: str) -> bool:
     lowered = text.lower()
     return (
         "district court cm/ecf" in lowered
-        and "docket sheet" in lowered
-        and ("view combined docket report" in lowered or "format:" in lowered)
+        and ("docket sheet" in lowered or "docket report" in lowered)
+        and ("case_number_text_area" in lowered or "output_format" in lowered)
     )
 
 
@@ -513,8 +525,22 @@ def _submit_docket_form(
     payload = _extract_form_fields(html)
     if not action or not payload:
         return None
-    payload.setdefault("output_format", "HTML")
-    payload.setdefault("output_format_type", "HTML")
+    case_id = _extract_case_id_from_url(base_url)
+    if case_id:
+        payload.setdefault("case_id", case_id)
+        payload.setdefault("all_case_ids", case_id)
+        payload.setdefault("case_num", case_id)
+
+    output_format = payload.get("output_format", "")
+    if output_format:
+        output_format = output_format.lower()
+    if output_format not in {"xml", "html", "pdf"}:
+        output_format = "xml" if _form_supports_xml(html) else "html"
+        payload["output_format"] = output_format.upper() if output_format == "xml" else output_format
+
+    payload.setdefault("output_format_type", payload.get("output_format"))
+    payload.setdefault("report_type", "docket")
+    payload.setdefault("format", payload.get("output_format"))
     action_url = _resolve_form_action(base_url, action)
     encoded = urlencode(payload).encode("utf-8")
     response = http_client.request(
@@ -589,6 +615,14 @@ def _extract_form_fields(html: str) -> Dict[str, str]:
 def _extract_attr(attrs: str, name: str) -> Optional[str]:
     match = re.search(rf"{name}\\s*=\\s*[\"']([^\"']*)[\"']", attrs, re.IGNORECASE)
     return match.group(1) if match else None
+
+
+def _form_supports_xml(html: str) -> bool:
+    return re.search(
+        r"name=[\"']output_format[\"'][^>]*value=[\"']xml[\"']",
+        html,
+        re.IGNORECASE,
+    ) is not None
 
 
 def _upsert_case_field(
