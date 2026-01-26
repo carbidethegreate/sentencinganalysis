@@ -114,7 +114,7 @@
         <p class="small">Every field saved as a searchable value.</p>
       </div>
     </div>
-    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None) %}
+    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None) %}
     {% if case_detail.case_fields %}
       {% for field in case_detail.case_fields %}
         {% if field.field_name == 'docket_text' %}
@@ -123,12 +123,18 @@
         {% elif field.field_name == 'docket_text_preview' %}
           {% set docket.preview = field.field_value_text %}
           {% set docket.updated_at = field.updated_at %}
+        {% elif field.field_name == 'docket_html' %}
+          {% set docket.html = field.field_value_json %}
+          {% set docket.updated_at = field.updated_at %}
+        {% elif field.field_name == 'docket_html_preview' %}
+          {% set docket.html_preview = field.field_value_text %}
+          {% set docket.updated_at = field.updated_at %}
         {% elif field.field_name == 'docket_entries' %}
           {% set docket.entries = field.field_value_json %}
         {% endif %}
       {% endfor %}
     {% endif %}
-    {% if docket.text or docket.preview or docket.entries %}
+    {% if docket.text or docket.preview or docket.html or docket.html_preview or docket.entries %}
       <article class="pcl-detail-card">
         <h3>Docket text</h3>
         <p class="small">Latest docket text captured from PACER.</p>
@@ -139,6 +145,12 @@
           <pre class="code-block">{{ docket.preview }}</pre>
         {% elif docket.text and docket.text.text %}
           <pre class="code-block">{{ docket.text.text }}</pre>
+        {% elif docket.html_preview %}
+          <p class="small">PACER returned a docket form (HTML). Raw response stored for troubleshooting.</p>
+          <pre class="code-block">{{ docket.html_preview }}</pre>
+        {% elif docket.html and docket.html.text %}
+          <p class="small">PACER returned a docket form (HTML). Raw response stored for troubleshooting.</p>
+          <pre class="code-block">{{ docket.html.text }}</pre>
         {% else %}
           <p class="small">Docket text stored without preview.</p>
         {% endif %}
@@ -162,6 +174,9 @@
           </thead>
           <tbody>
             {% for field in case_detail.case_fields %}
+              {% if field.field_name.startswith('docket_') %}
+                {% continue %}
+              {% endif %}
               <tr>
                 <td>{{ field.field_name }}</td>
                 <td class="pcl-mono">

@@ -262,10 +262,11 @@ class DocketEnrichmentWorker:
         receipt_table = self._tables.get("docket_enrichment_receipts")
         now = self._now()
         docket_text_preview = _truncate_text(docket_text, 1000) if docket_text else ""
+        docket_is_shell = parsed_format == "html" and _looks_like_docket_shell(docket_text)
 
         with self._engine.begin() as conn:
             if pcl_case_fields is not None:
-                if docket_text:
+                if docket_text and not docket_is_shell:
                     _upsert_case_field(
                         conn,
                         pcl_case_fields,
@@ -280,6 +281,25 @@ class DocketEnrichmentWorker:
                         pcl_case_fields,
                         case_row["id"],
                         "docket_text_preview",
+                        field_value_text=docket_text_preview,
+                        field_value_json=None,
+                        now=now,
+                    )
+                elif docket_text:
+                    _upsert_case_field(
+                        conn,
+                        pcl_case_fields,
+                        case_row["id"],
+                        "docket_html",
+                        field_value_text=None,
+                        field_value_json={"text": docket_text},
+                        now=now,
+                    )
+                    _upsert_case_field(
+                        conn,
+                        pcl_case_fields,
+                        case_row["id"],
+                        "docket_html_preview",
                         field_value_text=docket_text_preview,
                         field_value_json=None,
                         now=now,
@@ -461,6 +481,13 @@ def _truncate_text(value: str, max_len: int) -> str:
     if len(value) <= max_len:
         return value
     return f"{value[: max_len - 3]}..."
+
+
+def _looks_like_docket_shell(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return "district court cm/ecf" in lowered and "docket sheet" in lowered
 
 
 def _upsert_case_field(
