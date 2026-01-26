@@ -4218,6 +4218,7 @@ def create_app() -> Flask:
 
     def _db_check_reference_tables() -> List[Dict[str, Any]]:
         preparer = engine.dialect.identifier_preparer
+        inspector = inspect(engine)
         tables = [
             "pacer_response_codes",
             "search_regions",
@@ -4230,44 +4231,43 @@ def create_app() -> Flask:
             "pcl_cases",
         ]
         results: List[Dict[str, Any]] = []
-        with engine.connect() as connection:
-            for table_name in tables:
-                qualified = preparer.quote(table_name)
-                try:
+        for table_name in tables:
+            try:
+                if not inspector.has_table(table_name):
+                    results.append({"table": table_name, "exists": False, "count": None})
+                    continue
+            except SQLAlchemyError as exc:
+                results.append(
+                    {
+                        "table": table_name,
+                        "exists": False,
+                        "count": None,
+                        "error": str(exc),
+                    }
+                )
+                continue
+            qualified = preparer.quote(table_name)
+            try:
+                with engine.connect() as connection:
                     count = connection.execute(
                         sa_text(f"SELECT count(*) AS count FROM {qualified}")
                     ).scalar()
-                    results.append(
-                        {
-                            "table": table_name,
-                            "exists": True,
-                            "count": int(count) if count is not None else 0,
-                        }
-                    )
-                except ProgrammingError as exc:
-                    message = str(exc)
-                    if "does not exist" in message or "UndefinedTable" in message:
-                        results.append(
-                            {"table": table_name, "exists": False, "count": None}
-                        )
-                    else:
-                        results.append(
-                            {
-                                "table": table_name,
-                                "exists": False,
-                                "count": None,
-                                "error": message,
-                            }
-                        )
-                except SQLAlchemyError as exc:
-                    results.append(
-                        {
-                            "table": table_name,
-                            "exists": False,
-                            "count": None,
-                            "error": str(exc),
-                        }
-                    )
+                results.append(
+                    {
+                        "table": table_name,
+                        "exists": True,
+                        "count": int(count) if count is not None else 0,
+                    }
+                )
+            except SQLAlchemyError as exc:
+                results.append(
+                    {
+                        "table": table_name,
+                        "exists": True,
+                        "count": None,
+                        "error": str(exc),
+                    }
+                )
         return results
 
     @app.get("/admin/database-dashboard")
