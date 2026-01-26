@@ -6,7 +6,7 @@
   <section class="card">
     <div class="page-header" style="margin: 0 0 12px 0;">
       <h2>Docket enrichment queue</h2>
-      <p class="small">Scaffolding for docket-level enrichment. Estimates appear on case detail pages; actual costs will come from receipts.</p>
+      <p class="small">Queue docket text pulls for saved cases. Use filters to target the exact set of cases.</p>
     </div>
 
     <div class="grid two" style="margin-bottom: 16px;">
@@ -24,7 +24,7 @@
 
       <article class="pcl-detail-card">
         <h3>Run worker</h3>
-        <p class="small">Runs one worker cycle. Until endpoints are wired, jobs will transition to failed with a placeholder error.</p>
+        <p class="small">Runs one worker cycle on queued jobs.</p>
         <form method="post" action="{{ url_for('admin_docket_enrichment_run') }}" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
@@ -36,60 +36,199 @@
       </article>
     </div>
 
-    {% if jobs %}
-      <div class="table-wrap">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Case</th>
-              <th>Court</th>
-              <th>Type</th>
-              <th>Status</th>
-              <th>Include text</th>
-              <th>Attempts</th>
-              <th>Receipts</th>
-              <th>Total fee</th>
-              <th>Total pages</th>
-              <th>Last receipt</th>
-              <th>Last error</th>
-              <th>Queued</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for job in jobs %}
+    <article class="card">
+      <h3>Batch queue docket text</h3>
+      <p class="small">Filter cases, then queue docket text pulls in bulk.</p>
+
+      <form method="get" action="{{ url_for('admin_docket_enrichment_dashboard') }}" class="pcl-filter-form">
+        <div class="grid two">
+          <div>
+            <label for="docket-court">Court</label>
+            <input id="docket-court" name="court_id" value="{{ docket_filters.court_id }}" placeholder="e.g., vidc">
+          </div>
+          <div>
+            <label for="docket-case-type">Case type</label>
+            <input id="docket-case-type" name="case_type" value="{{ docket_filters.case_type }}" placeholder="e.g., cr, cv, mj">
+          </div>
+          <div>
+            <label for="docket-date-from">Date filed from</label>
+            <input id="docket-date-from" type="date" name="date_filed_from" value="{{ docket_filters.date_filed_from.isoformat() if docket_filters.date_filed_from else '' }}">
+          </div>
+          <div>
+            <label for="docket-date-to">Date filed to</label>
+            <input id="docket-date-to" type="date" name="date_filed_to" value="{{ docket_filters.date_filed_to.isoformat() if docket_filters.date_filed_to else '' }}">
+          </div>
+          <div>
+            <label for="docket-search">Search case</label>
+            <input id="docket-search" name="q" value="{{ docket_filters.search_text }}" placeholder="Case number or title">
+          </div>
+          <div>
+            <label for="docket-status">Docket job status</label>
+            <select id="docket-status" name="docket_status">
+              <option value="any" {% if docket_filters.docket_status == 'any' %}selected{% endif %}>Any</option>
+              <option value="queued" {% if docket_filters.docket_status == 'queued' %}selected{% endif %}>Queued</option>
+              <option value="running" {% if docket_filters.docket_status == 'running' %}selected{% endif %}>Running</option>
+              <option value="completed" {% if docket_filters.docket_status == 'completed' %}selected{% endif %}>Completed</option>
+              <option value="failed" {% if docket_filters.docket_status == 'failed' %}selected{% endif %}>Failed</option>
+            </select>
+          </div>
+          <div>
+            <label for="docket-text">Docket text</label>
+            <select id="docket-text" name="docket_text">
+              <option value="any" {% if docket_filters.docket_text == 'any' %}selected{% endif %}>Any</option>
+              <option value="has_text" {% if docket_filters.docket_text == 'has_text' %}selected{% endif %}>Has docket text</option>
+              <option value="no_text" {% if docket_filters.docket_text == 'no_text' %}selected{% endif %}>No docket text</option>
+            </select>
+          </div>
+          <div>
+            <label for="docket-sort">Sort by</label>
+            <select id="docket-sort" name="sort">
+              <option value="date_filed_desc" {% if docket_filters.sort == 'date_filed_desc' %}selected{% endif %}>Date filed (newest)</option>
+              <option value="date_filed_asc" {% if docket_filters.sort == 'date_filed_asc' %}selected{% endif %}>Date filed (oldest)</option>
+              <option value="docket_updated_desc" {% if docket_filters.sort == 'docket_updated_desc' %}selected{% endif %}>Docket updated (newest)</option>
+              <option value="docket_updated_asc" {% if docket_filters.sort == 'docket_updated_asc' %}selected{% endif %}>Docket updated (oldest)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="actions pcl-filter-actions">
+          <button class="primary" type="submit">Apply filters</button>
+          <a class="pill" href="{{ url_for('admin_docket_enrichment_dashboard') }}">Reset</a>
+        </div>
+      </form>
+
+      <form method="post" action="{{ url_for('admin_docket_enrichment_queue_batch') }}" class="actions" style="margin-top: 12px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="court_id" value="{{ docket_filters.court_id }}">
+        <input type="hidden" name="case_type" value="{{ docket_filters.case_type }}">
+        <input type="hidden" name="date_filed_from" value="{{ docket_filters.date_filed_from.isoformat() if docket_filters.date_filed_from else '' }}">
+        <input type="hidden" name="date_filed_to" value="{{ docket_filters.date_filed_to.isoformat() if docket_filters.date_filed_to else '' }}">
+        <input type="hidden" name="q" value="{{ docket_filters.search_text }}">
+        <input type="hidden" name="docket_status" value="{{ docket_filters.docket_status }}">
+        <input type="hidden" name="docket_text" value="{{ docket_filters.docket_text }}">
+        <input type="hidden" name="sort" value="{{ docket_filters.sort }}">
+        <label>
+          Max cases
+          <input type="number" name="max_cases" min="1" max="500" value="50">
+        </label>
+        <label>
+          <input type="checkbox" name="include_docket_text" value="1" checked>
+          Include docket text
+        </label>
+        <button class="primary" type="submit">Queue batch</button>
+      </form>
+
+      {% if case_candidates %}
+        <div class="table-wrap" style="margin-top: 16px;">
+          <table class="admin-table">
+            <thead>
               <tr>
-                <td class="pcl-mono">{{ job.id }}</td>
-                <td>
-                  <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=job.case_id) }}">
-                    {{ job.case_number_full or job.case_number }}
-                  </a>
-                  <div class="small">{{ job.short_title or job.case_title or "Untitled case" }}</div>
-                </td>
-                <td>{{ job.court_id }}</td>
-                <td>{{ job.case_type or "—" }}</td>
-                <td>{{ job.status }}</td>
-                <td>{{ "yes" if job.include_docket_text else "no" }}</td>
-                <td>{{ job.attempts }}</td>
-                <td>{{ job.receipt_count }}</td>
-                <td>
-                  {% if job.total_fee is not none %}
-                    ${{ '%.2f'|format(job.total_fee) }}
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-                <td>{{ job.total_billable_pages if job.total_billable_pages is not none else "—" }}</td>
-                <td>{{ job.last_receipt_at.isoformat() if job.last_receipt_at else "—" }}</td>
-                <td>{{ job.last_error or "—" }}</td>
-                <td>{{ job.created_at.isoformat() if job.created_at else "—" }}</td>
+                <th>Case</th>
+                <th>Court</th>
+                <th>Type</th>
+                <th>Date filed</th>
+                <th>Last job status</th>
+                <th>Docket text</th>
+                <th>Last update</th>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <p class="small">No docket enrichment jobs queued yet.</p>
-    {% endif %}
+            </thead>
+            <tbody>
+              {% for case in case_candidates %}
+                <tr>
+                  <td>
+                    <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">
+                      {{ case.case_number_full or case.case_number }}
+                    </a>
+                    <div class="small">{{ case.short_title or case.case_title or "Untitled case" }}</div>
+                  </td>
+                  <td>{{ case.court_id }}</td>
+                  <td>{{ case.case_type or "—" }}</td>
+                  <td>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</td>
+                  <td>{{ case.last_job_status or "—" }}</td>
+                  <td>
+                    {% if case.last_job_status == 'completed' and case.last_job_include_text %}
+                      yes
+                    {% else %}
+                      no
+                    {% endif %}
+                  </td>
+                  <td>{{ case.last_job_updated_at.isoformat() if case.last_job_updated_at else "—" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        {% set total_pages = (candidate_total // candidate_page_size) + (1 if candidate_total % candidate_page_size else 0) %}
+        <nav class="pcl-pagination" aria-label="Docket candidate pagination">
+          <span class="small">Page {{ candidate_page }} of {{ total_pages if total_pages > 0 else 1 }}</span>
+          <div class="pcl-pagination__actions">
+            <a class="pill {% if candidate_page <= 1 %}disabled{% endif %}" href="{{ candidate_page_url(candidate_page - 1) if candidate_page > 1 else '#' }}" aria-disabled="{{ 'true' if candidate_page <= 1 else 'false' }}">Previous</a>
+            <a class="pill {% if candidate_page >= total_pages %}disabled{% endif %}" href="{{ candidate_page_url(candidate_page + 1) if candidate_page < total_pages else '#' }}" aria-disabled="{{ 'true' if candidate_page >= total_pages else 'false' }}">Next</a>
+          </div>
+        </nav>
+      {% else %}
+        <p class="small">No cases match those filters.</p>
+      {% endif %}
+    </article>
+
+    <article class="card" style="margin-top: 16px;">
+      <h3>Recent docket jobs</h3>
+      {% if jobs %}
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Case</th>
+                <th>Court</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Include text</th>
+                <th>Attempts</th>
+                <th>Receipts</th>
+                <th>Total fee</th>
+                <th>Total pages</th>
+                <th>Last receipt</th>
+                <th>Last error</th>
+                <th>Queued</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for job in jobs %}
+                <tr>
+                  <td class="pcl-mono">{{ job.id }}</td>
+                  <td>
+                    <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=job.case_id) }}">
+                      {{ job.case_number_full or job.case_number }}
+                    </a>
+                    <div class="small">{{ job.short_title or job.case_title or "Untitled case" }}</div>
+                  </td>
+                  <td>{{ job.court_id }}</td>
+                  <td>{{ job.case_type or "—" }}</td>
+                  <td>{{ job.status }}</td>
+                  <td>{{ "yes" if job.include_docket_text else "no" }}</td>
+                  <td>{{ job.attempts }}</td>
+                  <td>{{ job.receipt_count }}</td>
+                  <td>
+                    {% if job.total_fee is not none %}
+                      ${{ '%.2f'|format(job.total_fee) }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>{{ job.total_billable_pages if job.total_billable_pages is not none else "—" }}</td>
+                  <td>{{ job.last_receipt_at.isoformat() if job.last_receipt_at else "—" }}</td>
+                  <td>{{ job.last_error or "—" }}</td>
+                  <td>{{ job.created_at.isoformat() if job.created_at else "—" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="small">No docket enrichment jobs queued yet.</p>
+      {% endif %}
+    </article>
   </section>
 {% endblock %}

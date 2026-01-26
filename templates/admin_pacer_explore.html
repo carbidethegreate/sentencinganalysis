@@ -25,64 +25,61 @@
       Batch runs are for larger searches (up to {{ explore_max_records }} results).
     </div>
 
-    <section class="card stack pacer-status-card">
-      <div class="pacer-status-card__header">
-        <div>
-          <p class="pacer-eyebrow">PACER environments</p>
-          <h3 class="pacer-status-card__title">Environment: {{ pcl_env_label }}</h3>
-          <p class="small pacer-status-card__lead">
-            PACER Auth: {{ pacer_auth_env_label }} · PCL: {{ pcl_env_label }} · Billable searches: {{ pacer_env_billable_label }}
-          </p>
-          <p class="small pacer-status-card__meta">
-            PACER_AUTH_BASE_URL host: {{ pacer_auth_host }}<br>
-            PCL_BASE_URL host: {{ pcl_host }}
-          </p>
+    <section class="pacer-status-grid">
+      <article class="card pacer-status-compact">
+        <div class="pacer-status-compact__header">
+          <div>
+            <p class="pacer-eyebrow">PACER environment</p>
+            <h3>Environment: {{ pcl_env_label }}</h3>
+            <p class="small">
+              PACER Auth: {{ pacer_auth_env_label }} · PCL: {{ pcl_env_label }} · Billable: {{ pacer_env_billable_label }}
+            </p>
+          </div>
+          <a class="pill" href="{{ pacer_authorize_url }}">Settings</a>
         </div>
-      </div>
-      {% if pacer_env_mismatch and pacer_env_mismatch_reason %}
-        <div class="flash error">
-          <strong>Environment mismatch:</strong> {{ pacer_env_mismatch_reason }}
+        <details class="pacer-status-details">
+          <summary class="small">Connection details</summary>
+          <p class="small">PACER_AUTH_BASE_URL host: {{ pacer_auth_host }}</p>
+          <p class="small">PCL_BASE_URL host: {{ pcl_host }}</p>
+        </details>
+        {% if pacer_env_mismatch and pacer_env_mismatch_reason %}
+          <div class="flash error">
+            <strong>Environment mismatch:</strong> {{ pacer_env_mismatch_reason }}
+          </div>
+        {% endif %}
+      </article>
+
+      <article class="card pacer-status-compact">
+        <div class="pacer-status-compact__header">
+          <div>
+            <p class="pacer-eyebrow">Authorization</p>
+            <h3>{% if pacer_authenticated %}Authenticated{% else %}Not authenticated{% endif %}</h3>
+            <p class="small">
+              Authenticated: {{ 'Yes' if pacer_authenticated else 'No' }} · Search enabled: {{ 'Yes' if pacer_search_enabled else 'No' }}
+            </p>
+            {% if pacer_authorized_at %}
+              <p class="small">Authorized at {{ pacer_authorized_at.replace('T', ' ') }} UTC.</p>
+            {% endif %}
+          </div>
+          <div class="pacer-status-pill" role="status" aria-live="polite">
+            {% if pacer_search_enabled %}Search enabled{% else %}Search disabled{% endif %}
+          </div>
         </div>
-      {% endif %}
+        {% if pacer_client_code_required %}
+          <div class="flash warning">
+            <strong>Client code required by PACER:</strong>
+            Re-authorize with a client code to ensure billable activity is tracked correctly.
+          </div>
+        {% endif %}
+        <div class="actions">
+          <a class="primary" href="{{ pacer_authorize_url }}">Authorize / manage PACER session</a>
+        </div>
+      </article>
     </section>
 
-    <section class="card stack pacer-status-card">
-      <div class="pacer-status-card__header">
-        <div>
-          <p class="pacer-eyebrow">Authorization status</p>
-          <h3 class="pacer-status-card__title">
-            {% if pacer_authenticated %}Authenticated{% else %}Not authenticated{% endif %}
-          </h3>
-          <p class="small pacer-status-card__lead">
-            Authenticated: {{ 'Yes' if pacer_authenticated else 'No' }} · Search enabled: {{ 'Yes' if pacer_search_enabled else 'No' }}
-          </p>
-          {% if pacer_authorized_at %}
-            <p class="small pacer-status-card__meta">Authorized at {{ pacer_authorized_at.replace('T', ' ') }} UTC.</p>
-          {% endif %}
-        </div>
-        <div class="pacer-status-card__badge" role="status" aria-live="polite">
-          <span class="pacer-status-card__badge-dot" aria-hidden="true"></span>
-          {% if pacer_search_enabled %}Search enabled{% else %}Search disabled{% endif %}
-        </div>
-      </div>
-      {% if pacer_client_code_required %}
-        <div class="flash warning">
-          <strong>Client code required by PACER:</strong>
-          PACER indicated that a client code is required for this account. Searches remain enabled, but re-authorize
-          with a client code to ensure billable activity is tracked correctly.
-        </div>
-      {% endif %}
-      <div class="actions">
-        <a class="primary" href="{{ pacer_authorize_url }}">Authorize / manage PACER session</a>
-      </div>
-      <p class="small">
-        If you see 401 errors below, re-authorize and try again.
-      </p>
-    </section>
-
-    <div class="actions">
-      <a class="{{ 'primary' if mode == 'cases' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='cases') }}">Search cases</a>
-      <a class="{{ 'primary' if mode == 'parties' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='parties') }}">Search people/parties</a>
+    <div class="pacer-mode-tabs" role="tablist" aria-label="PACER search mode">
+      <a class="pacer-mode-tab {% if mode == 'cases' %}active{% endif %}" href="{{ url_for('admin_pacer_explore', mode='cases') }}" role="tab" aria-selected="{{ 'true' if mode == 'cases' else 'false' }}">Search cases</a>
+      <a class="pacer-mode-tab {% if mode == 'parties' %}active{% endif %}" href="{{ url_for('admin_pacer_explore', mode='parties') }}" role="tab" aria-selected="{{ 'true' if mode == 'parties' else 'false' }}">Search people/parties</a>
     </div>
 
     {% if not pacer_search_enabled %}

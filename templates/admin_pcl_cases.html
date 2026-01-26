@@ -239,7 +239,8 @@
             </span>
             <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <button class="secondary" type="submit">Expand data</button>
+              <input type="hidden" name="include_docket_text" value="1">
+              <button class="secondary" type="submit">Pull docket text</button>
             </form>
             <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View details</a>
           </footer>

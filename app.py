@@ -7791,6 +7791,138 @@ def create_app() -> Flask:
                 counts[str(row.status)] = int(row.count)
         return counts
 
+    def _parse_docket_filters(args: Dict[str, str]) -> Dict[str, Any]:
+        court_id = (args.get("court_id") or "").strip().lower()
+        case_type = (args.get("case_type") or "").strip().lower()
+        search_text = (args.get("q") or "").strip()
+        docket_status = (args.get("docket_status") or "any").strip().lower()
+        docket_text = (args.get("docket_text") or "any").strip().lower()
+        sort = (args.get("sort") or "date_filed_desc").strip().lower()
+        page = max(1, int(args.get("page") or 1))
+        page_size = min(100, max(10, int(args.get("page_size") or 25)))
+        date_from = _parse_iso_date(args.get("date_filed_from") or "")
+        date_to = _parse_iso_date(args.get("date_filed_to") or "")
+        if date_from and date_to and date_from > date_to:
+            date_from, date_to = date_to, date_from
+        return {
+            "court_id": court_id,
+            "case_type": case_type,
+            "search_text": search_text,
+            "docket_status": docket_status,
+            "docket_text": docket_text,
+            "sort": sort,
+            "page": page,
+            "page_size": page_size,
+            "date_filed_from": date_from,
+            "date_filed_to": date_to,
+        }
+
+    def _load_docket_case_candidates(filters: Dict[str, Any]) -> Dict[str, Any]:
+        pcl_cases = pcl_tables["pcl_cases"]
+        job_table = pcl_tables["docket_enrichment_jobs"]
+
+        last_status = (
+            select(job_table.c.status)
+            .where(job_table.c.case_id == pcl_cases.c.id)
+            .order_by(job_table.c.created_at.desc(), job_table.c.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        last_updated = (
+            select(job_table.c.updated_at)
+            .where(job_table.c.case_id == pcl_cases.c.id)
+            .order_by(job_table.c.created_at.desc(), job_table.c.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        last_include_text = (
+            select(job_table.c.include_docket_text)
+            .where(job_table.c.case_id == pcl_cases.c.id)
+            .order_by(job_table.c.created_at.desc(), job_table.c.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        clauses: List[Any] = [pcl_cases.c.id.is_not(None)]
+        if filters["court_id"]:
+            clauses.append(pcl_cases.c.court_id == filters["court_id"])
+        if filters["case_type"]:
+            clauses.append(pcl_cases.c.case_type == filters["case_type"])
+        if filters["date_filed_from"]:
+            clauses.append(pcl_cases.c.date_filed >= filters["date_filed_from"])
+        if filters["date_filed_to"]:
+            clauses.append(pcl_cases.c.date_filed <= filters["date_filed_to"])
+        if filters["search_text"]:
+            like_pattern = f"%{filters['search_text'].lower()}%"
+            clauses.append(
+                or_(
+                    func.lower(pcl_cases.c.case_number).like(like_pattern),
+                    func.lower(pcl_cases.c.case_number_full).like(like_pattern),
+                    func.lower(pcl_cases.c.short_title).like(like_pattern),
+                    func.lower(pcl_cases.c.case_title).like(like_pattern),
+                )
+            )
+
+        if filters["docket_status"] and filters["docket_status"] != "any":
+            clauses.append(last_status == filters["docket_status"])
+
+        if filters["docket_text"] == "has_text":
+            clauses.append(
+                and_(last_status == "completed", last_include_text.is_(True))
+            )
+        elif filters["docket_text"] == "no_text":
+            clauses.append(
+                or_(
+                    last_status.is_(None),
+                    last_status != "completed",
+                    last_include_text.is_(False),
+                )
+            )
+
+        sort_key = filters["sort"]
+        if sort_key == "date_filed_asc":
+            order_by = pcl_cases.c.date_filed.asc().nullslast()
+        elif sort_key == "docket_updated_desc":
+            order_by = last_updated.desc().nullslast()
+        elif sort_key == "docket_updated_asc":
+            order_by = last_updated.asc().nullslast()
+        else:
+            order_by = pcl_cases.c.date_filed.desc().nullslast()
+
+        base_stmt = (
+            select(
+                pcl_cases.c.id,
+                pcl_cases.c.court_id,
+                pcl_cases.c.case_number,
+                pcl_cases.c.case_number_full,
+                pcl_cases.c.case_title,
+                pcl_cases.c.short_title,
+                pcl_cases.c.case_type,
+                pcl_cases.c.date_filed,
+                last_status.label("last_job_status"),
+                last_updated.label("last_job_updated_at"),
+                last_include_text.label("last_job_include_text"),
+            )
+            .where(and_(*clauses))
+            .order_by(order_by, pcl_cases.c.id.desc())
+        )
+
+        count_stmt = select(func.count()).select_from(pcl_cases).where(and_(*clauses))
+        page = filters["page"]
+        page_size = filters["page_size"]
+        offset = (page - 1) * page_size
+
+        with engine.begin() as conn:
+            total = int(conn.execute(count_stmt).scalar_one())
+            rows = conn.execute(base_stmt.limit(page_size).offset(offset)).mappings().all()
+
+        return {
+            "rows": [dict(row) for row in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
     @app.get("/admin/pcl/cases")
     @admin_required
     def admin_pcl_cases():
@@ -8039,12 +8171,28 @@ def create_app() -> Flask:
     def admin_docket_enrichment_dashboard():
         rows = _load_docket_dashboard_rows()
         counts = _load_docket_status_counts()
+        filters = _parse_docket_filters(request.args.to_dict(flat=True))
+        candidates = _load_docket_case_candidates(filters)
+        params = request.args.to_dict(flat=True)
+
+        def page_url(target_page: int) -> str:
+            next_params = dict(params)
+            next_params["page"] = target_page
+            return url_for("admin_docket_enrichment_dashboard", **next_params)
+
         return render_template(
             "admin_docket_enrichment.html",
             active_page="federal_data_dashboard",
             active_subnav="docket_enrichment",
             jobs=rows,
             status_counts=counts,
+            case_candidates=candidates["rows"],
+            candidate_total=candidates["total"],
+            candidate_page=candidates["page"],
+            candidate_page_size=candidates["page_size"],
+            candidate_page_url=page_url,
+            docket_filters=filters,
+            csrf_token=get_csrf_token(),
         )
 
     @app.post("/admin/docket-enrichment/run")
@@ -8068,6 +8216,34 @@ def create_app() -> Flask:
             "success",
         )
         return redirect(url_for("admin_docket_enrichment_dashboard"))
+
+    @app.post("/admin/docket-enrichment/queue-batch")
+    @admin_required
+    def admin_docket_enrichment_queue_batch():
+        require_csrf()
+        filters = _parse_docket_filters(request.form.to_dict(flat=True))
+        include_docket_text = _parse_include_docket_text(request.form.get("include_docket_text"))
+        max_cases = request.form.get("max_cases", "50").strip()
+        try:
+            max_cases_int = max(1, min(500, int(max_cases)))
+        except ValueError:
+            max_cases_int = 50
+
+        candidates = _load_docket_case_candidates({**filters, "page": 1, "page_size": max_cases_int})
+        queued = 0
+        skipped = 0
+        for row in candidates["rows"]:
+            if row.get("last_job_status") in {"queued", "running"}:
+                skipped += 1
+                continue
+            _enqueue_docket_enrichment(int(row["id"]), include_docket_text)
+            queued += 1
+
+        flash(
+            f"Queued {queued} docket enrichment jobs (skipped {skipped} already queued/running).",
+            "success",
+        )
+        return redirect(url_for("admin_docket_enrichment_dashboard", **request.form.to_dict(flat=True)))
 
     @app.get("/admin/federal-data-dashboard/expand-existing")
     @admin_required
