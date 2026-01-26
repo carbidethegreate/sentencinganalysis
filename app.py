@@ -1054,7 +1054,13 @@ def create_app() -> Flask:
     else:
         pacer_token_backend = InMemoryTokenBackend()
     pacer_token_store = PacerTokenStore(pacer_token_backend, session_accessor=lambda: session)
+    service_session_key = os.environ.get("PACER_SERVICE_SESSION_KEY", "service")
+    service_session: Dict[str, Any] = {"pacer_session_key": service_session_key}
+    pacer_service_token_store = PacerTokenStore(
+        pacer_token_backend, session_accessor=lambda: service_session
+    )
     app.pacer_token_store = pacer_token_store
+    app.pacer_service_token_store = pacer_service_token_store
     app.pcl_tables = pcl_tables
     app.engine = engine
     app.federal_courts_table = federal_courts
@@ -1097,6 +1103,28 @@ def create_app() -> Flask:
         session["pacer_search_disabled_reason"] = result.search_disabled_reason
         return result.token
 
+    def _refresh_pacer_token_background() -> Optional[str]:
+        login_id, password = get_configured_pacer_credentials()
+        if not login_id or not password:
+            return None
+        pacer_service_token_store.initialize_session(service_session_key)
+        try:
+            result = pacer_auth_client.authenticate(
+                login_id,
+                password,
+                redact_flag=True,
+            )
+        except ValueError:
+            return None
+        if not result.can_proceed or not result.token:
+            return None
+        pacer_service_token_store.save_token(
+            result.token,
+            obtained_at=datetime.utcnow(),
+            environment=pacer_auth_env,
+        )
+        return result.token
+
     pcl_http_client = PacerHttpClient(
         pacer_token_store,
         logger=app.logger,
@@ -1104,8 +1132,16 @@ def create_app() -> Flask:
         env_mismatch_reason=pacer_env_config.mismatch_reason if pacer_env_config.mismatch else None,
         token_refresher=_refresh_pacer_token,
     )
+    pcl_background_http_client = PacerHttpClient(
+        pacer_service_token_store,
+        logger=app.logger,
+        expected_environment=pacer_env_config.pcl_env,
+        env_mismatch_reason=pacer_env_config.mismatch_reason if pacer_env_config.mismatch else None,
+        token_refresher=_refresh_pacer_token_background,
+    )
     pcl_client = PclClient(pcl_http_client, pcl_base_url, logger=app.logger)
     app.pcl_client = pcl_client
+    app.pcl_background_http_client = pcl_background_http_client
 
     # -----------------
     # Helpers
@@ -8236,7 +8272,7 @@ def create_app() -> Flask:
                 pcl_tables,
                 logger=app.logger,
                 endpoint_available=True,
-                http_client=pcl_http_client,
+                http_client=pcl_background_http_client,
                 docket_output=docket_output,
                 docket_url_template=docket_url_template,
             )
