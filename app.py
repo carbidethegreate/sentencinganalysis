@@ -2055,17 +2055,7 @@ def create_app() -> Flask:
             .mappings()
             .first()
         )
-        if not existing:
-            existing = (
-                conn.execute(
-                    select(pcl_cases.c.id).where(
-                        (pcl_cases.c.court_id == court_id)
-                        & (pcl_cases.c.case_number == str(case_record["case_number"]))
-                    )
-                )
-                .mappings()
-                .first()
-            )
+        # Do not fall back to case_number-only matching; PACER case numbers can collide.
         now = datetime.utcnow()
         if search_run_id:
             case_record = {
