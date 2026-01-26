@@ -40,3 +40,27 @@ Takeaways for our project
 Path: `/Users/david/Desktop/Render/Repos that might be helpful to look at for reference /Pacer_1_migh_be_helpful/Untitled/PacerSample1000`
 - This directory only contains a `.git` folder and no working files.
 
+
+## Repo: pacer1003 (pacerR)
+Path: `/Users/david/Desktop/Render/Repos that might be helpful to look at for reference /Pacer_1_migh_be_helpful/Untitled/pacer1003`
+
+Overview
+- R package focused on PACER XML docket retrieval (not PCL). Uses browser-like navigation in NextGen CM/ECF.
+- Emphasizes fee warnings and rate limiting. Focused on Courts of Appeals in tests.
+
+Useful flow details (R/utils.R)
+- Auth uses PACER CSO login; then cookies with `NextGenCSO`.
+- Navigates UI endpoints:
+  - GET `/n/beam/servlet/TransportRoom?servlet=CaseSearch.jsp`
+  - POST `/n/beam/servlet/TransportRoom` with search form fields (`csnum1`, `CSRF`, etc.)
+  - Parse CaseSummary link from results page
+  - POST form with `fullDocket` to reach filter page
+  - POST filter form with `outputXML_TXT=XML`
+  - Confirm charge with `confirmCharge=Y` then POST again to get XML
+- Shows PACER requires a 2-step confirm charge flow for XML in some courts.
+
+Takeaways for our project
+- Confirms that some CM/ECF sites require a multi-step form flow for XML docket output (search -> summary -> filter -> confirm charge). This explains why we sometimes get a docket form instead of the report.
+- Useful as a reference for building a robust HTML form flow in the docket enrichment worker if the direct `DktRpt.pl?case_id=` path fails.
+- Not PCL API; it is direct NextGen UI navigation and may require extra CSRF handling.
+

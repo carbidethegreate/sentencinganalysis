@@ -288,6 +288,13 @@ class DocketEnrichmentWorker:
                     )
                     if forced:
                         return forced
+                    multistep = _fetch_docket_report_multistep(
+                        self._http_client,
+                        case_row["case_link"],
+                        case_number_full=case_row.get("case_number_full"),
+                    )
+                    if multistep:
+                        return multistep
                 return submit
         return DocketFetchResult(
             url=url,
@@ -674,6 +681,9 @@ def _submit_docket_form(
         data=encoded,
         include_cookie=True,
     )
+    followup = _submit_confirm_form(http_client, response, referer=action_url)
+    if followup is not None:
+        return followup
     content_type = response.headers.get("Content-Type", "")
     return DocketFetchResult(
         url=action_url,
@@ -718,6 +728,220 @@ def _select_docket_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
     _, action, form_html = forms[0]
     payload = _extract_form_fields(form_html)
     return action, payload, form_html
+
+
+def _submit_confirm_form(
+    http_client: Any,
+    response: Any,
+    *,
+    referer: str,
+) -> Optional[DocketFetchResult]:
+    content_type = response.headers.get("Content-Type", "")
+    if "html" not in content_type.lower():
+        return None
+    body = response.body.decode("utf-8", errors="replace")
+    if not _looks_like_docket_shell(body) and "confirm" not in body.lower():
+        return None
+    action, payload = _select_confirm_form(body)
+    if not action or not payload:
+        return None
+    action_url = _resolve_form_action(referer, action)
+    encoded = urlencode(payload).encode("utf-8")
+    follow = http_client.request(
+        "POST",
+        action_url,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": referer,
+            "Accept": "application/xml, text/html",
+        },
+        data=encoded,
+        include_cookie=True,
+    )
+    return DocketFetchResult(
+        url=action_url,
+        status_code=follow.status_code,
+        content_type=follow.headers.get("Content-Type", ""),
+        body=follow.body,
+        form_action=action_url,
+        form_payload=payload,
+    )
+
+
+def _select_confirm_form(html: str) -> tuple[Optional[str], Dict[str, str]]:
+    forms = []
+    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
+        form_html = match.group(0)
+        tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
+        attrs = tag_match.group(1) if tag_match else ""
+        action = _extract_attr(attrs, "action")
+        score = 0
+        if re.search(r"confirm", form_html, re.IGNORECASE):
+            score += 3
+        if "outputXML_TXT" in form_html:
+            score += 2
+        if "view report" in form_html.lower():
+            score += 1
+        forms.append((score, action, form_html))
+    if not forms:
+        return None, {}
+    forms.sort(key=lambda item: item[0], reverse=True)
+    _, action, form_html = forms[0]
+    payload = _extract_form_fields(form_html)
+    if "confirmCharge" in payload:
+        payload["confirmCharge"] = "Y"
+    if "confirmCharges" in payload:
+        payload["confirmCharges"] = "Y"
+    if "outputXML_TXT" in payload:
+        payload["outputXML_TXT"] = "XML"
+    if "output_format" in payload:
+        payload["output_format"] = "XML"
+    return action, payload
+
+
+def _fetch_docket_report_multistep(
+    http_client: Any,
+    case_link: str,
+    *,
+    case_number_full: Optional[str],
+) -> Optional[DocketFetchResult]:
+    if not case_number_full:
+        return None
+    parsed = urlparse(case_link or "")
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    search_url = f"{base_url}/n/beam/servlet/TransportRoom?servlet=CaseSearch.jsp"
+    search_response = http_client.request(
+        "GET",
+        search_url,
+        headers={"Accept": "text/html"},
+        include_cookie=True,
+    )
+    if search_response.status_code != 200:
+        return None
+    search_html = search_response.body.decode("utf-8", errors="replace")
+    search_form = _find_first_form(search_html)
+    if not search_form:
+        return None
+    search_action, search_payload = search_form
+    search_payload.setdefault("servlet", "CaseSelectionTable.jsp")
+    search_payload.setdefault("csnum1", case_number_full)
+    search_payload.setdefault("csnum2", "")
+    search_payload.setdefault("aName", "")
+    search_payload.setdefault("searchPty", "pty")
+    search_action_url = _resolve_form_action(search_url, search_action)
+    search_submit = http_client.request(
+        "POST",
+        search_action_url,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": search_url,
+            "Accept": "text/html",
+        },
+        data=urlencode(search_payload).encode("utf-8"),
+        include_cookie=True,
+    )
+    if search_submit.status_code != 200:
+        return None
+    summary_link = _extract_case_summary_link(
+        search_submit.body.decode("utf-8", errors="replace")
+    )
+    if not summary_link:
+        return None
+    summary_url = _resolve_form_action(search_action_url, summary_link)
+    summary_response = http_client.request(
+        "GET",
+        summary_url,
+        headers={"Accept": "text/html"},
+        include_cookie=True,
+    )
+    if summary_response.status_code != 200:
+        return None
+    summary_html = summary_response.body.decode("utf-8", errors="replace")
+    full_docket_form = _find_form_with_input(summary_html, "fullDocket")
+    if not full_docket_form:
+        return None
+    docket_action, docket_payload = full_docket_form
+    docket_action_url = _resolve_form_action(summary_url, docket_action)
+    docket_submit = http_client.request(
+        "POST",
+        docket_action_url,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": summary_url,
+            "Accept": "text/html",
+        },
+        data=urlencode(docket_payload).encode("utf-8"),
+        include_cookie=True,
+    )
+    if docket_submit.status_code != 200:
+        return None
+    filter_form = _find_first_form(
+        docket_submit.body.decode("utf-8", errors="replace")
+    )
+    if not filter_form:
+        return None
+    filter_action, filter_payload = filter_form
+    filter_payload["outputXML_TXT"] = "XML"
+    filter_action_url = _resolve_form_action(docket_action_url, filter_action)
+    filter_response = http_client.request(
+        "POST",
+        filter_action_url,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": docket_action_url,
+            "Accept": "text/html, application/xml",
+        },
+        data=urlencode(filter_payload).encode("utf-8"),
+        include_cookie=True,
+    )
+    if filter_response.status_code != 200:
+        return None
+    confirm = _submit_confirm_form(http_client, filter_response, referer=filter_action_url)
+    if confirm is not None:
+        return confirm
+    return DocketFetchResult(
+        url=filter_action_url,
+        status_code=filter_response.status_code,
+        content_type=filter_response.headers.get("Content-Type", ""),
+        body=filter_response.body,
+        form_action=filter_action_url,
+        form_payload=filter_payload,
+    )
+
+
+def _find_first_form(html_text: str) -> Optional[tuple[str, Dict[str, str]]]:
+    match = re.search(r"<form\\b[^>]*>.*?</form>", html_text, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return None
+    form_html = match.group(0)
+    tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
+    attrs = tag_match.group(1) if tag_match else ""
+    action = _extract_attr(attrs, "action") or ""
+    payload = _extract_form_fields(form_html)
+    return action, payload
+
+
+def _find_form_with_input(html_text: str, input_name: str) -> Optional[tuple[str, Dict[str, str]]]:
+    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html_text, re.IGNORECASE | re.DOTALL):
+        form_html = match.group(0)
+        if input_name not in form_html:
+            continue
+        tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
+        attrs = tag_match.group(1) if tag_match else ""
+        action = _extract_attr(attrs, "action") or ""
+        payload = _extract_form_fields(form_html)
+        return action, payload
+    return None
+
+
+def _extract_case_summary_link(html_text: str) -> Optional[str]:
+    match = re.search(r'href=[\"\\']([^\"\\']*CaseSummary[^\"\\']*)[\"\\']', html_text)
+    if match:
+        return match.group(1)
+    match = re.search(r'href=[\"\\']([^\"\\']*CaseSummary.*?)[\"\\']', html_text)
+    return match.group(1) if match else None
 
 
 def _extract_form_fields(html: str) -> Dict[str, str]:
