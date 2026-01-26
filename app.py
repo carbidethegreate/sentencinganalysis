@@ -123,7 +123,7 @@ from pacer_explore_schemas import (
     validate_pcl_payload,
     validate_ui_inputs,
 )
-from pcl_queries import get_case_detail, list_cases, parse_filters
+from pcl_queries import get_case_detail, list_case_cards, list_cases, parse_filters
 from sentencing_queries import list_sentencing_events_by_judge, parse_sentencing_filters
 from federal_courts_sync import (
     FEDERAL_COURTS_SOURCE_URL,
@@ -2600,7 +2600,7 @@ def create_app() -> Flask:
 
     def _load_case_field_choices(limit: int = 200) -> List[str]:
         pcl_case_fields = pcl_tables.get("pcl_case_fields")
-        if not pcl_case_fields:
+        if pcl_case_fields is None:
             return []
         stmt = (
             select(pcl_case_fields.c.field_name)
