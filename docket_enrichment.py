@@ -275,6 +275,7 @@ class DocketEnrichmentWorker:
                 response.body.decode("utf-8", errors="replace"),
                 base_url=url,
                 case_number_full=case_row.get("case_number_full"),
+                case_number=case_row.get("case_number"),
             )
             if submit:
                 if _looks_like_docket_shell(
@@ -624,6 +625,7 @@ def _submit_docket_form(
     html: str,
     base_url: str,
     case_number_full: Optional[str] = None,
+    case_number: Optional[str] = None,
 ) -> Optional[DocketFetchResult]:
     action, payload, form_html = _select_docket_form(html)
     if not action or not payload:
@@ -632,11 +634,12 @@ def _submit_docket_form(
     if case_id:
         payload.setdefault("case_id", case_id)
         payload.setdefault("all_case_ids", case_id)
-        payload.setdefault("case_num", case_id)
     if case_number_full:
         payload.setdefault("case_number_full", case_number_full)
         payload.setdefault("case_number", case_number_full)
         payload.setdefault("case_number_text_area_0", case_number_full)
+    if case_number_full or case_number:
+        payload["case_num"] = case_number_full or case_number
     if case_id and "case_number_text_area_0" not in payload:
         payload["case_number_text_area_0"] = case_id
     payload.setdefault("date_range_type", "Filed")
