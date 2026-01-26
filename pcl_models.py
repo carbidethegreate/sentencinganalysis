@@ -363,6 +363,8 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("case_office", String(20), nullable=True),
         Column("judge_last_name", String(80), nullable=True),
         Column("source_last_seen_at", DateTime(timezone=True), nullable=True),
+        Column("last_search_run_id", Integer, nullable=True),
+        Column("last_search_run_at", DateTime(timezone=True), nullable=True),
         Column("record_hash", String(128), nullable=True),
         Column(
             "last_segment_id",
@@ -409,6 +411,8 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("party_type", Text, nullable=True),
         Column("party_role", Text, nullable=True),
         Column("party_name", Text, nullable=True),
+        Column("last_search_run_id", Integer, nullable=True),
+        Column("last_search_run_at", DateTime(timezone=True), nullable=True),
         Column("source_last_seen_at", DateTime(timezone=True), nullable=True),
         Column("record_hash", String(128), nullable=False),
         Column("data_json", Text, nullable=False),

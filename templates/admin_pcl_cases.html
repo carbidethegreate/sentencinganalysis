@@ -206,6 +206,17 @@
 
           <footer class="pcl-case-card__footer">
             <span class="small">Segment status: {{ case.segment_status or "unknown" }}</span>
+            <span class="small">
+              Last PACER run:
+              {% if case.last_search_run_id %}
+                Run #{{ case.last_search_run_id }}
+              {% endif %}
+              {% if case.last_search_run_at %}
+                · {{ case.last_search_run_at.isoformat() }}
+              {% else %}
+                · —
+              {% endif %}
+            </span>
             <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View details</a>
           </footer>
         </article>

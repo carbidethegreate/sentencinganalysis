@@ -2004,6 +2004,9 @@ def create_app() -> Flask:
     def _upsert_pcl_case(
         conn: Any,
         case_record: Dict[str, Any],
+        *,
+        search_run_id: Optional[int] = None,
+        search_run_at: Optional[datetime] = None,
     ) -> Tuple[int, bool]:
         pcl_cases = pcl_tables["pcl_cases"]
         court_id = case_record["court_id"]
@@ -2019,6 +2022,12 @@ def create_app() -> Flask:
             .first()
         )
         now = datetime.utcnow()
+        if search_run_id:
+            case_record = {
+                **case_record,
+                "last_search_run_id": search_run_id,
+                "last_search_run_at": search_run_at or now,
+            }
         if existing:
             conn.execute(
                 update(pcl_cases)
@@ -2045,6 +2054,9 @@ def create_app() -> Flask:
     def _upsert_pcl_party(
         conn: Any,
         party_record: Dict[str, Any],
+        *,
+        search_run_id: Optional[int] = None,
+        search_run_at: Optional[datetime] = None,
     ) -> Tuple[int, bool]:
         pcl_parties = pcl_tables["pcl_parties"]
         record_hash = party_record["record_hash"]
@@ -2056,6 +2068,12 @@ def create_app() -> Flask:
             .first()
         )
         now = datetime.utcnow()
+        if search_run_id:
+            party_record = {
+                **party_record,
+                "last_search_run_id": search_run_id,
+                "last_search_run_at": search_run_at or now,
+            }
         if existing:
             conn.execute(
                 update(pcl_parties)
@@ -2108,6 +2126,26 @@ def create_app() -> Flask:
         )
         default_court_id = (criteria.get("ui_inputs") or {}).get("court_id")
         with engine.begin() as conn:
+            run_timestamp = datetime.utcnow()
+            run_result = conn.execute(
+                insert(pacer_search_runs).values(
+                    search_type=search_type,
+                    search_mode=search_mode,
+                    criteria_json=criteria_json,
+                    report_id=report_id,
+                    report_status=report_status,
+                    receipt_json=receipt_json,
+                    page_info_json=page_info_json,
+                    raw_response_json=raw_response_json,
+                    cases_inserted=0,
+                    cases_updated=0,
+                    parties_inserted=0,
+                    parties_updated=0,
+                    created_at=run_timestamp,
+                    updated_at=run_timestamp,
+                )
+            )
+            search_run_id = int(run_result.inserted_primary_key[0])
             if search_type == "case":
                 for record in results:
                     if not isinstance(record, dict):
@@ -2117,7 +2155,12 @@ def create_app() -> Flask:
                     )
                     if not normalized:
                         continue
-                    _, inserted = _upsert_pcl_case(conn, normalized)
+                    _, inserted = _upsert_pcl_case(
+                        conn,
+                        normalized,
+                        search_run_id=search_run_id,
+                        search_run_at=run_timestamp,
+                    )
                     if inserted:
                         counts["cases_inserted"] += 1
                     else:
@@ -2134,32 +2177,37 @@ def create_app() -> Flask:
                     )
                     if not normalized_case:
                         continue
-                    case_id, case_inserted = _upsert_pcl_case(conn, normalized_case)
+                    case_id, case_inserted = _upsert_pcl_case(
+                        conn,
+                        normalized_case,
+                        search_run_id=search_run_id,
+                        search_run_at=run_timestamp,
+                    )
                     if case_inserted:
                         counts["cases_inserted"] += 1
                     else:
                         counts["cases_updated"] += 1
                     party_record = _normalize_party_record(record, case_id=case_id)
-                    _, party_inserted = _upsert_pcl_party(conn, party_record)
+                    _, party_inserted = _upsert_pcl_party(
+                        conn,
+                        party_record,
+                        search_run_id=search_run_id,
+                        search_run_at=run_timestamp,
+                    )
                     if party_inserted:
                         counts["parties_inserted"] += 1
                     else:
                         counts["parties_updated"] += 1
 
             conn.execute(
-                insert(pacer_search_runs).values(
-                    search_type=search_type,
-                    search_mode=search_mode,
-                    criteria_json=criteria_json,
-                    report_id=report_id,
-                    report_status=report_status,
-                    receipt_json=receipt_json,
-                    page_info_json=page_info_json,
-                    raw_response_json=raw_response_json,
+                update(pacer_search_runs)
+                .where(pacer_search_runs.c.id == search_run_id)
+                .values(
                     cases_inserted=counts["cases_inserted"],
                     cases_updated=counts["cases_updated"],
                     parties_inserted=counts["parties_inserted"],
                     parties_updated=counts["parties_updated"],
+                    updated_at=run_timestamp,
                 )
             )
         return counts

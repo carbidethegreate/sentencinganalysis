@@ -3,7 +3,7 @@ PACER UX + Data Plan
 Status
 - Phase 1: Done (Immediate vs Batch UX switch, improved hub entry points).
 - Phase 2: Done (Unified search run storage + dedupe indicators).
-- Phase 3: In progress (Saved searches + run history; sort controls; search reuse).
+- Phase 3: Done (Saved searches + run history; sort controls; search reuse; case provenance).
 - Phase 4: Next (Enrichment + expansion actions tied to case status and run provenance).
 
 Latest update
@@ -13,6 +13,7 @@ Latest update
 - Added PACER response-code context to PCL API errors.
 - Added sortable-field controls to Explore PACER using pacer_sortable_case_fields and pacer_sortable_party_fields.
 - Displayed region + sort context in saved searches and run history.
+- Stored PACER search run provenance on cases/parties and surfaced it in the case list + detail views.
 
 Current focus
 1) Apply the PACER reference-table migration in production.
@@ -26,6 +27,7 @@ Current focus
    - Display last run info on Indexed Cases.
    - Link saved searches to their last run and run counts.
 4) Surface sort + region details in run history and saved search summaries.
+5) Apply the PACER run provenance migration in production.
 
 Next steps
 - Apply the PACER reference-table migration in production.

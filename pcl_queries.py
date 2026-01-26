@@ -105,6 +105,8 @@ def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size:
             pcl_cases.c.short_title,
             pcl_cases.c.case_title,
             pcl_cases.c.judge_last_name,
+            pcl_cases.c.last_search_run_id,
+            pcl_cases.c.last_search_run_at,
             pcl_cases.c.last_segment_id,
             pcl_batch_segments.c.status.label("segment_status"),
             pcl_batch_segments.c.date_filed_from.label("segment_date_from"),
@@ -179,6 +181,7 @@ def list_case_cards(
 def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
     pcl_cases = tables["pcl_cases"]
     pcl_batch_segments = tables["pcl_batch_segments"]
+    pacer_search_runs = tables["pacer_search_runs"]
 
     stmt = (
         select(
@@ -191,10 +194,23 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
             pcl_batch_segments.c.remote_status_message.label("segment_remote_status_message"),
             pcl_batch_segments.c.submitted_at.label("segment_submitted_at"),
             pcl_batch_segments.c.completed_at.label("segment_completed_at"),
+            pacer_search_runs.c.id.label("pacer_run_id"),
+            pacer_search_runs.c.created_at.label("pacer_run_created_at"),
+            pacer_search_runs.c.search_type.label("pacer_run_search_type"),
+            pacer_search_runs.c.search_mode.label("pacer_run_search_mode"),
+            pacer_search_runs.c.report_id.label("pacer_run_report_id"),
+            pacer_search_runs.c.report_status.label("pacer_run_report_status"),
+            pacer_search_runs.c.cases_inserted.label("pacer_run_cases_inserted"),
+            pacer_search_runs.c.cases_updated.label("pacer_run_cases_updated"),
+            pacer_search_runs.c.parties_inserted.label("pacer_run_parties_inserted"),
+            pacer_search_runs.c.parties_updated.label("pacer_run_parties_updated"),
         )
         .select_from(
             pcl_cases.outerjoin(
                 pcl_batch_segments, pcl_batch_segments.c.id == pcl_cases.c.last_segment_id
+            ).outerjoin(
+                pacer_search_runs,
+                pacer_search_runs.c.id == pcl_cases.c.last_search_run_id,
             )
         )
         .where(pcl_cases.c.id == case_id)

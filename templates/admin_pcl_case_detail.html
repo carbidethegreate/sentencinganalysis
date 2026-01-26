@@ -53,6 +53,24 @@
           <div><dt>Completed at</dt><dd>{{ case_detail.segment_completed_at.isoformat() if case_detail.segment_completed_at else "—" }}</dd></div>
         </dl>
       </article>
+
+      <article class="pcl-detail-card">
+        <h3>PACER run provenance</h3>
+        <dl class="pcl-detail-list">
+          <div><dt>Last run ID</dt><dd>{{ case_detail.pacer_run_id or case_detail.last_search_run_id or "—" }}</dd></div>
+          <div>
+            <dt>Last run time</dt>
+            <dd>
+              {% set run_time = case_detail.last_search_run_at or case_detail.pacer_run_created_at %}
+              {{ run_time.isoformat() if run_time else "—" }}
+            </dd>
+          </div>
+          <div><dt>Run type</dt><dd>{{ case_detail.pacer_run_search_type or "—" }}</dd></div>
+          <div><dt>Run mode</dt><dd>{{ case_detail.pacer_run_search_mode or "—" }}</dd></div>
+          <div><dt>Report ID</dt><dd class="pcl-mono">{{ case_detail.pacer_run_report_id or "—" }}</dd></div>
+          <div><dt>Report status</dt><dd>{{ case_detail.pacer_run_report_status or "—" }}</dd></div>
+        </dl>
+      </article>
     </div>
   </section>
 
