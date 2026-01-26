@@ -108,6 +108,13 @@
         <p class="small">Pulls the latest schema and table list from the database.</p>
       </div>
       <div class="database-toolbar__action">
+        <p class="label">Export full catalog</p>
+        <a class="button small secondary" href="{{ url_for('admin_database_dashboard_export_all') }}">
+          Download JSON
+        </a>
+        <p class="small">Exports all schemas, tables, and columns in a Codex-friendly JSON file.</p>
+      </div>
+      <div class="database-toolbar__action">
         <p class="label">Quick tips</p>
         <ul class="database-toolbar__tips">
           <li class="small">Open schemas to see tables and drill into columns.</li>
