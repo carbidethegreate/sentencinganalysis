@@ -556,41 +556,49 @@
                       <th>Date filed</th>
                       <th>Short title</th>
                       <th>Court</th>
-                  <th>Saved?</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for case in run_result.cases_view or run_result.cases %}
-                  <tr>
+                      <th>Saved?</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for case in run_result.cases_view or run_result.cases %}
+                      <tr>
                         <td>{{ loop.index }}</td>
                         <td>{{ case.case_number or case.caseNumber or case.case_number_full or case.cs_case_number or '—' }}</td>
                         <td>{{ case.case_type or case.caseType or '—' }}</td>
                         <td>{{ case.date_filed or case.dateFiled or '—' }}</td>
                         <td>{{ case.short_title or case.shortTitle or case.cs_short_title or '—' }}</td>
-                    <td>{{ case.court_id or case.courtId or case_values.court_id }}</td>
-                    <td>
-                      {% if case.already_indexed %}
-                        <span class="pill">Already indexed</span>
-                      {% else %}
-                        <span class="pill primary">New</span>
-                      {% endif %}
-                    </td>
-                    <td>
-                      {% if case.case_id %}
-                        <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.case_id) }}">
-                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                          <button class="secondary" type="submit">Expand data</button>
-                        </form>
-                      {% else %}
-                        <span class="small">—</span>
-                      {% endif %}
-                    </td>
-                  </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
+                        <td>{{ case.court_id or case.courtId or case_values.court_id }}</td>
+                        <td>
+                          {% if case.already_indexed %}
+                            <span class="pill">Already indexed</span>
+                          {% else %}
+                            <span class="pill primary">New</span>
+                          {% endif %}
+                        </td>
+                        <td>
+                          {% if case.case_id %}
+                            <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.case_id) }}">
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <button class="secondary" type="submit">Expand data</button>
+                            </form>
+                          {% else %}
+                            <span class="small">—</span>
+                          {% endif %}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colspan="8">
+                          <details>
+                            <summary class="small">Show full PACER record</summary>
+                            <pre class="code-block">{{ case | tojson(indent=2) }}</pre>
+                          </details>
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
               {% if run_result.store_payload %}
                 <div class="actions">
                   <form method="post" action="{{ url_for('admin_pacer_explore_store') }}">
@@ -708,6 +716,14 @@
                         <td>{{ party.partyType or party.party_type or '—' }}</td>
                         <td>{{ party.courtCase.caseNumber if party.courtCase else (party.court_case.case_number if party.court_case else '—') }}</td>
                         <td>{{ party.courtCase.courtId if party.courtCase else (party.court_case.court_id if party.court_case else party_values.court_id or '—') }}</td>
+                      </tr>
+                      <tr>
+                        <td colspan="6">
+                          <details>
+                            <summary class="small">Show full PACER record</summary>
+                            <pre class="code-block">{{ party | tojson(indent=2) }}</pre>
+                          </details>
+                        </td>
                       </tr>
                     {% endfor %}
                   </tbody>

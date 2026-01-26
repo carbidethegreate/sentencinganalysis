@@ -7585,6 +7585,36 @@ def create_app() -> Flask:
         detail = get_case_detail(engine, pcl_tables, case_id)
         if not detail:
             abort(404)
+        raw_payload = detail.get("data_json")
+        parsed_payload: Any = None
+        if isinstance(raw_payload, str) and raw_payload:
+            try:
+                parsed_payload = json.loads(raw_payload)
+            except json.JSONDecodeError:
+                parsed_payload = raw_payload
+        receipt_payload = None
+        receipt_raw = detail.get("pacer_run_receipt_json")
+        if isinstance(receipt_raw, str) and receipt_raw:
+            try:
+                receipt_payload = json.loads(receipt_raw)
+            except json.JSONDecodeError:
+                receipt_payload = None
+        harvested_info: Dict[str, Any] = {}
+        if isinstance(receipt_payload, list) and receipt_payload:
+            first_receipt = receipt_payload[0].get("receipt") if isinstance(receipt_payload[0], dict) else None
+            if isinstance(first_receipt, dict):
+                harvested_info = {
+                    "login_id": first_receipt.get("loginId"),
+                    "cso_id": first_receipt.get("csoId"),
+                    "transaction_date": first_receipt.get("transactionDate"),
+                    "report_id": first_receipt.get("reportId"),
+                    "search_fee": first_receipt.get("searchFee"),
+                    "client_code": first_receipt.get("clientCode"),
+                    "description": first_receipt.get("description"),
+                    "search": first_receipt.get("search"),
+                }
+        detail["data_json_parsed"] = parsed_payload
+        detail["harvested_info"] = harvested_info
         return render_template(
             "admin_pcl_case_detail.html",
             active_page="federal_data_dashboard",

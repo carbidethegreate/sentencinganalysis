@@ -287,6 +287,7 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
             pacer_search_runs.c.cases_updated.label("pacer_run_cases_updated"),
             pacer_search_runs.c.parties_inserted.label("pacer_run_parties_inserted"),
             pacer_search_runs.c.parties_updated.label("pacer_run_parties_updated"),
+            pacer_search_runs.c.receipt_json.label("pacer_run_receipt_json"),
         )
         .select_from(
             pcl_cases.outerjoin(

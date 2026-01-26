@@ -78,6 +78,48 @@
     </div>
   </section>
 
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <h3>PACER capture details</h3>
+        <p class="small">Who pulled this data and what PACER reported.</p>
+      </div>
+    </div>
+    <div class="grid two pcl-detail-grid">
+      <article class="pcl-detail-card">
+        <h3>Harvested by</h3>
+        <dl class="pcl-detail-list">
+          <div><dt>Login ID</dt><dd>{{ case_detail.harvested_info.login_id or "—" }}</dd></div>
+          <div><dt>CSO ID</dt><dd>{{ case_detail.harvested_info.cso_id or "—" }}</dd></div>
+          <div><dt>Transaction date</dt><dd>{{ case_detail.harvested_info.transaction_date or "—" }}</dd></div>
+          <div><dt>Report ID</dt><dd class="pcl-mono">{{ case_detail.harvested_info.report_id or "—" }}</dd></div>
+        </dl>
+      </article>
+      <article class="pcl-detail-card">
+        <h3>Search receipt</h3>
+        <dl class="pcl-detail-list">
+          <div><dt>Search fee</dt><dd>{{ case_detail.harvested_info.search_fee or "—" }}</dd></div>
+          <div><dt>Client code</dt><dd>{{ case_detail.harvested_info.client_code or "—" }}</dd></div>
+          <div><dt>Description</dt><dd>{{ case_detail.harvested_info.description or "—" }}</dd></div>
+          <div><dt>Search</dt><dd>{{ case_detail.harvested_info.search or "—" }}</dd></div>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
+        <h3>Full PACER payload</h3>
+        <p class="small">Every field returned for this case. Use this to add new fields to the UI.</p>
+      </div>
+    </div>
+    <details class="pcl-detail-card">
+      <summary class="pcl-detail-summary">Show raw PACER JSON</summary>
+      <pre class="code-block">{{ case_detail.data_json_parsed | tojson(indent=2) if case_detail.data_json_parsed else (case_detail.data_json or "—") }}</pre>
+    </details>
+  </section>
+
 
   <section class="card pcl-detail-shell">
     <div class="pcl-detail-header">
