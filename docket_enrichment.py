@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import html
 import json
 import re
 from typing import Any, Callable, Dict, List, Optional
@@ -29,6 +30,8 @@ class DocketFetchResult:
     status_code: int
     content_type: str
     body: bytes
+    form_action: Optional[str] = None
+    form_payload: Optional[Dict[str, str]] = None
 
 
 class DocketEnrichmentWorker:
@@ -134,6 +137,24 @@ class DocketEnrichmentWorker:
             fetch_result.body,
             fetch_result.content_type,
         )
+        raw_html = None
+        if parsed_format == "html":
+            raw_html = fetch_result.body.decode("utf-8", errors="replace")
+        if raw_html and _looks_like_docket_shell(raw_html):
+            self._store_docket_payload(
+                job,
+                case_row,
+                fetch_result,
+                docket_text,
+                docket_entries,
+                parsed_format,
+                raw_html=raw_html,
+            )
+            self._mark_failed(
+                job,
+                "PACER returned a docket form instead of the docket report.",
+            )
+            return
         if not job.get("include_docket_text"):
             docket_text = ""
             if docket_entries:
@@ -147,6 +168,7 @@ class DocketEnrichmentWorker:
             docket_text,
             docket_entries,
             parsed_format,
+            raw_html=raw_html,
         )
         self._mark_completed(job)
 
@@ -251,8 +273,19 @@ class DocketEnrichmentWorker:
                 self._http_client,
                 response.body.decode("utf-8", errors="replace"),
                 base_url=url,
+                case_number_full=case_row.get("case_number_full"),
             )
             if submit:
+                if _looks_like_docket_shell(
+                    submit.body.decode("utf-8", errors="replace")
+                ):
+                    forced = _force_docket_report(
+                        self._http_client,
+                        case_row["case_link"],
+                        case_number_full=case_row.get("case_number_full"),
+                    )
+                    if forced:
+                        return forced
                 return submit
         return DocketFetchResult(
             url=url,
@@ -269,12 +302,17 @@ class DocketEnrichmentWorker:
         docket_text: str,
         docket_entries: List[Dict[str, Any]],
         parsed_format: str,
+        *,
+        raw_html: Optional[str] = None,
     ) -> None:
         pcl_case_fields = self._tables.get("pcl_case_fields")
         receipt_table = self._tables.get("docket_enrichment_receipts")
         now = self._now()
         docket_text_preview = _truncate_text(docket_text, 1000) if docket_text else ""
-        docket_is_shell = parsed_format == "html" and _looks_like_docket_shell(docket_text)
+        html_body = raw_html
+        if not html_body and parsed_format == "html":
+            html_body = fetch_result.body.decode("utf-8", errors="replace")
+        docket_is_shell = parsed_format == "html" and _looks_like_docket_shell(html_body or "")
 
         with self._engine.begin() as conn:
             if pcl_case_fields is not None:
@@ -298,13 +336,14 @@ class DocketEnrichmentWorker:
                         now=now,
                     )
                 elif docket_text:
+                    html_preview = _truncate_text(_strip_html(html_body or ""), 1000)
                     _upsert_case_field(
                         conn,
                         pcl_case_fields,
                         case_row["id"],
                         "docket_html",
                         field_value_text=None,
-                        field_value_json={"text": docket_text},
+                        field_value_json={"text": html_body or docket_text},
                         now=now,
                     )
                     _upsert_case_field(
@@ -312,7 +351,7 @@ class DocketEnrichmentWorker:
                         pcl_case_fields,
                         case_row["id"],
                         "docket_html_preview",
-                        field_value_text=docket_text_preview,
+                        field_value_text=html_preview,
                         field_value_json=None,
                         now=now,
                     )
@@ -372,6 +411,12 @@ class DocketEnrichmentWorker:
                     "include_docket_text": bool(job.get("include_docket_text")),
                     "fetched_at": now.isoformat(),
                 }
+                if fetch_result.form_action:
+                    receipt_payload["form_action"] = fetch_result.form_action
+                if fetch_result.form_payload:
+                    receipt_payload["form_payload"] = _truncate_map(
+                        fetch_result.form_payload, 200
+                    )
                 conn.execute(
                     receipt_table.insert().values(
                         job_id=job["id"],
@@ -519,10 +564,12 @@ def _looks_like_docket_shell(text: str) -> bool:
 
 
 def _submit_docket_form(
-    http_client: Any, html: str, base_url: str
+    http_client: Any,
+    html: str,
+    base_url: str,
+    case_number_full: Optional[str] = None,
 ) -> Optional[DocketFetchResult]:
-    action = _extract_form_action(html)
-    payload = _extract_form_fields(html)
+    action, payload, form_html = _select_docket_form(html)
     if not action or not payload:
         return None
     case_id = _extract_case_id_from_url(base_url)
@@ -530,13 +577,24 @@ def _submit_docket_form(
         payload.setdefault("case_id", case_id)
         payload.setdefault("all_case_ids", case_id)
         payload.setdefault("case_num", case_id)
+    if case_number_full:
+        payload.setdefault("case_number_full", case_number_full)
+        payload.setdefault("case_number", case_number_full)
+        payload.setdefault("case_number_text_area_0", case_number_full)
+    if case_id and "case_number_text_area_0" not in payload:
+        payload["case_number_text_area_0"] = case_id
+    payload.setdefault("report_type", "docket")
+    payload.setdefault("sort1", "docnum")
+    payload.setdefault("sort2", "filingdate")
 
     output_format = payload.get("output_format", "")
     if output_format:
         output_format = output_format.lower()
     if output_format not in {"xml", "html", "pdf"}:
-        output_format = "xml" if _form_supports_xml(html) else "html"
-        payload["output_format"] = output_format.upper() if output_format == "xml" else output_format
+        output_format = "xml" if _form_supports_xml(form_html or html) else "html"
+        payload["output_format"] = "XML" if output_format == "xml" else output_format
+    elif output_format == "xml":
+        payload["output_format"] = "XML"
 
     payload.setdefault("output_format_type", payload.get("output_format"))
     payload.setdefault("report_type", "docket")
@@ -546,7 +604,11 @@ def _submit_docket_form(
     response = http_client.request(
         "POST",
         action_url,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": base_url,
+            "Accept": "application/xml, text/html",
+        },
         data=encoded,
         include_cookie=True,
     )
@@ -556,6 +618,8 @@ def _submit_docket_form(
         status_code=response.status_code,
         content_type=content_type,
         body=response.body,
+        form_action=action_url,
+        form_payload=payload,
     )
 
 
@@ -571,9 +635,27 @@ def _resolve_form_action(base_url: str, action: str) -> str:
     return f"{scheme}://{host}{base_path}/{action}"
 
 
-def _extract_form_action(html: str) -> Optional[str]:
-    match = re.search(r"<form[^>]+action=[\"']([^\"']+)[\"']", html, re.IGNORECASE)
-    return match.group(1) if match else None
+def _select_docket_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
+    forms = []
+    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
+        form_html = match.group(0)
+        tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
+        attrs = tag_match.group(1) if tag_match else ""
+        action = _extract_attr(attrs, "action")
+        score = 0
+        if action and "dktrpt" in action.lower():
+            score += 3
+        if "case_number_text_area" in form_html.lower():
+            score += 2
+        if "docket report" in form_html.lower() or "docket sheet" in form_html.lower():
+            score += 1
+        forms.append((score, action, form_html))
+    if not forms:
+        return None, {}, ""
+    forms.sort(key=lambda item: item[0], reverse=True)
+    _, action, form_html = forms[0]
+    payload = _extract_form_fields(form_html)
+    return action, payload, form_html
 
 
 def _extract_form_fields(html: str) -> Dict[str, str]:
@@ -602,6 +684,12 @@ def _extract_form_fields(html: str) -> Dict[str, str]:
         fallback = re.search(r"<option[^>]*value=[\"']([^\"']*)[\"']", body, re.IGNORECASE)
         if fallback:
             fields[name] = fallback.group(1)
+    for match in re.finditer(r"<textarea([^>]*)>(.*?)</textarea>", html, re.IGNORECASE | re.DOTALL):
+        attrs, body = match.groups()
+        name = _extract_attr(attrs, "name")
+        if not name:
+            continue
+        fields[name] = html.unescape(body.strip())
     if "output_format" not in fields:
         xml_option = re.search(
             r"name=[\"']output_format[\"'][^>]*value=[\"'](xml|XML)[\"']",
@@ -610,6 +698,17 @@ def _extract_form_fields(html: str) -> Dict[str, str]:
         if xml_option:
             fields["output_format"] = xml_option.group(1)
     return fields
+
+
+def _truncate_map(values: Dict[str, str], max_len: int) -> Dict[str, str]:
+    trimmed = {}
+    for key, value in values.items():
+        if value is None:
+            trimmed[key] = ""
+            continue
+        string_value = str(value)
+        trimmed[key] = _truncate_text(string_value, max_len)
+    return trimmed
 
 
 def _extract_attr(attrs: str, name: str) -> Optional[str]:
@@ -623,6 +722,36 @@ def _form_supports_xml(html: str) -> bool:
         html,
         re.IGNORECASE,
     ) is not None
+
+
+def _force_docket_report(
+    http_client: Any,
+    case_link: str,
+    *,
+    case_number_full: Optional[str] = None,
+) -> Optional[DocketFetchResult]:
+    try:
+        url = _build_docket_report_url(
+            case_link,
+            case_number_full=case_number_full,
+            case_number=None,
+            output_format="XML",
+            url_template=None,
+        )
+    except ValueError:
+        return None
+    response = http_client.request(
+        "GET",
+        url,
+        headers={"Accept": "application/xml, text/html"},
+        include_cookie=True,
+    )
+    return DocketFetchResult(
+        url=url,
+        status_code=response.status_code,
+        content_type=response.headers.get("Content-Type", ""),
+        body=response.body,
+    )
 
 
 def _upsert_case_field(

@@ -12,6 +12,7 @@ Latest update
 - Added case detail fallback to display parsed PACER fields when normalized fields are missing.
 - Fixed SQLAlchemy truthy checks causing Internal Server Errors on case lists and details.
 - Wired docket enrichment worker to pull docket reports via PACER case links.
+- Added CM/ECF docket form auto-submit to retrieve the actual docket report.
 
 Current focus
 1) Validate docket enrichment output and confirm docket text is stored in `pcl_case_fields`.
