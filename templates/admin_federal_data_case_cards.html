@@ -1,0 +1,137 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Case Cards{% endblock %}
+
+{% block federal_content %}
+  <section class="card stack">
+    <p class="pacer-eyebrow">Saved PACER results</p>
+    <h2>Case cards</h2>
+    <p class="small">
+      These cards show cases that have been saved to the database from PACER searches.
+      Use filters to narrow results, then open a case for details or expansion.
+    </p>
+
+    <form method="get" class="pcl-filter-form" aria-label="Filter case cards">
+      <div class="grid two">
+        <div>
+          <label for="case-cards-court">Court (where the case was filed)</label>
+          <input
+            id="case-cards-court"
+            name="court_id"
+            list="case-cards-court-list"
+            value="{{ filters.court_id }}"
+            placeholder="Type a court code (e.g., vidc)"
+          >
+          <datalist id="case-cards-court-list">
+            {% for court in court_choices %}
+              <option value="{{ court.court_id }}">{{ court.label }}</option>
+            {% endfor %}
+          </datalist>
+        </div>
+        <div>
+          <label for="case-cards-type">Case type</label>
+          <select id="case-cards-type" name="case_type">
+            <option value="">All case types</option>
+            {% for case_type, label in case_type_choices %}
+              <option value="{{ case_type }}" {% if filters.case_type == case_type %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="case-cards-date-from">Date filed from</label>
+          <input id="case-cards-date-from" type="date" name="date_filed_from" value="{{ filters.date_filed_from.isoformat() if filters.date_filed_from else '' }}">
+        </div>
+        <div>
+          <label for="case-cards-date-to">Date filed to</label>
+          <input id="case-cards-date-to" type="date" name="date_filed_to" value="{{ filters.date_filed_to.isoformat() if filters.date_filed_to else '' }}">
+        </div>
+        <div>
+          <label for="case-cards-judge">Judge last name</label>
+          <input id="case-cards-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., Jackson">
+        </div>
+        <div>
+          <label for="case-cards-search">Search title/number</label>
+          <input id="case-cards-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
+        </div>
+      </div>
+
+      <div class="actions pcl-filter-actions">
+        <button class="primary" type="submit">Apply filters</button>
+        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_case_cards') }}">Reset</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="pcl-card-grid" aria-live="polite">
+    {% if cases %}
+      {% for case in cases %}
+        <article class="card pcl-case-card">
+          <header class="pcl-case-card__header">
+            <div>
+              <p class="pcl-case-card__number">{{ case.case_number_full or case.case_number }}</p>
+              <h3 class="pcl-case-card__title">{{ case.case_title or "Untitled case" }}</h3>
+            </div>
+            <div class="pcl-case-card__badges">
+              <span class="pcl-badge" data-variant="indexed">Saved</span>
+              <span class="pcl-badge" data-variant="stub">
+                Enrichment: {{ case.enrichment_status or "none" }}
+              </span>
+              <span class="pcl-badge" data-variant="{{ 'indexed' if case.has_sentencing else 'stub' }}">
+                Sentencing: {{ "yes" if case.has_sentencing else "no" }}
+              </span>
+            </div>
+          </header>
+
+          <dl class="pcl-case-meta">
+            <div>
+              <dt>Date filed</dt>
+              <dd>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</dd>
+            </div>
+            <div>
+              <dt>Court</dt>
+              <dd>{{ case.court_id }}</dd>
+            </div>
+            <div>
+              <dt>Case type</dt>
+              <dd>{{ case.case_type or "—" }}</dd>
+            </div>
+            <div>
+              <dt>Judge</dt>
+              <dd>{{ case.judge_last_name or "—" }}</dd>
+            </div>
+          </dl>
+
+          <footer class="pcl-case-card__footer">
+            <span class="small">
+              Last PACER run:
+              {% if case.last_search_run_id %}
+                Run #{{ case.last_search_run_id }}
+              {% endif %}
+              {% if case.last_search_run_at %}
+                · {{ case.last_search_run_at.isoformat() }}
+              {% else %}
+                · —
+              {% endif %}
+            </span>
+            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View details</a>
+          </footer>
+        </article>
+      {% endfor %}
+    {% else %}
+      <div class="card pcl-empty-state">
+        <h3>No saved cases yet</h3>
+        <p class="small">Run a PACER search and click “Save to database” to create cards.</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <nav class="pcl-pagination" aria-label="Case card pagination">
+    {% set total_pages = pagination.total_pages %}
+    {% set current_page = pagination.page %}
+    <span class="small">Page {{ current_page }} of {{ total_pages }}</span>
+    <div class="pcl-pagination__actions">
+      <a class="pill {% if current_page <= 1 %}disabled{% endif %}" href="{{ page_url(current_page - 1) if current_page > 1 else '#' }}" aria-disabled="{{ 'true' if current_page <= 1 else 'false' }}">Previous</a>
+      <a class="pill {% if current_page >= total_pages %}disabled{% endif %}" href="{{ page_url(current_page + 1) if current_page < total_pages else '#' }}" aria-disabled="{{ 'true' if current_page >= total_pages else 'false' }}">Next</a>
+    </div>
+  </nav>
+{% endblock %}

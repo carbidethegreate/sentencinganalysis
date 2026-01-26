@@ -7,22 +7,22 @@
   {% set party_values = party_values or party_defaults %}
   <section class="card stack">
     <div>
-      <p class="pacer-eyebrow">Admin playground</p>
-      <h2>Explore PACER</h2>
+      <p class="pacer-eyebrow">Quick search</p>
+      <h2>Search PACER</h2>
       <p class="small">
-        This playground runs PACER Case Locator (PCL) immediate case and party searches so you can inspect the index fields that come back.
-        It is designed for exploration and debugging, not bulk collection.
+        Run a fast PACER search to preview results. If you want to keep the cases, click “Save to database.”
       </p>
     </div>
 
     <div class="pacer-inline-note" role="note">
-      <strong>What this does:</strong> runs PCL index searches (<code>/cases/find</code> and <code>/parties/find</code>) and shows the raw response, observed fields, receipts, and logs.<br>
-      <strong>What this does NOT do:</strong> it does not fetch docket entries, download documents, or store PACER credentials in the browser.
+      <strong>What you get:</strong> case or party results, plus PACER receipts and fees.<br>
+      <strong>What you don’t get yet:</strong> full dockets or documents. Use “Expand data” later to enrich saved cases.
     </div>
 
     <div class="flash">
-      <strong>Cost warning:</strong> billable searches are reported by PACER receipts. Current billing status: {{ pacer_env_billable_label }}. Defaults are capped to one page ({{ explore_page_size }} records)
-      and immediate searches are limited to {{ immediate_max_pages }} pages ({{ immediate_max_pages * explore_page_size }} records). Batch reports support up to {{ batch_max_pages }} pages ({{ explore_max_records }} records).
+      <strong>Billing note:</strong> PACER bills per search. Billing status: {{ pacer_env_billable_label }}.
+      Immediate searches return one page at a time ({{ explore_page_size }} results per page).
+      Batch runs are for larger searches (up to {{ explore_max_records }} results).
     </div>
 
     <section class="card stack pacer-status-card">
@@ -81,13 +81,13 @@
     </section>
 
     <div class="actions">
-      <a class="{{ 'primary' if mode == 'cases' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='cases') }}">Case Search</a>
-      <a class="{{ 'primary' if mode == 'parties' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='parties') }}">Party Search</a>
+      <a class="{{ 'primary' if mode == 'cases' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='cases') }}">Search cases</a>
+      <a class="{{ 'primary' if mode == 'parties' else 'secondary' }}" href="{{ url_for('admin_pacer_explore', mode='parties') }}">Search people/parties</a>
     </div>
 
     {% if not pacer_search_enabled %}
       <div class="flash warning">
-        Explore PACER is disabled until authentication is active and the PACER environment matches the configured PCL environment.
+        PACER search is disabled until authentication is active and the PACER environment matches.
         Re-authorize and try again.
       </div>
     {% endif %}
@@ -98,13 +98,13 @@
         <input type="hidden" name="mode" value="cases">
 
         <div class="stack">
-          <label for="case-search-mode">Search Mode</label>
+          <label for="case-search-mode">How fast do you need results?</label>
           <select id="case-search-mode" name="search_mode" data-search-mode-control>
-            <option value="immediate" {% if not case_values or case_values.search_mode == 'immediate' %}selected{% endif %}>Immediate</option>
-            <option value="batch" {% if case_values and case_values.search_mode == 'batch' %}selected{% endif %}>Batch</option>
+            <option value="immediate" {% if not case_values or case_values.search_mode == 'immediate' %}selected{% endif %}>Immediate (see results now)</option>
+            <option value="batch" {% if case_values and case_values.search_mode == 'batch' %}selected{% endif %}>Batch (run a large search)</option>
           </select>
           <p class="small">
-            Immediate returns paged results ({{ explore_page_size }} per page) and is limited to {{ immediate_max_pages }} pages / {{ immediate_max_pages * explore_page_size }} items.
+            Immediate returns one page at a time ({{ explore_page_size }} results per page).
           </p>
           <p class="small">
             Batch runs a report for later retrieval and supports up to {{ batch_max_pages }} pages / {{ explore_max_records }} items.
@@ -114,6 +114,7 @@
         <div class="grid two">
           <div>
             <label for="explore-court">Court (optional)</label>
+            <input class="small" type="search" placeholder="Type to filter courts" data-filter-input="explore-court">
             <select id="explore-court" name="court_id">
               <option value="">Select a court…</option>
               {% for court in courts %}
@@ -126,6 +127,7 @@
           </div>
           <div>
             <label for="explore-region">Region (optional)</label>
+            <input class="small" type="search" placeholder="Type to filter regions" data-filter-input="explore-region">
             <select id="explore-region" name="region_code">
               <option value="">Select a region…</option>
               {% for region in regions %}
@@ -182,6 +184,7 @@
 
         <div>
           <label for="explore-case-types">Case types (optional)</label>
+          <input class="small" type="search" placeholder="Type to filter case types" data-filter-input="explore-case-types">
           <select id="explore-case-types" name="case_types" multiple size="4">
             {% set selected_case_types = case_values.case_types if case_values else [] %}
             {% for case_type, label in case_type_choices %}
@@ -215,7 +218,7 @@
         </div>
 
         <div class="actions">
-          <button class="primary" type="submit" {% if not pacer_search_enabled %}disabled{% endif %}>Run Explore</button>
+          <button class="primary" type="submit" {% if not pacer_search_enabled %}disabled{% endif %}>Run search</button>
         </div>
       </form>
     {% else %}
@@ -224,13 +227,13 @@
         <input type="hidden" name="mode" value="parties">
 
         <div class="stack">
-          <label for="party-search-mode">Search Mode</label>
+          <label for="party-search-mode">How fast do you need results?</label>
           <select id="party-search-mode" name="search_mode" data-search-mode-control>
-            <option value="immediate" {% if not party_values or party_values.search_mode == 'immediate' %}selected{% endif %}>Immediate</option>
-            <option value="batch" {% if party_values and party_values.search_mode == 'batch' %}selected{% endif %}>Batch</option>
+            <option value="immediate" {% if not party_values or party_values.search_mode == 'immediate' %}selected{% endif %}>Immediate (see results now)</option>
+            <option value="batch" {% if party_values and party_values.search_mode == 'batch' %}selected{% endif %}>Batch (run a large search)</option>
           </select>
           <p class="small">
-            Immediate returns paged results ({{ explore_page_size }} per page) and is limited to {{ immediate_max_pages }} pages / {{ immediate_max_pages * explore_page_size }} items.
+            Immediate returns one page at a time ({{ explore_page_size }} results per page).
           </p>
           <p class="small">
             Batch runs a report for later retrieval and supports up to {{ batch_max_pages }} pages / {{ explore_max_records }} items.
@@ -269,6 +272,7 @@
         <div class="grid two">
           <div>
             <label for="party-court">Court (optional)</label>
+            <input class="small" type="search" placeholder="Type to filter courts" data-filter-input="party-court">
             <select id="party-court" name="court_id">
               <option value="">All courts</option>
               {% for court in courts %}
@@ -280,6 +284,7 @@
           </div>
           <div>
             <label for="party-region">Region (optional)</label>
+            <input class="small" type="search" placeholder="Type to filter regions" data-filter-input="party-region">
             <select id="party-region" name="region_code">
               <option value="">All regions</option>
               {% for region in regions %}
@@ -345,7 +350,7 @@
         </div>
 
         <div class="actions">
-          <button class="primary" type="submit" {% if not pacer_search_enabled %}disabled{% endif %}>Run Explore</button>
+          <button class="primary" type="submit" {% if not pacer_search_enabled %}disabled{% endif %}>Run search</button>
         </div>
       </form>
     {% endif %}
@@ -591,8 +596,9 @@
                   <form method="post" action="{{ url_for('admin_pacer_explore_store') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <textarea name="store_payload" hidden>{{ run_result.store_payload | tojson }}</textarea>
-                    <button class="primary" type="submit">Store or Update</button>
+                    <button class="primary" type="submit">Save to database</button>
                   </form>
+                  <a class="pill" href="{{ url_for('admin_federal_data_dashboard_case_cards') }}">View saved case cards</a>
                 </div>
               {% endif %}
             {% else %}
@@ -712,8 +718,9 @@
                   <form method="post" action="{{ url_for('admin_pacer_explore_store') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <textarea name="store_payload" hidden>{{ run_result.store_payload | tojson }}</textarea>
-                    <button class="primary" type="submit">Store or Update</button>
+                    <button class="primary" type="submit">Save to database</button>
                   </form>
+                  <a class="pill" href="{{ url_for('admin_federal_data_dashboard_case_cards') }}">View saved case cards</a>
                 </div>
               {% endif %}
             {% else %}
@@ -1094,4 +1101,42 @@
       <p class="small">No saved runs yet.</p>
     {% endif %}
   </section>
+  <script>
+    (function () {
+      const filters = document.querySelectorAll("[data-filter-input]");
+      filters.forEach((input) => {
+        const targetId = input.getAttribute("data-filter-input");
+        const select = document.getElementById(targetId);
+        if (!select) return;
+        const options = Array.from(select.options).map((opt) => ({
+          value: opt.value,
+          label: opt.textContent || "",
+          selected: opt.selected,
+        }));
+        const placeholder = options.shift();
+        input.addEventListener("input", () => {
+          const query = input.value.trim().toLowerCase();
+          select.innerHTML = "";
+          if (placeholder) {
+            const placeholderOpt = document.createElement("option");
+            placeholderOpt.value = placeholder.value;
+            placeholderOpt.textContent = placeholder.label;
+            placeholderOpt.selected = placeholder.selected;
+            select.appendChild(placeholderOpt);
+          }
+          options.forEach((opt) => {
+            const label = opt.label.toLowerCase();
+            const value = String(opt.value).toLowerCase();
+            if (!query || label.includes(query) || value.includes(query)) {
+              const optionEl = document.createElement("option");
+              optionEl.value = opt.value;
+              optionEl.textContent = opt.label;
+              optionEl.selected = opt.selected;
+              select.appendChild(optionEl);
+            }
+          });
+        });
+      });
+    })();
+  </script>
 {% endblock %}

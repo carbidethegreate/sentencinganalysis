@@ -7203,7 +7203,26 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard/case-cards")
     @admin_required
     def admin_federal_data_dashboard_case_cards():
-        return _render_federal_data_placeholder("Case Cards", "case_cards")
+        filters, page, page_size = parse_filters(request.args.to_dict(flat=True))
+        result = list_case_cards(engine, pcl_tables, filters, page=page, page_size=page_size)
+        params = request.args.to_dict(flat=True)
+
+        def page_url(target_page: int) -> str:
+            next_params = dict(params)
+            next_params["page"] = target_page
+            return url_for("admin_federal_data_dashboard_case_cards", **next_params)
+
+        return render_template(
+            "admin_federal_data_case_cards.html",
+            active_page="federal_data_dashboard",
+            active_subnav="case_cards",
+            cases=result.rows,
+            pagination=result.pagination,
+            filters=filters,
+            page_url=page_url,
+            court_choices=_load_court_choices(),
+            case_type_choices=_load_case_type_choices(),
+        )
 
     @app.get("/admin/federal-data-dashboard/logs")
     @admin_required
