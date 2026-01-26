@@ -1070,6 +1070,18 @@ def create_app() -> Flask:
     app.config["PACER_ENV_CONFIG"] = pacer_env_config.as_dict()
     app.config["PACER_ENV_MISMATCH"] = pacer_env_config.mismatch
     app.config["PACER_ENV_MISMATCH_REASON"] = pacer_env_config.mismatch_reason
+    def _save_pacer_token(token: str) -> None:
+        pacer_token_store.save_token(
+            token, obtained_at=datetime.utcnow(), environment=pacer_auth_env
+        )
+        try:
+            pacer_service_token_store.initialize_session(service_session_key)
+            pacer_service_token_store.save_token(
+                token, obtained_at=datetime.utcnow(), environment=pacer_auth_env
+            )
+        except RuntimeError:
+            pass
+
     def _refresh_pacer_token() -> Optional[str]:
         if not has_request_context():
             return None
@@ -1091,11 +1103,7 @@ def create_app() -> Flask:
             return None
         if not result.can_proceed or not result.token:
             return None
-        pacer_token_store.save_token(
-            result.token,
-            obtained_at=datetime.utcnow(),
-            environment=pacer_auth_env,
-        )
+        _save_pacer_token(result.token)
         session["pacer_needs_otp"] = bool(result.needs_otp)
         session["pacer_client_code_required"] = bool(result.needs_client_code)
         session["pacer_redaction_required"] = bool(result.needs_redaction_ack)
@@ -1378,9 +1386,7 @@ def create_app() -> Flask:
             session_key = secrets.token_urlsafe(16)
             session["pacer_session_key"] = session_key
         pacer_token_store.initialize_session(session_key)
-        pacer_token_store.save_token(
-            token, obtained_at=datetime.utcnow(), environment=pacer_auth_env
-        )
+        _save_pacer_token(token)
 
     def _clear_pacer_session() -> None:
         pacer_token_store.clear_token()
