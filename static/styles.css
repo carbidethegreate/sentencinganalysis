@@ -2120,6 +2120,62 @@ button.danger {
   padding-top: 8px;
 }
 
+.pacer-status-summary {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 10px 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.pacer-status-summary summary {
+  list-style: none;
+}
+
+.pacer-status-summary summary::-webkit-details-marker {
+  display: none;
+}
+
+.pacer-status-summary__row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pacer-status-summary__text {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.pacer-status-summary__hint {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.72rem;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--bg);
+}
+
+.pacer-status-summary__content {
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .pacer-status-summary__row {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+  .pacer-status-summary__hint {
+    margin-left: 0;
+  }
+}
+
 .pacer-mode-tabs {
   display: inline-flex;
   gap: 8px;
