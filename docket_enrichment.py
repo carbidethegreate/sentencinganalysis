@@ -945,10 +945,10 @@ def _find_form_with_input(html_text: str, input_name: str) -> Optional[tuple[str
 
 
 def _extract_case_summary_link(html_text: str) -> Optional[str]:
-    match = re.search(r'href=[\"\\']([^\"\\']*CaseSummary[^\"\\']*)[\"\\']', html_text)
+    match = re.search(r"href=[\"']([^\"']*CaseSummary[^\"']*)[\"']", html_text)
     if match:
         return match.group(1)
-    match = re.search(r'href=[\"\\']([^\"\\']*CaseSummary.*?)[\"\\']', html_text)
+    match = re.search(r"href=[\"']([^\"']*CaseSummary.*?)[\"']", html_text)
     return match.group(1) if match else None
 
 
