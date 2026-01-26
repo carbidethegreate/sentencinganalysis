@@ -1655,6 +1655,12 @@ def create_app() -> Flask:
             case_type_value = case_type_value.strip().lower()
         if case_type_value and case_type_value not in CRIMINAL_CASE_TYPES:
             case_type_value = None
+        judge_last_name = (
+            record.get("judgeLastName")
+            or record.get("judge_last_name")
+            or record.get("mdlJudgeLastName")
+            or record.get("mdl_judge_last_name")
+        )
         return {
             "court_id": court_id,
             "case_id": record.get("caseId") or record.get("case_id"),
@@ -1675,7 +1681,7 @@ def create_app() -> Flask:
             "case_link": record.get("caseLink") or record.get("case_link"),
             "case_year": record.get("caseYear") or record.get("case_year"),
             "case_office": record.get("caseOffice") or record.get("case_office"),
-            "judge_last_name": record.get("judgeLastName") or record.get("judge_last_name"),
+            "judge_last_name": judge_last_name,
             "record_hash": _hash_record([court_id, case_number_full, data_json]),
             "data_json": data_json,
             "source_last_seen_at": datetime.utcnow(),
@@ -2047,6 +2053,17 @@ def create_app() -> Flask:
             .mappings()
             .first()
         )
+        if not existing:
+            existing = (
+                conn.execute(
+                    select(pcl_cases.c.id).where(
+                        (pcl_cases.c.court_id == court_id)
+                        & (pcl_cases.c.case_number == case_record["case_number"])
+                    )
+                )
+                .mappings()
+                .first()
+            )
         now = datetime.utcnow()
         if search_run_id:
             case_record = {

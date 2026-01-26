@@ -191,7 +191,40 @@ def list_case_cards(
     engine, tables, filters: PclCaseFilters, *, page: int, page_size: int
 ) -> PclCaseCardResult:
     pcl_cases = tables["pcl_cases"]
+    docket_enrichment_jobs = tables.get("docket_enrichment_jobs")
     where_clauses = _build_where_clauses(pcl_cases, filters)
+    enrichment_status = literal(None).label("enrichment_status")
+    enrichment_updated_at = literal(None).label("enrichment_updated_at")
+    if docket_enrichment_jobs is not None:
+        enrichment_status = (
+            select(docket_enrichment_jobs.c.status)
+            .where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+            .order_by(
+                docket_enrichment_jobs.c.created_at.desc(),
+                docket_enrichment_jobs.c.id.desc(),
+            )
+            .limit(1)
+            .scalar_subquery()
+            .label("enrichment_status")
+        )
+        enrichment_updated_at = (
+            select(docket_enrichment_jobs.c.updated_at)
+            .where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+            .order_by(
+                docket_enrichment_jobs.c.created_at.desc(),
+                docket_enrichment_jobs.c.id.desc(),
+            )
+            .limit(1)
+            .scalar_subquery()
+            .label("enrichment_updated_at")
+        )
+
+    has_sentencing = literal(False).label("has_sentencing")
+    if "sentencing_events" in pcl_cases.metadata.tables:
+        sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
+        has_sentencing = exists(
+            has_sentencing_event_clause(pcl_cases, sentencing_events)
+        ).label("has_sentencing")
 
     base_stmt = (
         select(
@@ -206,6 +239,11 @@ def list_case_cards(
             pcl_cases.c.case_year,
             pcl_cases.c.case_office,
             pcl_cases.c.case_link,
+            pcl_cases.c.last_search_run_id,
+            pcl_cases.c.last_search_run_at,
+            enrichment_status,
+            enrichment_updated_at,
+            has_sentencing,
         )
         .where(and_(*where_clauses))
         .order_by(pcl_cases.c.date_filed.desc().nullslast(), pcl_cases.c.id.desc())
