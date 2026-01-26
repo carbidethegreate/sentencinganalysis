@@ -469,6 +469,31 @@
                 · Total pages {{ run_result.page_info.totalPages or '—' }}
                 · Total records {{ run_result.page_info.totalElements or '—' }}
               </p>
+              {% set total_pages = run_result.page_info.totalPages %}
+              {% if run_result.page_number and total_pages and run_result.page_number > total_pages %}
+                <div class="flash warning">
+                  Requested page {{ run_result.page_number }} exceeds the total page count ({{ total_pages }}).
+                  Try page 1 or a narrower date range.
+                </div>
+                <form method="post" action="{{ url_for('admin_pacer_explore_run') }}" class="actions">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="mode" value="cases">
+                  <input type="hidden" name="search_mode" value="immediate">
+                  <input type="hidden" name="court_id" value="{{ case_values.court_id if case_values else '' }}">
+                  <input type="hidden" name="region_code" value="{{ case_values.region_code if case_values else '' }}">
+                  <input type="hidden" name="date_filed_from" value="{{ case_values.date_filed_from if case_values else '' }}">
+                  <input type="hidden" name="date_filed_to" value="{{ case_values.date_filed_to if case_values else '' }}">
+                  {% if case_values and case_values.case_types %}
+                    {% for case_type in case_values.case_types %}
+                      <input type="hidden" name="case_types" value="{{ case_type }}">
+                    {% endfor %}
+                  {% endif %}
+                  <input type="hidden" name="sort_field" value="{{ case_values.sort_field if case_values else '' }}">
+                  <input type="hidden" name="sort_order" value="{{ case_values.sort_order if case_values else '' }}">
+                  <input type="hidden" name="page" value="1">
+                  <button class="secondary" type="submit">Run page 1</button>
+                </form>
+              {% endif %}
             {% endif %}
             {% if run_result.search_mode == 'immediate' and run_result.page_info %}
               {% set current_page = run_result.page_number or (run_result.page_info.number + 1 if run_result.page_info.number is not none else 1) %}
@@ -581,6 +606,32 @@
                 · Total pages {{ run_result.page_info.totalPages or '—' }}
                 · Total records {{ run_result.page_info.totalElements or '—' }}
               </p>
+              {% set total_pages = run_result.page_info.totalPages %}
+              {% if run_result.page_number and total_pages and run_result.page_number > total_pages %}
+                <div class="flash warning">
+                  Requested page {{ run_result.page_number }} exceeds the total page count ({{ total_pages }}).
+                  Try page 1 or a narrower date range.
+                </div>
+                <form method="post" action="{{ url_for('admin_pacer_explore_run') }}" class="actions">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="mode" value="parties">
+                  <input type="hidden" name="search_mode" value="immediate">
+                  <input type="hidden" name="last_name" value="{{ party_values.last_name if party_values else '' }}">
+                  <input type="hidden" name="first_name" value="{{ party_values.first_name if party_values else '' }}">
+                  <input type="hidden" name="ssn" value="{{ party_values.ssn if party_values else '' }}">
+                  <input type="hidden" name="court_id" value="{{ party_values.court_id if party_values else '' }}">
+                  <input type="hidden" name="region_code" value="{{ party_values.region_code if party_values else '' }}">
+                  <input type="hidden" name="date_filed_from" value="{{ party_values.date_filed_from if party_values else '' }}">
+                  <input type="hidden" name="date_filed_to" value="{{ party_values.date_filed_to if party_values else '' }}">
+                  <input type="hidden" name="sort_field" value="{{ party_values.sort_field if party_values else '' }}">
+                  <input type="hidden" name="sort_order" value="{{ party_values.sort_order if party_values else '' }}">
+                  {% if party_values and party_values.exact_name_match %}
+                    <input type="hidden" name="exact_name_match" value="true">
+                  {% endif %}
+                  <input type="hidden" name="page" value="1">
+                  <button class="secondary" type="submit">Run page 1</button>
+                </form>
+              {% endif %}
             {% endif %}
             {% if run_result.search_mode == 'immediate' and run_result.page_info %}
               {% set current_page = run_result.page_number or (run_result.page_info.number + 1 if run_result.page_info.number is not none else 1) %}

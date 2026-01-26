@@ -868,6 +868,32 @@ def create_app() -> Flask:
             "parties_inserted": "INTEGER",
             "parties_updated": "INTEGER",
         },
+        label="pacer_search_runs counts",
+    )
+    _ensure_table_columns(
+        "pcl_cases",
+        {
+            "last_search_run_id": "INTEGER",
+            "last_search_run_at": "TIMESTAMPTZ",
+        },
+        label="pcl_cases run provenance",
+    )
+    _ensure_table_columns(
+        "pcl_parties",
+        {
+            "last_search_run_id": "INTEGER",
+            "last_search_run_at": "TIMESTAMPTZ",
+        },
+        label="pcl_parties run provenance",
+    )
+    _ensure_table_columns(
+        "pacer_search_runs",
+        {
+            "cases_inserted": "INTEGER",
+            "cases_updated": "INTEGER",
+            "parties_inserted": "INTEGER",
+            "parties_updated": "INTEGER",
+        },
         label="pacer_search_runs",
     )
     _ensure_table_columns(
