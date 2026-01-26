@@ -526,30 +526,41 @@
                       <th>Date filed</th>
                       <th>Short title</th>
                       <th>Court</th>
-                      <th>Saved?</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {% for case in run_result.cases_view or run_result.cases %}
-                      <tr>
+                  <th>Saved?</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for case in run_result.cases_view or run_result.cases %}
+                  <tr>
                         <td>{{ loop.index }}</td>
                         <td>{{ case.case_number or case.caseNumber or case.case_number_full or case.cs_case_number or '—' }}</td>
                         <td>{{ case.case_type or case.caseType or '—' }}</td>
                         <td>{{ case.date_filed or case.dateFiled or '—' }}</td>
                         <td>{{ case.short_title or case.shortTitle or case.cs_short_title or '—' }}</td>
-                        <td>{{ case.court_id or case.courtId or case_values.court_id }}</td>
-                        <td>
-                          {% if case.already_indexed %}
-                            <span class="pill">Already indexed</span>
-                          {% else %}
-                            <span class="pill primary">New</span>
-                          {% endif %}
-                        </td>
-                      </tr>
-                    {% endfor %}
-                  </tbody>
-                </table>
-              </div>
+                    <td>{{ case.court_id or case.courtId or case_values.court_id }}</td>
+                    <td>
+                      {% if case.already_indexed %}
+                        <span class="pill">Already indexed</span>
+                      {% else %}
+                        <span class="pill primary">New</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if case.case_id %}
+                        <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.case_id) }}">
+                          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                          <button class="secondary" type="submit">Expand data</button>
+                        </form>
+                      {% else %}
+                        <span class="small">—</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
               {% if run_result.store_payload %}
                 <div class="actions">
                   <form method="post" action="{{ url_for('admin_pacer_explore_store') }}">

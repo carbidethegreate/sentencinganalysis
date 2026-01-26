@@ -4,7 +4,7 @@ Status
 - Phase 1: Done (Immediate vs Batch UX switch, improved hub entry points).
 - Phase 2: Done (Unified search run storage + dedupe indicators).
 - Phase 3: Done (Saved searches + run history; sort controls; search reuse; case provenance).
-- Phase 4: Next (Enrichment + expansion actions tied to case status and run provenance).
+- Phase 4: In progress (Enrichment + expansion actions tied to case status and run provenance).
 
 Latest update
 - Added a safe fallback when the saved-search table is not migrated yet to prevent 500 errors.
@@ -14,6 +14,7 @@ Latest update
 - Added sortable-field controls to Explore PACER using pacer_sortable_case_fields and pacer_sortable_party_fields.
 - Displayed region + sort context in saved searches and run history.
 - Stored PACER search run provenance on cases/parties and surfaced it in the case list + detail views.
+- Added Expand data actions on Explore results and Indexed Cases, plus enrichment status badges.
 
 Current focus
 1) Apply the PACER reference-table migration in production.
@@ -30,10 +31,9 @@ Current focus
 5) Apply the PACER run provenance migration in production.
 
 Next steps
-- Apply the PACER reference-table migration in production.
-- Wire table-backed select lists and validation for case types, courts, regions, and sortable fields.
-- Expand run history details and link cases back to the originating run.
-- Add enrichment actions from results and case detail pages.
+- Apply the PACER run provenance migration in production.
+- Expand enrichment tracking to include completed status + receipts.
+- Add worker wiring for docket enrichment endpoints once available.
 
 Notes
 - This plan will be updated as each step is completed.

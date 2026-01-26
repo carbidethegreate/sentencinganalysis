@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import and_, desc, exists, func, or_, select
+from sqlalchemy import and_, desc, exists, func, literal, or_, select
 
 from sentencing_queries import has_sentencing_event_clause
 
@@ -89,8 +89,50 @@ def parse_filters(args: Dict[str, str]) -> Tuple[PclCaseFilters, int, int]:
 def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size: int) -> PclCaseListResult:
     pcl_cases = tables["pcl_cases"]
     pcl_batch_segments = tables["pcl_batch_segments"]
+    docket_enrichment_jobs = tables.get("docket_enrichment_jobs")
 
     where_clauses = _build_where_clauses(pcl_cases, filters)
+    enrichment_status = literal(None).label("enrichment_status")
+    enrichment_updated_at = literal(None).label("enrichment_updated_at")
+    has_enrichment = None
+    if docket_enrichment_jobs is not None:
+        enrichment_status = (
+            select(docket_enrichment_jobs.c.status)
+            .where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+            .order_by(
+                docket_enrichment_jobs.c.created_at.desc(),
+                docket_enrichment_jobs.c.id.desc(),
+            )
+            .limit(1)
+            .scalar_subquery()
+            .label("enrichment_status")
+        )
+        enrichment_updated_at = (
+            select(docket_enrichment_jobs.c.updated_at)
+            .where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+            .order_by(
+                docket_enrichment_jobs.c.created_at.desc(),
+                docket_enrichment_jobs.c.id.desc(),
+            )
+            .limit(1)
+            .scalar_subquery()
+            .label("enrichment_updated_at")
+        )
+        has_enrichment = exists(
+            select(1).where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+        )
+
+    has_sentencing = literal(False).label("has_sentencing")
+    if filters.sentencing_only and "sentencing_events" in pcl_cases.metadata.tables:
+        sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
+        has_sentencing = exists(
+            has_sentencing_event_clause(pcl_cases, sentencing_events)
+        ).label("has_sentencing")
+    elif "sentencing_events" in pcl_cases.metadata.tables:
+        sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
+        has_sentencing = exists(
+            has_sentencing_event_clause(pcl_cases, sentencing_events)
+        ).label("has_sentencing")
 
     base_stmt = (
         select(
@@ -107,6 +149,9 @@ def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size:
             pcl_cases.c.judge_last_name,
             pcl_cases.c.last_search_run_id,
             pcl_cases.c.last_search_run_at,
+            enrichment_status,
+            enrichment_updated_at,
+            has_sentencing,
             pcl_cases.c.last_segment_id,
             pcl_batch_segments.c.status.label("segment_status"),
             pcl_batch_segments.c.date_filed_from.label("segment_date_from"),
@@ -260,6 +305,13 @@ def _build_where_clauses(pcl_cases, filters: PclCaseFilters) -> List[Any]:
         )
     if filters.indexed_only:
         clauses.append(pcl_cases.c.record_hash.is_not(None))
+    if filters.enriched_only and "docket_enrichment_jobs" in pcl_cases.metadata.tables:
+        docket_enrichment_jobs = pcl_cases.metadata.tables["docket_enrichment_jobs"]
+        clauses.append(
+            exists(
+                select(1).where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+            )
+        )
     if filters.sentencing_only and "sentencing_events" in pcl_cases.metadata.tables:
         sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
         clauses.append(exists(has_sentencing_event_clause(pcl_cases, sentencing_events)))

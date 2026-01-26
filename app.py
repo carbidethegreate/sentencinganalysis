@@ -2226,9 +2226,9 @@ def create_app() -> Flask:
             return None
         return (str(court_id), str(case_number))
 
-    def _load_existing_case_keys(
+    def _load_existing_case_map(
         records: Sequence[Dict[str, Any]], *, default_court_id: Optional[str]
-    ) -> Set[Tuple[str, str]]:
+    ) -> Dict[Tuple[str, str], Dict[str, Any]]:
         keys: List[Tuple[str, str]] = []
         for record in records:
             if not isinstance(record, dict):
@@ -2237,12 +2237,18 @@ def create_app() -> Flask:
             if key:
                 keys.append(key)
         if not keys:
-            return set()
+            return {}
         pcl_cases = pcl_tables["pcl_cases"]
         with engine.begin() as conn:
             rows = (
                 conn.execute(
-                    select(pcl_cases.c.court_id, pcl_cases.c.case_number_full).where(
+                    select(
+                        pcl_cases.c.id,
+                        pcl_cases.c.court_id,
+                        pcl_cases.c.case_number_full,
+                        pcl_cases.c.last_search_run_id,
+                        pcl_cases.c.last_search_run_at,
+                    ).where(
                         tuple_(pcl_cases.c.court_id, pcl_cases.c.case_number_full).in_(
                             keys
                         )
@@ -2251,12 +2257,16 @@ def create_app() -> Flask:
                 .mappings()
                 .all()
             )
-        return {(row["court_id"], row["case_number_full"]) for row in rows}
+        return {
+            (row["court_id"], row["case_number_full"]): dict(row)
+            for row in rows
+            if row.get("court_id") and row.get("case_number_full")
+        }
 
     def _build_case_view_rows(
         records: Sequence[Dict[str, Any]], *, default_court_id: Optional[str]
     ) -> List[Dict[str, Any]]:
-        existing_keys = _load_existing_case_keys(
+        existing_cases = _load_existing_case_map(
             records, default_court_id=default_court_id
         )
         rows: List[Dict[str, Any]] = []
@@ -2264,6 +2274,7 @@ def create_app() -> Flask:
             if not isinstance(record, dict):
                 continue
             key = _build_case_key(record, default_court_id=default_court_id)
+            existing = existing_cases.get(key) if key else None
             rows.append(
                 {
                     "case_number": record.get("caseNumber")
@@ -2282,7 +2293,10 @@ def create_app() -> Flask:
                     or record.get("court_id")
                     or default_court_id
                     or "—",
-                    "already_indexed": key in existing_keys if key else False,
+                    "already_indexed": bool(existing),
+                    "case_id": existing.get("id") if existing else None,
+                    "last_search_run_id": existing.get("last_search_run_id") if existing else None,
+                    "last_search_run_at": existing.get("last_search_run_at") if existing else None,
                 }
             )
         return rows
@@ -4950,6 +4964,10 @@ def create_app() -> Flask:
             "next_steps": [],
         }
 
+        region_value = (case_values or party_values or {}).get("region_code", "")
+        sort_field_value = (case_values or party_values or {}).get("sort_field", "")
+        sort_order_value = (case_values or party_values or {}).get("sort_order", "")
+
         if search_mode_raw and search_mode_raw not in {"immediate", "batch"}:
             run_result["errors"].append(
                 "Search mode must be Immediate or Batch."
@@ -7466,6 +7484,7 @@ def create_app() -> Flask:
             "admin_pcl_cases.html",
             active_page="federal_data_dashboard",
             active_subnav="pcl_cases",
+            csrf_token=get_csrf_token(),
             cases=result.rows,
             pagination=result.pagination,
             filters=filters,
@@ -7517,6 +7536,7 @@ def create_app() -> Flask:
             "admin_pcl_case_detail.html",
             active_page="federal_data_dashboard",
             active_subnav="pcl_cases",
+            csrf_token=get_csrf_token(),
             case_detail=detail,
         )
 
