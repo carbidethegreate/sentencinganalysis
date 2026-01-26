@@ -7792,6 +7792,25 @@ def create_app() -> Flask:
                 counts[str(row.status)] = int(row.count)
         return counts
 
+    def _load_docket_filter_choices() -> Dict[str, List[str]]:
+        pcl_cases = pcl_tables["pcl_cases"]
+        courts_stmt = (
+            select(pcl_cases.c.court_id)
+            .where(pcl_cases.c.court_id.is_not(None))
+            .distinct()
+            .order_by(pcl_cases.c.court_id.asc())
+        )
+        case_types_stmt = (
+            select(pcl_cases.c.case_type)
+            .where(pcl_cases.c.case_type.is_not(None))
+            .distinct()
+            .order_by(pcl_cases.c.case_type.asc())
+        )
+        with engine.begin() as conn:
+            courts = [row[0] for row in conn.execute(courts_stmt) if row[0]]
+            case_types = [row[0] for row in conn.execute(case_types_stmt) if row[0]]
+        return {"courts": courts, "case_types": case_types}
+
     def _parse_docket_filters(args: Dict[str, str]) -> Dict[str, Any]:
         court_id = (args.get("court_id") or "").strip().lower()
         case_type = (args.get("case_type") or "").strip().lower()
@@ -8172,6 +8191,7 @@ def create_app() -> Flask:
     def admin_docket_enrichment_dashboard():
         rows = _load_docket_dashboard_rows()
         counts = _load_docket_status_counts()
+        filter_choices = _load_docket_filter_choices()
         filters = _parse_docket_filters(request.args.to_dict(flat=True))
         candidates = _load_docket_case_candidates(filters)
         params = request.args.to_dict(flat=True)
@@ -8187,6 +8207,7 @@ def create_app() -> Flask:
             active_subnav="docket_enrichment",
             jobs=rows,
             status_counts=counts,
+            filter_choices=filter_choices,
             case_candidates=candidates["rows"],
             candidate_total=candidates["total"],
             candidate_page=candidates["page"],

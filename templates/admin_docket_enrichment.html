@@ -44,11 +44,21 @@
         <div class="grid two">
           <div>
             <label for="docket-court">Court</label>
-            <input id="docket-court" name="court_id" value="{{ docket_filters.court_id }}" placeholder="e.g., vidc">
+            <input id="docket-court" name="court_id" list="docket-court-options" value="{{ docket_filters.court_id }}" placeholder="Start typing a court ID">
+            <datalist id="docket-court-options">
+              {% for court_id in filter_choices.courts %}
+                <option value="{{ court_id }}">{{ court_id }}</option>
+              {% endfor %}
+            </datalist>
           </div>
           <div>
             <label for="docket-case-type">Case type</label>
-            <input id="docket-case-type" name="case_type" value="{{ docket_filters.case_type }}" placeholder="e.g., cr, cv, mj">
+            <input id="docket-case-type" name="case_type" list="docket-case-type-options" value="{{ docket_filters.case_type }}" placeholder="Start typing a case type">
+            <datalist id="docket-case-type-options">
+              {% for case_type in filter_choices.case_types %}
+                <option value="{{ case_type }}">{{ case_type }}</option>
+              {% endfor %}
+            </datalist>
           </div>
           <div>
             <label for="docket-date-from">Date filed from</label>
@@ -136,7 +146,7 @@
               {% for case in case_candidates %}
                 <tr>
                   <td>
-                    <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">
+                    <a class="pacer-text-link" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">
                       {{ case.case_number_full or case.case_number }}
                     </a>
                     <div class="small">{{ case.short_title or case.case_title or "Untitled case" }}</div>
@@ -199,7 +209,7 @@
                 <tr>
                   <td class="pcl-mono">{{ job.id }}</td>
                   <td>
-                    <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=job.case_id) }}">
+                    <a class="pacer-text-link" href="{{ url_for('admin_pcl_case_detail', case_id=job.case_id) }}">
                       {{ job.case_number_full or job.case_number }}
                     </a>
                     <div class="small">{{ job.short_title or job.case_title or "Untitled case" }}</div>
