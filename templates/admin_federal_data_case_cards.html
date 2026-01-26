@@ -7,14 +7,13 @@
     <p class="pacer-eyebrow">Saved PACER results</p>
     <h2>Case cards</h2>
     <p class="small">
-      These cards show cases that have been saved to the database from PACER searches.
-      Use filters to narrow results, then open a case for details or expansion.
+      These are the cases you saved from PACER searches. Use filters to narrow results.
     </p>
 
     <form method="get" class="pcl-filter-form" aria-label="Filter case cards">
       <div class="grid two">
         <div>
-          <label for="case-cards-court">Court (where the case was filed)</label>
+          <label for="case-cards-court">Court</label>
           <input
             id="case-cards-court"
             name="court_id"
@@ -68,16 +67,16 @@
         <article class="card pcl-case-card">
           <header class="pcl-case-card__header">
             <div>
-              <p class="pcl-case-card__number">{{ case.case_number_full or case.case_number }}</p>
-              <h3 class="pcl-case-card__title">{{ case.case_title or "Untitled case" }}</h3>
+              <p class="pcl-case-card__number">{{ case.get("case_number_full") or case.get("case_number") }}</p>
+              <h3 class="pcl-case-card__title">{{ case.get("case_title") or case.get("short_title") or "Untitled case" }}</h3>
             </div>
             <div class="pcl-case-card__badges">
               <span class="pcl-badge" data-variant="indexed">Saved</span>
               <span class="pcl-badge" data-variant="stub">
-                Enrichment: {{ case.enrichment_status or "none" }}
+                Enrichment: {{ case.get("enrichment_status") or "none" }}
               </span>
-              <span class="pcl-badge" data-variant="{{ 'indexed' if case.has_sentencing else 'stub' }}">
-                Sentencing: {{ "yes" if case.has_sentencing else "no" }}
+              <span class="pcl-badge" data-variant="{{ 'indexed' if case.get('has_sentencing') else 'stub' }}">
+                Sentencing: {{ "yes" if case.get("has_sentencing") else "no" }}
               </span>
             </div>
           </header>
@@ -85,35 +84,35 @@
           <dl class="pcl-case-meta">
             <div>
               <dt>Date filed</dt>
-              <dd>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</dd>
+              <dd>{{ case.get("date_filed").isoformat() if case.get("date_filed") else "—" }}</dd>
             </div>
             <div>
               <dt>Court</dt>
-              <dd>{{ case.court_id }}</dd>
+              <dd>{{ case.get("court_id") or "—" }}</dd>
             </div>
             <div>
               <dt>Case type</dt>
-              <dd>{{ case.case_type or "—" }}</dd>
+              <dd>{{ case.get("case_type") or "—" }}</dd>
             </div>
             <div>
               <dt>Judge</dt>
-              <dd>{{ case.judge_last_name or "—" }}</dd>
+              <dd>{{ case.get("judge_last_name") or "—" }}</dd>
             </div>
           </dl>
 
           <footer class="pcl-case-card__footer">
             <span class="small">
               Last PACER run:
-              {% if case.last_search_run_id %}
-                Run #{{ case.last_search_run_id }}
+              {% if case.get("last_search_run_id") %}
+                Run #{{ case.get("last_search_run_id") }}
               {% endif %}
-              {% if case.last_search_run_at %}
-                · {{ case.last_search_run_at.isoformat() }}
+              {% if case.get("last_search_run_at") %}
+                · {{ case.get("last_search_run_at").isoformat() }}
               {% else %}
                 · —
               {% endif %}
             </span>
-            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View details</a>
+            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">View details</a>
           </footer>
         </article>
       {% endfor %}

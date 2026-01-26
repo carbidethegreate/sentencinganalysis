@@ -373,10 +373,6 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
             nullable=True,
         ),
         Column("data_json", Text, nullable=False),
-        CheckConstraint(
-            "case_type in ('cr','crim','ncrim','dcrim')",
-            name="ck_pcl_cases_case_type",
-        ),
         UniqueConstraint(
             "court_id",
             "case_number_full",

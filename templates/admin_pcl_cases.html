@@ -96,19 +96,20 @@
   <section class="card pcl-cases-shell">
     <div class="pcl-cases-header">
       <div>
-        <h2>Indexed PCL cases</h2>
-        <p class="small">Fast search over normalized case metadata with indexed filters.</p>
+        <h2>Saved PACER cases</h2>
+        <p class="small">Search and filter the cases you saved from PACER.</p>
       </div>
       <div class="pcl-cases-summary">
         <strong>{{ pagination.total }}</strong>
-        <span class="small">total cases</span>
+        <span class="small">total saved cases</span>
       </div>
     </div>
 
     <form method="get" class="pcl-filter-form" aria-label="Filter indexed cases">
       <div class="grid two">
         <div>
-          <label for="pcl-court">Court ID</label>
+          <label for="pcl-court">Court</label>
+          <input class="small" type="search" placeholder="Type to filter courts" data-filter-input="pcl-court">
           <select id="pcl-court" name="court_id">
             <option value="">All courts</option>
             {% for court in available_courts %}
@@ -118,6 +119,7 @@
         </div>
         <div>
           <label for="pcl-case-type">Case type</label>
+          <input class="small" type="search" placeholder="Type to filter case types" data-filter-input="pcl-case-type">
           <select id="pcl-case-type" name="case_type">
             <option value="">All case types</option>
             {% for case_type in available_case_types %}
@@ -126,11 +128,11 @@
           </select>
         </div>
         <div>
-          <label for="pcl-date-from">Date filed from</label>
+          <label for="pcl-date-from">Filed date (from)</label>
           <input id="pcl-date-from" type="date" name="date_filed_from" value="{{ filters.date_filed_from.isoformat() if filters.date_filed_from else '' }}">
         </div>
         <div>
-          <label for="pcl-date-to">Date filed to</label>
+          <label for="pcl-date-to">Filed date (to)</label>
           <input id="pcl-date-to" type="date" name="date_filed_to" value="{{ filters.date_filed_to.isoformat() if filters.date_filed_to else '' }}">
         </div>
         <div>
@@ -138,20 +140,20 @@
           <input id="pcl-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., Jackson">
         </div>
         <div>
-          <label for="pcl-search">Search</label>
+          <label for="pcl-search">Search case</label>
           <input id="pcl-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
         </div>
       </div>
 
       <fieldset class="pcl-flag-fieldset">
-        <legend>Status flags</legend>
+        <legend>Status filters</legend>
         <label class="pcl-flag-option">
           <input type="checkbox" name="indexed_only" value="1" {% if filters.indexed_only %}checked{% endif %}>
-          Indexed only
+          Saved to database
         </label>
         <label class="pcl-flag-option">
           <input type="checkbox" name="enriched_only" value="1" {% if filters.enriched_only %}checked{% endif %}>
-          Enriched
+          Expanded data
         </label>
         <label class="pcl-flag-option">
           <input type="checkbox" name="sentencing_only" value="1" {% if filters.sentencing_only %}checked{% endif %}>
@@ -176,9 +178,9 @@
               <h3 class="pcl-case-card__title">{{ case.short_title or case.case_title or "Untitled case" }}</h3>
             </div>
             <div class="pcl-case-card__badges">
-              <span class="pcl-badge" data-variant="indexed">Indexed</span>
+              <span class="pcl-badge" data-variant="indexed">Saved</span>
               <span class="pcl-badge" data-variant="stub">
-                Enrichment: {{ case.enrichment_status or "none" }}
+                Expanded data: {{ case.enrichment_status or "none" }}
               </span>
               <span class="pcl-badge" data-variant="{{ 'indexed' if case.has_sentencing else 'stub' }}">
                 Sentencing: {{ "yes" if case.has_sentencing else "no" }}
@@ -209,7 +211,7 @@
           </dl>
 
           <footer class="pcl-case-card__footer">
-            <span class="small">Segment status: {{ case.segment_status or "unknown" }}</span>
+            <span class="small">Batch status: {{ case.segment_status or "unknown" }}</span>
             <span class="small">
               Last PACER run:
               {% if case.last_search_run_id %}
@@ -246,4 +248,42 @@
       <a class="pill {% if current_page >= total_pages %}disabled{% endif %}" href="{{ page_url(current_page + 1) if current_page < total_pages else '#' }}" aria-disabled="{{ 'true' if current_page >= total_pages else 'false' }}">Next</a>
     </div>
   </nav>
+  <script>
+    (function () {
+      const filters = document.querySelectorAll("[data-filter-input]");
+      filters.forEach((input) => {
+        const targetId = input.getAttribute("data-filter-input");
+        const select = document.getElementById(targetId);
+        if (!select) return;
+        const options = Array.from(select.options).map((opt) => ({
+          value: opt.value,
+          label: opt.textContent || "",
+          selected: opt.selected,
+        }));
+        const placeholder = options.shift();
+        input.addEventListener("input", () => {
+          const query = input.value.trim().toLowerCase();
+          select.innerHTML = "";
+          if (placeholder) {
+            const placeholderOpt = document.createElement("option");
+            placeholderOpt.value = placeholder.value;
+            placeholderOpt.textContent = placeholder.label;
+            placeholderOpt.selected = placeholder.selected;
+            select.appendChild(placeholderOpt);
+          }
+          options.forEach((opt) => {
+            const label = opt.label.toLowerCase();
+            const value = String(opt.value).toLowerCase();
+            if (!query || label.includes(query) || value.includes(query)) {
+              const optionEl = document.createElement("option");
+              optionEl.value = opt.value;
+              optionEl.textContent = opt.label;
+              optionEl.selected = opt.selected;
+              select.appendChild(optionEl);
+            }
+          });
+        });
+      });
+    })();
+  </script>
 {% endblock %}

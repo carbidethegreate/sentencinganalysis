@@ -1655,8 +1655,6 @@ def create_app() -> Flask:
         case_type_value = record.get("caseType") or record.get("case_type")
         if isinstance(case_type_value, str):
             case_type_value = case_type_value.strip().lower()
-        if case_type_value and case_type_value not in CRIMINAL_CASE_TYPES:
-            case_type_value = None
         judge_last_name = (
             record.get("judgeLastName")
             or record.get("judge_last_name")
