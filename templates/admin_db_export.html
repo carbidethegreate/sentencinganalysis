@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Database Export | CourtDataPro{% endblock %}
+
+{% block content %}
+  <div class="page-header database-header">
+    <div>
+      <h1>Database Export</h1>
+      <p class="small">
+        Export all schemas and tables to JSON so Codex can read the latest database information.
+      </p>
+    </div>
+    <a class="pill" href="{{ url_for('admin_database_dashboard') }}">Back to Database Explorer</a>
+  </div>
+
+  <section class="card database-connection-card">
+    <div class="database-connection-card__header">
+      <div>
+        <h2>Active Connection</h2>
+        <p class="small">Connected via {{ database_dialect | title }}</p>
+      </div>
+      <span class="pill">{{ database_driver }}</span>
+    </div>
+    <div class="database-connection-card__body">
+      <div>
+        <p class="label">Database URL</p>
+        <code class="code-block">{{ database_url }}</code>
+        <p class="small">Metadata refreshed at {{ refreshed_at }}.</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="stat-grid database-stat-grid">
+    <div class="stat-card">
+      <span class="small">Schemas</span>
+      <strong>{{ total_schemas }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="small">Tables</span>
+      <strong>{{ total_tables }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="small">Columns</span>
+      <strong>{{ total_columns }}</strong>
+    </div>
+    <div class="stat-card">
+      <span class="small">Views</span>
+      <strong>{{ total_views }}</strong>
+    </div>
+  </div>
+
+  <section class="card">
+    <h2>Export options</h2>
+    <p class="small">Generate a downloadable JSON export of every schema and table.</p>
+    <form method="get" action="{{ url_for('admin_db_export_download') }}" class="stack">
+      <div class="stack">
+        <label class="label" for="includeData">Export type</label>
+        <select id="includeData" name="include_data">
+          <option value="1" {% if include_data %}selected{% endif %}>
+            Schema + data (JSON)
+          </option>
+          <option value="0" {% if not include_data %}selected{% endif %}>
+            Schema only (JSON)
+          </option>
+        </select>
+      </div>
+      <div class="stack">
+        <label class="label" for="exportLimit">Rows per table</label>
+        <input
+          id="exportLimit"
+          type="number"
+          name="limit"
+          min="1"
+          max="5000"
+          value="{{ export_limit }}"
+        >
+        <p class="small">
+          Limit rows per table to keep the export manageable (max 5,000 per table).
+        </p>
+      </div>
+      <button class="button" type="submit">Download JSON export</button>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Schema inventory</h2>
+    <p class="small">Review the latest schema list included in the export.</p>
+    {% if schemas %}
+      <ul class="stack">
+        {% for schema in schemas %}
+          <li>
+            <strong>{{ schema.name }}</strong>
+            <span class="small">
+              {{ schema.tables | length }} tables • {{ schema.views | length }} views
+            </span>
+            {% if schema.schema_error %}
+              <span class="small">Metadata unavailable: {{ schema.schema_error }}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="small">No schemas available.</p>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -4726,6 +4726,179 @@ def create_app() -> Flask:
             selected_table_columns=selected_table_columns,
         )
 
+    def _build_database_export_payload(include_data: bool, limit: int) -> Dict[str, Any]:
+        inspector = inspect(engine)
+        schema_names = sorted(inspector.get_schema_names())
+        preparer = engine.dialect.identifier_preparer
+        database_url = engine.url.render_as_string(hide_password=True)
+        total_tables = 0
+        total_columns = 0
+        total_views = 0
+        schemas: List[Dict[str, Any]] = []
+
+        for schema_name in schema_names:
+            if _is_system_schema(schema_name):
+                continue
+            schema_entry: Dict[str, Any] = {
+                "name": schema_name,
+                "tables": [],
+                "views": [],
+            }
+            schema_error: Optional[str] = None
+            try:
+                table_names = sorted(inspector.get_table_names(schema=schema_name))
+                view_names = sorted(inspector.get_view_names(schema=schema_name))
+            except SQLAlchemyError as exc:
+                table_names = []
+                view_names = []
+                schema_error = str(exc)
+            except Exception as exc:  # noqa: BLE001
+                table_names = []
+                view_names = []
+                schema_error = f"{exc.__class__.__name__}: {exc}"
+
+            schema_entry["views"] = view_names
+            if schema_error:
+                schema_entry["schema_error"] = schema_error
+            total_views += len(view_names)
+
+            for table_name in table_names:
+                table_entry: Dict[str, Any] = {
+                    "name": table_name,
+                    "columns": [],
+                    "column_count": 0,
+                }
+                column_error: Optional[str] = None
+                try:
+                    columns = inspector.get_columns(table_name, schema=schema_name)
+                    column_entries = [
+                        {
+                            "name": column["name"],
+                            "type": str(column["type"]),
+                            "nullable": column.get("nullable", True),
+                            "default": column.get("default"),
+                        }
+                        for column in columns
+                    ]
+                except SQLAlchemyError as exc:
+                    column_entries = []
+                    column_error = str(exc)
+                except Exception as exc:  # noqa: BLE001
+                    column_entries = []
+                    column_error = f"{exc.__class__.__name__}: {exc}"
+
+                table_entry["columns"] = column_entries
+                table_entry["column_count"] = len(column_entries)
+                if column_error:
+                    table_entry["column_error"] = column_error
+                total_columns += len(column_entries)
+
+                if include_data and column_entries:
+                    schema_identifier = preparer.quote(schema_name)
+                    table_identifier = preparer.quote(table_name)
+                    column_identifiers = ", ".join(
+                        preparer.quote(column["name"]) for column in column_entries
+                    )
+                    full_table_identifier = f"{schema_identifier}.{table_identifier}"
+                    try:
+                        with engine.connect() as connection:
+                            result = connection.execute(
+                                sa_text(
+                                    f"SELECT {column_identifiers} "
+                                    f"FROM {full_table_identifier} "
+                                    "LIMIT :limit"
+                                ),
+                                {"limit": limit},
+                            )
+                            table_entry["rows"] = [dict(row._mapping) for row in result]
+                    except SQLAlchemyError as exc:
+                        table_entry["data_error"] = str(exc)
+                    except Exception as exc:  # noqa: BLE001
+                        table_entry["data_error"] = f"{exc.__class__.__name__}: {exc}"
+
+                schema_entry["tables"].append(table_entry)
+
+            total_tables += len(table_names)
+            schemas.append(schema_entry)
+
+        return {
+            "exported_at": datetime.utcnow().isoformat(),
+            "database": {
+                "url": database_url,
+                "dialect": engine.dialect.name,
+                "driver": engine.url.drivername,
+            },
+            "totals": {
+                "schemas": len(schemas),
+                "tables": total_tables,
+                "columns": total_columns,
+                "views": total_views,
+            },
+            "schemas": schemas,
+        }
+
+    @app.get("/admin/db/export")
+    @admin_required
+    def admin_db_export():
+        export_limit = request.args.get("limit", "1000")
+        include_data_param = (request.args.get("include_data") or "1").lower()
+        include_data = include_data_param in {"1", "true", "yes", "on"}
+        try:
+            export_limit_value = int(export_limit)
+        except ValueError:
+            export_limit_value = 1000
+        export_limit_value = max(1, min(export_limit_value, 5000))
+
+        export_payload = _build_database_export_payload(
+            include_data=False,
+            limit=export_limit_value,
+        )
+        database_info = export_payload["database"]
+        totals = export_payload["totals"]
+        return render_template(
+            "admin_db_export.html",
+            active_page="database_dashboard",
+            database_url=database_info["url"],
+            database_dialect=database_info["dialect"],
+            database_driver=database_info["driver"],
+            total_schemas=totals["schemas"],
+            total_tables=totals["tables"],
+            total_columns=totals["columns"],
+            total_views=totals["views"],
+            schemas=export_payload["schemas"],
+            export_limit=export_limit_value,
+            include_data=include_data,
+            refreshed_at=export_payload["exported_at"],
+        )
+
+    @app.get("/admin/db/export/download")
+    @admin_required
+    def admin_db_export_download():
+        export_limit = request.args.get("limit", "1000")
+        include_data_param = (request.args.get("include_data") or "1").lower()
+        include_data = include_data_param in {"1", "true", "yes", "on"}
+        try:
+            export_limit_value = int(export_limit)
+        except ValueError:
+            export_limit_value = 1000
+        export_limit_value = max(1, min(export_limit_value, 5000))
+
+        export_payload = _build_database_export_payload(
+            include_data=include_data,
+            limit=export_limit_value,
+        )
+        export_payload["export_options"] = {
+            "include_data": include_data,
+            "limit_per_table": export_limit_value,
+        }
+
+        response = make_response(json.dumps(export_payload, indent=2, default=str))
+        response.headers["Content-Type"] = "application/json"
+        response.headers[
+            "Content-Disposition"
+        ] = 'attachment; filename="database_export.json"'
+        return response
+
     @app.get("/admin/database-dashboard/db-check")
     @admin_required
     def admin_database_dashboard_db_check():

@@ -78,10 +78,10 @@
       >
       <p class="small">Type to filter the navigator in real time. Results highlight what matches.</p>
     </div>
-    <div class="database-toolbar__actions">
-      <div class="database-toolbar__action">
-        <p class="label">Preview limit</p>
-        <form class="database-limit-form" method="get" action="{{ url_for('admin_database_dashboard') }}">
+      <div class="database-toolbar__actions">
+        <div class="database-toolbar__action">
+          <p class="label">Preview limit</p>
+          <form class="database-limit-form" method="get" action="{{ url_for('admin_database_dashboard') }}">
           {% if selected_schema %}
             <input type="hidden" name="schema" value="{{ selected_schema }}">
           {% endif %}
@@ -99,19 +99,24 @@
           <button class="button small" type="submit">Apply</button>
         </form>
       </div>
-      <div class="database-toolbar__action">
-        <p class="label">Database metadata</p>
-        <form method="post" action="{{ url_for('admin_database_dashboard_refresh') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="button small" type="submit">Refresh databases &amp; tables</button>
-        </form>
-        <p class="small">Pulls the latest schema and table list from the database.</p>
-      </div>
-      <div class="database-toolbar__action">
-        <p class="label">Quick tips</p>
-        <ul class="database-toolbar__tips">
-          <li class="small">Open schemas to see tables and drill into columns.</li>
-          <li class="small">Use export to download CSVs for analysis.</li>
+        <div class="database-toolbar__action">
+          <p class="label">Database metadata</p>
+          <form method="post" action="{{ url_for('admin_database_dashboard_refresh') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="button small" type="submit">Refresh databases &amp; tables</button>
+          </form>
+          <p class="small">Pulls the latest schema and table list from the database.</p>
+        </div>
+        <div class="database-toolbar__action">
+          <p class="label">Export all data</p>
+          <a class="button small" href="{{ url_for('admin_db_export') }}">Open export page</a>
+          <p class="small">Download a JSON snapshot of every schema and table.</p>
+        </div>
+        <div class="database-toolbar__action">
+          <p class="label">Quick tips</p>
+          <ul class="database-toolbar__tips">
+            <li class="small">Open schemas to see tables and drill into columns.</li>
+            <li class="small">Use export to download CSVs for analysis.</li>
         </ul>
       </div>
     </div>
