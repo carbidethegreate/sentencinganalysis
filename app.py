@@ -813,6 +813,9 @@ def create_app() -> Flask:
     ) -> None:
         try:
             inspector = inspect(engine)
+            if not inspector.has_table(table_name):
+                app.logger.info("Skipping %s column check; table is missing.", label)
+                return
             existing_columns = {
                 column["name"] for column in inspector.get_columns(table_name)
             }
