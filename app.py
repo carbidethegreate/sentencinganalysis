@@ -1644,11 +1644,13 @@ def create_app() -> Flask:
         )
         if not court_id or not case_number:
             return None
+        case_number = str(case_number)
         case_number_full = (
             record.get("caseNumberFull")
             or record.get("case_number_full")
             or case_number
         )
+        case_number_full = str(case_number_full)
         data_json = json.dumps(record, default=str)
         case_type_value = record.get("caseType") or record.get("case_type")
         if isinstance(case_type_value, str):
@@ -2058,7 +2060,7 @@ def create_app() -> Flask:
                 conn.execute(
                     select(pcl_cases.c.id).where(
                         (pcl_cases.c.court_id == court_id)
-                        & (pcl_cases.c.case_number == case_record["case_number"])
+                        & (pcl_cases.c.case_number == str(case_record["case_number"]))
                     )
                 )
                 .mappings()
