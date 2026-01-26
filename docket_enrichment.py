@@ -61,6 +61,16 @@ class DocketEnrichmentWorker:
             processed += 1
         return processed
 
+    def run_jobs(self, job_ids: List[int]) -> int:
+        if not job_ids:
+            return 0
+        jobs = self._load_jobs_by_ids(job_ids)
+        processed = 0
+        for job in jobs:
+            self._process_job(job)
+            processed += 1
+        return processed
+
     def _load_jobs(self, max_jobs: int) -> List[Dict[str, Any]]:
         job_table = self._tables["docket_enrichment_jobs"]
         with self._engine.begin() as conn:
@@ -70,6 +80,21 @@ class DocketEnrichmentWorker:
                     .where(job_table.c.status.in_(["queued", "running"]))
                     .order_by(job_table.c.created_at.asc(), job_table.c.id.asc())
                     .limit(max_jobs)
+                )
+                .mappings()
+                .all()
+            )
+        return [dict(row) for row in rows]
+
+    def _load_jobs_by_ids(self, job_ids: List[int]) -> List[Dict[str, Any]]:
+        job_table = self._tables["docket_enrichment_jobs"]
+        with self._engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    select(job_table)
+                    .where(job_table.c.id.in_(job_ids))
+                    .where(job_table.c.status.in_(["queued", "running"]))
+                    .order_by(job_table.c.created_at.asc(), job_table.c.id.asc())
                 )
                 .mappings()
                 .all()

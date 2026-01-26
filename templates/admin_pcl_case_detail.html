@@ -367,15 +367,24 @@
       </article>
     </div>
 
-    <article class="pcl-detail-card">
+    <article class="pcl-detail-card" id="docket-jobs">
       <div class="pcl-detail-card__header">
         <h3>Docket jobs</h3>
-        <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case_detail.id) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="include_docket_text" value="1">
-          <button class="secondary" type="submit">Pull docket text</button>
-        </form>
+        <div class="actions">
+          <form method="post" action="{{ url_for('admin_pcl_case_pull_docket_now', case_id=case_detail.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="include_docket_text" value="1">
+            <button class="secondary" type="submit">Pull docket text now</button>
+          </form>
+        </div>
       </div>
+      {% if case_detail.docket_jobs %}
+        {% set latest_job = case_detail.docket_jobs[0] %}
+        <p class="small">
+          Latest job: {{ latest_job.status }} · Attempts {{ latest_job.attempts }}
+          {% if latest_job.updated_at %} · Updated {{ latest_job.updated_at.isoformat() }}{% endif %}
+        </p>
+      {% endif %}
       {% if case_detail.docket_jobs %}
         <div class="table-wrap">
           <table class="admin-table">

@@ -8045,6 +8045,55 @@ def create_app() -> Flask:
 
         return redirect(url_for("admin_pcl_case_detail", case_id=case_id))
 
+    @app.post("/admin/pcl/cases/<int:case_id>/docket-enrichment/pull-now")
+    @admin_required
+    def admin_pcl_case_pull_docket_now(case_id: int):
+        require_csrf()
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+
+        include_docket_text = _parse_include_docket_text(request.form.get("include_docket_text"))
+        job_id = _enqueue_docket_enrichment(case_id, include_docket_text)
+        docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "xml")
+        docket_url_template = os.environ.get("PACER_DOCKET_URL_TEMPLATE")
+        worker = DocketEnrichmentWorker(
+            engine,
+            pcl_tables,
+            logger=app.logger,
+            endpoint_available=True,
+            http_client=pcl_background_http_client,
+            docket_output=docket_output,
+            docket_url_template=docket_url_template,
+        )
+        worker.run_jobs([job_id])
+
+        job_table = pcl_tables["docket_enrichment_jobs"]
+        with engine.begin() as conn:
+            job_row = (
+                conn.execute(
+                    select(
+                        job_table.c.status,
+                        job_table.c.last_error,
+                        job_table.c.updated_at,
+                    )
+                    .where(job_table.c.id == job_id)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        if job_row and job_row.get("status") == "completed":
+            flash("Docket text pulled successfully.", "success")
+        else:
+            error_note = job_row.get("last_error") if job_row else None
+            message = "Docket pull failed."
+            if error_note:
+                message = f"{message} {error_note}"
+            flash(message, "error")
+
+        return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-jobs")
+
     @app.get("/admin/pcl/cases/<int:case_id>")
     @admin_required
     def admin_pcl_case_detail(case_id: int):
