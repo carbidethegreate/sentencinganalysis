@@ -28,6 +28,20 @@
     </div>
   </section>
 
+  <section class="card database-connection-card">
+    <div class="database-connection-card__header">
+      <div>
+        <h2>Admin DB Check</h2>
+        <p class="small">Validate PACER reference tables and key counts.</p>
+      </div>
+      <button class="button small" type="button" id="dbCheckRun">Run check</button>
+    </div>
+    <div class="database-connection-card__body">
+      <p class="small" id="dbCheckStatus">Not run yet.</p>
+      <pre class="code-block" id="dbCheckResults" hidden></pre>
+    </div>
+  </section>
+
   <div class="stat-grid database-stat-grid">
     <div class="stat-card">
       <span class="small">Schemas</span>
@@ -402,6 +416,37 @@
   </div>
 
   <script>
+    const dbCheckRun = document.getElementById("dbCheckRun");
+    const dbCheckStatus = document.getElementById("dbCheckStatus");
+    const dbCheckResults = document.getElementById("dbCheckResults");
+    if (dbCheckRun && dbCheckStatus && dbCheckResults) {
+      dbCheckRun.addEventListener("click", async () => {
+        dbCheckStatus.textContent = "Running...";
+        dbCheckResults.hidden = true;
+        try {
+          const response = await fetch("{{ url_for('admin_database_dashboard_db_check') }}");
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error(payload.error || "Request failed");
+          }
+          const lines = [];
+          lines.push(`Checked at: ${payload.checked_at}`);
+          lines.push("");
+          for (const row of payload.tables || []) {
+            const statusText = row.exists ? "present" : "missing";
+            const countText = row.count === null || row.count === undefined ? "n/a" : row.count;
+            const errorText = row.error ? ` (${row.error})` : "";
+            lines.push(`${row.table}: ${statusText}, count=${countText}${errorText}`);
+          }
+          dbCheckResults.textContent = lines.join("\\n");
+          dbCheckResults.hidden = false;
+          dbCheckStatus.textContent = "Done.";
+        } catch (err) {
+          dbCheckStatus.textContent = `Error: ${err.message}`;
+        }
+      });
+    }
+
     const searchInput = document.getElementById("databaseSearch");
     if (searchInput) {
       const schemaItems = document.querySelectorAll(".database-schema-item");
