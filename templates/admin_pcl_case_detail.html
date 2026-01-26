@@ -175,8 +175,12 @@
           <tbody>
             {% for field in case_detail.case_fields %}
               {% if field.field_name.startswith('docket_') %}
-                {% continue %}
+                {% set skip_field = true %}
+              {% else %}
+                {% set skip_field = false %}
               {% endif %}
+              {% if skip_field %}
+              {% else %}
               <tr>
                 <td>{{ field.field_name }}</td>
                 <td class="pcl-mono">
@@ -184,6 +188,7 @@
                 </td>
                 <td>{{ field.updated_at.isoformat() if field.updated_at else "—" }}</td>
               </tr>
+              {% endif %}
             {% endfor %}
           </tbody>
         </table>

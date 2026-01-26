@@ -242,6 +242,18 @@ class DocketEnrichmentWorker:
             include_cookie=True,
         )
         content_type = response.headers.get("Content-Type", "")
+        if (
+            response.status_code == 200
+            and "html" in content_type.lower()
+            and _looks_like_docket_shell(response.body.decode("utf-8", errors="replace"))
+        ):
+            submit = _submit_docket_form(
+                self._http_client,
+                response.body.decode("utf-8", errors="replace"),
+                base_url=url,
+            )
+            if submit:
+                return submit
         return DocketFetchResult(
             url=url,
             status_code=response.status_code,
@@ -487,7 +499,96 @@ def _looks_like_docket_shell(text: str) -> bool:
     if not text:
         return False
     lowered = text.lower()
-    return "district court cm/ecf" in lowered and "docket sheet" in lowered
+    return (
+        "district court cm/ecf" in lowered
+        and "docket sheet" in lowered
+        and ("view combined docket report" in lowered or "format:" in lowered)
+    )
+
+
+def _submit_docket_form(
+    http_client: Any, html: str, base_url: str
+) -> Optional[DocketFetchResult]:
+    action = _extract_form_action(html)
+    payload = _extract_form_fields(html)
+    if not action or not payload:
+        return None
+    payload.setdefault("output_format", "HTML")
+    payload.setdefault("output_format_type", "HTML")
+    action_url = _resolve_form_action(base_url, action)
+    encoded = urlencode(payload).encode("utf-8")
+    response = http_client.request(
+        "POST",
+        action_url,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data=encoded,
+        include_cookie=True,
+    )
+    content_type = response.headers.get("Content-Type", "")
+    return DocketFetchResult(
+        url=action_url,
+        status_code=response.status_code,
+        content_type=content_type,
+        body=response.body,
+    )
+
+
+def _resolve_form_action(base_url: str, action: str) -> str:
+    if action.startswith("http://") or action.startswith("https://"):
+        return action
+    parsed = urlparse(base_url)
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc
+    if action.startswith("/"):
+        return f"{scheme}://{host}{action}"
+    base_path = parsed.path.rsplit("/", 1)[0]
+    return f"{scheme}://{host}{base_path}/{action}"
+
+
+def _extract_form_action(html: str) -> Optional[str]:
+    match = re.search(r"<form[^>]+action=[\"']([^\"']+)[\"']", html, re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def _extract_form_fields(html: str) -> Dict[str, str]:
+    fields: Dict[str, str] = {}
+    for match in re.finditer(r"<input([^>]+)>", html, re.IGNORECASE):
+        attrs = match.group(1)
+        name = _extract_attr(attrs, "name")
+        if not name:
+            continue
+        input_type = (_extract_attr(attrs, "type") or "text").lower()
+        value = _extract_attr(attrs, "value") or ""
+        checked = "checked" in attrs.lower()
+        if input_type in {"checkbox", "radio"} and not checked:
+            continue
+        fields[name] = value
+
+    for match in re.finditer(r"<select([^>]+)>(.*?)</select>", html, re.IGNORECASE | re.DOTALL):
+        attrs, body = match.groups()
+        name = _extract_attr(attrs, "name")
+        if not name:
+            continue
+        selected = re.search(r"<option[^>]*selected[^>]*value=[\"']([^\"']*)[\"']", body, re.IGNORECASE)
+        if selected:
+            fields[name] = selected.group(1)
+            continue
+        fallback = re.search(r"<option[^>]*value=[\"']([^\"']*)[\"']", body, re.IGNORECASE)
+        if fallback:
+            fields[name] = fallback.group(1)
+    if "output_format" not in fields:
+        xml_option = re.search(
+            r"name=[\"']output_format[\"'][^>]*value=[\"'](xml|XML)[\"']",
+            html,
+        )
+        if xml_option:
+            fields["output_format"] = xml_option.group(1)
+    return fields
+
+
+def _extract_attr(attrs: str, name: str) -> Optional[str]:
+    match = re.search(rf"{name}\\s*=\\s*[\"']([^\"']*)[\"']", attrs, re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 def _upsert_case_field(
