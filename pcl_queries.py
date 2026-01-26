@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import and_, desc, exists, func, literal, or_, select
+from sqlalchemy import and_, desc, exists, func, inspect, literal, or_, select
 
 from sentencing_queries import has_sentencing_event_clause
 
@@ -24,6 +24,8 @@ class PclCaseFilters:
     enriched_only: bool = False
     sentencing_only: bool = False
     search_text: str = ""
+    field_name: str = ""
+    field_value: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,8 @@ def parse_filters(args: Dict[str, str]) -> Tuple[PclCaseFilters, int, int]:
     case_type = (args.get("case_type") or "").strip().lower()
     judge_last_name = (args.get("judge_last_name") or "").strip()
     search_text = (args.get("q") or "").strip()
+    field_name = (args.get("field_name") or "").strip()
+    field_value = (args.get("field_value") or "").strip()
 
     date_from = _parse_date(args.get("date_filed_from"))
     date_to = _parse_date(args.get("date_filed_to"))
@@ -82,6 +86,8 @@ def parse_filters(args: Dict[str, str]) -> Tuple[PclCaseFilters, int, int]:
         enriched_only=enriched_only,
         sentencing_only=sentencing_only,
         search_text=search_text,
+        field_name=field_name,
+        field_value=field_value,
     )
     return filters, page, page_size
 
@@ -89,9 +95,10 @@ def parse_filters(args: Dict[str, str]) -> Tuple[PclCaseFilters, int, int]:
 def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size: int) -> PclCaseListResult:
     pcl_cases = tables["pcl_cases"]
     pcl_batch_segments = tables["pcl_batch_segments"]
-    docket_enrichment_jobs = tables.get("docket_enrichment_jobs")
+    docket_enrichment_jobs = _maybe_table(engine, tables, "docket_enrichment_jobs")
+    case_fields = _maybe_table(engine, tables, "pcl_case_fields")
 
-    where_clauses = _build_where_clauses(pcl_cases, filters)
+    where_clauses = _build_where_clauses(pcl_cases, filters, case_fields=case_fields)
     enrichment_status = literal(None).label("enrichment_status")
     enrichment_updated_at = literal(None).label("enrichment_updated_at")
     has_enrichment = None
@@ -123,13 +130,8 @@ def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size:
         )
 
     has_sentencing = literal(False).label("has_sentencing")
-    if filters.sentencing_only and "sentencing_events" in pcl_cases.metadata.tables:
-        sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
-        has_sentencing = exists(
-            has_sentencing_event_clause(pcl_cases, sentencing_events)
-        ).label("has_sentencing")
-    elif "sentencing_events" in pcl_cases.metadata.tables:
-        sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
+    sentencing_events = _maybe_table(engine, tables, "sentencing_events")
+    if sentencing_events is not None:
         has_sentencing = exists(
             has_sentencing_event_clause(pcl_cases, sentencing_events)
         ).label("has_sentencing")
@@ -191,8 +193,9 @@ def list_case_cards(
     engine, tables, filters: PclCaseFilters, *, page: int, page_size: int
 ) -> PclCaseCardResult:
     pcl_cases = tables["pcl_cases"]
-    docket_enrichment_jobs = tables.get("docket_enrichment_jobs")
-    where_clauses = _build_where_clauses(pcl_cases, filters)
+    docket_enrichment_jobs = _maybe_table(engine, tables, "docket_enrichment_jobs")
+    case_fields = _maybe_table(engine, tables, "pcl_case_fields")
+    where_clauses = _build_where_clauses(pcl_cases, filters, case_fields=case_fields)
     enrichment_status = literal(None).label("enrichment_status")
     enrichment_updated_at = literal(None).label("enrichment_updated_at")
     if docket_enrichment_jobs is not None:
@@ -220,8 +223,8 @@ def list_case_cards(
         )
 
     has_sentencing = literal(False).label("has_sentencing")
-    if "sentencing_events" in pcl_cases.metadata.tables:
-        sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
+    sentencing_events = _maybe_table(engine, tables, "sentencing_events")
+    if sentencing_events is not None:
         has_sentencing = exists(
             has_sentencing_event_clause(pcl_cases, sentencing_events)
         ).label("has_sentencing")
@@ -308,19 +311,23 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
         detail = dict(row)
         raw_payloads = _load_raw_payloads(conn, tables, detail)
         receipts = _load_receipts(conn, tables, detail)
+        case_fields = _load_case_fields(conn, tables, detail)
         docket_jobs = _load_docket_jobs(conn, tables, detail)
         docket_estimate = _estimate_docket_cost(conn, tables, detail)
         sentencing_detail = _load_sentencing_detail(conn, tables, detail)
 
     detail["raw_payloads"] = raw_payloads
     detail["receipts"] = receipts
+    detail["case_fields"] = case_fields
     detail["docket_jobs"] = docket_jobs
     detail["docket_estimate"] = docket_estimate
     detail.update(sentencing_detail)
     return detail
 
 
-def _build_where_clauses(pcl_cases, filters: PclCaseFilters) -> List[Any]:
+def _build_where_clauses(
+    pcl_cases, filters: PclCaseFilters, *, case_fields=None
+) -> List[Any]:
     clauses: List[Any] = [pcl_cases.c.id.is_not(None)]
     if filters.court_id:
         clauses.append(pcl_cases.c.court_id == filters.court_id)
@@ -342,6 +349,18 @@ def _build_where_clauses(pcl_cases, filters: PclCaseFilters) -> List[Any]:
                 func.lower(pcl_cases.c.case_title).like(like_pattern),
             )
         )
+    if (filters.field_name or filters.field_value) and case_fields is not None:
+        field_clauses = [case_fields.c.case_id == pcl_cases.c.id]
+        if filters.field_name:
+            field_clauses.append(
+                func.lower(case_fields.c.field_name) == filters.field_name.lower()
+            )
+        if filters.field_value:
+            field_like = f"%{filters.field_value.lower()}%"
+            field_clauses.append(
+                func.lower(case_fields.c.field_value_text).like(field_like)
+            )
+        clauses.append(exists(select(1).where(and_(*field_clauses))))
     if filters.indexed_only:
         clauses.append(pcl_cases.c.record_hash.is_not(None))
     if filters.enriched_only and "docket_enrichment_jobs" in pcl_cases.metadata.tables:
@@ -356,6 +375,17 @@ def _build_where_clauses(pcl_cases, filters: PclCaseFilters) -> List[Any]:
         clauses.append(exists(has_sentencing_event_clause(pcl_cases, sentencing_events)))
     # Enrichment flags are not yet modeled; keep filters as no-ops.
     return clauses
+
+
+def _maybe_table(engine, tables, name: str):
+    table = tables.get(name)
+    if table is None:
+        return None
+    try:
+        inspector = inspect(engine)
+        return table if inspector.has_table(table.name) else None
+    except Exception:
+        return None
 
 
 def _load_raw_payloads(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -379,6 +409,24 @@ def _load_raw_payloads(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, A
         )
         .order_by(pcl_case_result_raw.c.created_at.desc(), pcl_case_result_raw.c.id.desc())
         .limit(25)
+    )
+    return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+
+def _load_case_fields(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
+    pcl_case_fields = tables.get("pcl_case_fields")
+    case_id = detail.get("id")
+    if not pcl_case_fields or not case_id:
+        return []
+    stmt = (
+        select(
+            pcl_case_fields.c.field_name,
+            pcl_case_fields.c.field_value_text,
+            pcl_case_fields.c.field_value_json,
+            pcl_case_fields.c.updated_at,
+        )
+        .where(pcl_case_fields.c.case_id == case_id)
+        .order_by(pcl_case_fields.c.field_name.asc())
     )
     return [dict(row) for row in conn.execute(stmt).mappings().all()]
 

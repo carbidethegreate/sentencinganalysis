@@ -4,35 +4,25 @@ Status
 - Phase 1: Done (Immediate vs Batch UX switch, improved hub entry points).
 - Phase 2: Done (Unified search run storage + dedupe indicators).
 - Phase 3: Done (Saved searches + run history; sort controls; search reuse; case provenance).
-- Phase 4: In progress (Enrichment + expansion actions tied to case status and run provenance).
+- Phase 4: In progress (Enrichment + expansion actions, dynamic PACER field capture, and case-card UX cleanup).
 
 Latest update
-- Added a safe fallback when the saved-search table is not migrated yet to prevent 500 errors.
-- Re-read the PACER/PCL PDFs and updated the reference summary to align with available tables.
-- Generated reference-table migration from Appendix A/E/F data and wired the UI to prefer PACER tables for courts and case types.
-- Added PACER response-code context to PCL API errors.
-- Added sortable-field controls to Explore PACER using pacer_sortable_case_fields and pacer_sortable_party_fields.
-- Displayed region + sort context in saved searches and run history.
-- Stored PACER search run provenance on cases/parties and surfaced it in the case list + detail views.
-- Added Expand data actions on Explore results and Indexed Cases, plus enrichment status badges.
+- Removed the automatic criminal-only case-type constraint so civil cases can be saved.
+- Added dynamic field capture plan to store every PACER field as a searchable value.
+- Added new filters for PACER field name/value on case lists and cards.
+- Added a normalized PACER field section to the case detail view.
 
 Current focus
-1) Apply the PACER reference-table migration in production.
-2) Leverage PACER/PCL reference tables to tighten validation and improve search UX:
-   - Pacer Response Codes: map API status to human-readable errors.
-   - Search Regions in Production: limit and validate court region filters.
-   - Case Types: drive caseType selects and validation.
-   - pacer_courts: source court IDs/labels for filters.
-   - pacer_sortable_case_fields / pacer_sortable_party_fields: expose sorting options in the UI.
-3) Add case provenance cues:
-   - Display last run info on Indexed Cases.
-   - Link saved searches to their last run and run counts.
-4) Surface sort + region details in run history and saved search summaries.
-5) Apply the PACER run provenance migration in production.
+1) Apply the PACER reference-table and case-field migrations in production.
+2) Persist all PACER fields (cases + courtCase) into `pcl_case_fields`.
+3) Make PACER field search filters reliable on Case Cards and Indexed Cases.
+4) Keep PACER run provenance visible on saved cases and cards.
+5) Expand enrichment tracking to include completed status + receipts.
 
 Next steps
-- Apply the PACER run provenance migration in production.
-- Expand enrichment tracking to include completed status + receipts.
+- Apply the PACER case-field migration in production.
+- Confirm `ck_pcl_cases_case_type` is dropped in production to allow all case types.
+- Add UI affordances for field search (helpers, chips, or suggestions).
 - Add worker wiring for docket enrichment endpoints once available.
 
 Notes

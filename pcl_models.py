@@ -388,6 +388,37 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Index("ix_pcl_cases_judge_last_name", "judge_last_name"),
     )
 
+    pcl_case_fields = Table(
+        "pcl_case_fields",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("case_id", Integer, ForeignKey("pcl_cases.id"), nullable=False),
+        Column("field_name", Text, nullable=False),
+        Column("field_value_text", Text, nullable=True),
+        Column("field_value_json", json_type, nullable=True),
+        UniqueConstraint(
+            "case_id",
+            "field_name",
+            name="uq_pcl_case_fields_case_field",
+        ),
+        Index("ix_pcl_case_fields_case_id", "case_id"),
+        Index("ix_pcl_case_fields_name", "field_name"),
+        Index("ix_pcl_case_fields_name_value", "field_name", "field_value_text"),
+        Index(
+            "ix_pcl_case_fields_value_gin",
+            "field_value_json",
+            postgresql_using="gin",
+        ),
+    )
+
     pcl_parties = Table(
         "pcl_parties",
         metadata,
@@ -543,6 +574,7 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         "pcl_remote_jobs": pcl_remote_jobs,
         "pcl_case_result_raw": pcl_case_result_raw,
         "pcl_cases": pcl_cases,
+        "pcl_case_fields": pcl_case_fields,
         "pcl_parties": pcl_parties,
         "pcl_receipts": pcl_receipts,
         "pcl_batch_receipts": pcl_batch_receipts,

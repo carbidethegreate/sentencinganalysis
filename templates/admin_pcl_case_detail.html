@@ -110,6 +110,41 @@
   <section class="card pcl-detail-shell">
     <div class="pcl-detail-header">
       <div>
+        <h3>Normalized PACER fields</h3>
+        <p class="small">Every field saved as a searchable value.</p>
+      </div>
+    </div>
+    {% if case_detail.case_fields %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Value</th>
+              <th>Last updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for field in case_detail.case_fields %}
+              <tr>
+                <td>{{ field.field_name }}</td>
+                <td class="pcl-mono">
+                  {{ field.field_value_text or (field.field_value_json | tojson(indent=0) if field.field_value_json is not none else "—") }}
+                </td>
+                <td>{{ field.updated_at.isoformat() if field.updated_at else "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="small">No field snapshot saved yet. Save a PACER search to populate these fields.</p>
+    {% endif %}
+  </section>
+
+  <section class="card pcl-detail-shell">
+    <div class="pcl-detail-header">
+      <div>
         <h3>Full PACER payload</h3>
         <p class="small">Every field returned for this case. Use this to add new fields to the UI.</p>
       </div>

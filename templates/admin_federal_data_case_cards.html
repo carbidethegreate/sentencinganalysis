@@ -7,7 +7,7 @@
     <p class="pacer-eyebrow">Saved PACER results</p>
     <h2>Case cards</h2>
     <p class="small">
-      These are the cases you saved from PACER searches. Use filters to narrow results.
+      These are the cases you saved from PACER. Use the filters to find what you need.
     </p>
 
     <form method="get" class="pcl-filter-form" aria-label="Filter case cards">
@@ -51,6 +51,20 @@
         <div>
           <label for="case-cards-search">Search title/number</label>
           <input id="case-cards-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
+        </div>
+        <div>
+          <label for="case-cards-field-name">Field name</label>
+          <input id="case-cards-field-name" name="field_name" list="case-cards-field-name-list" value="{{ filters.field_name }}" placeholder="e.g., caseId">
+          <datalist id="case-cards-field-name-list">
+            {% for field_name in case_field_choices %}
+              <option value="{{ field_name }}"></option>
+            {% endfor %}
+          </datalist>
+          <p class="small">Search any PACER field captured for the case.</p>
+        </div>
+        <div>
+          <label for="case-cards-field-value">Field value contains</label>
+          <input id="case-cards-field-value" name="field_value" value="{{ filters.field_value }}" placeholder="e.g., 2025 or vidc">
         </div>
       </div>
 

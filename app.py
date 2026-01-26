@@ -1004,21 +1004,6 @@ def create_app() -> Flask:
             },
             label="federal courts states",
         )
-        try:
-            with engine.begin() as conn:
-                constraint_exists = conn.execute(
-                    sa_text(
-                        "SELECT 1 FROM pg_constraint WHERE conname = 'ck_pcl_cases_case_type'"
-                    )
-                ).scalar()
-                if not constraint_exists:
-                    conn.execute(
-                        sa_text(
-                            "ALTER TABLE pcl_cases ADD CONSTRAINT ck_pcl_cases_case_type CHECK (case_type in ('cr','crim','ncrim','dcrim'))"
-                        )
-                    )
-        except Exception:
-            app.logger.exception("Unable to ensure pcl case type constraint.")
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
@@ -1723,6 +1708,39 @@ def create_app() -> Flask:
             "source_last_seen_at": datetime.utcnow(),
         }
 
+    def _case_fields_enabled() -> bool:
+        try:
+            inspector = inspect(engine)
+            return inspector.has_table("pcl_case_fields")
+        except Exception:
+            return False
+
+    def _normalize_case_fields(record: Dict[str, Any]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for key, value in record.items():
+            if not _is_non_empty(value):
+                continue
+            field_name = str(key)
+            field_value_text: Optional[str] = None
+            if isinstance(value, (dict, list)):
+                field_value_text = json.dumps(value, default=str)
+            elif value is not None:
+                field_value_text = str(value)
+            try:
+                field_value_json = json.loads(json.dumps(value, default=str))
+            except TypeError:
+                field_value_json = str(value)
+            if isinstance(field_value_text, str) and len(field_value_text) > 2000:
+                field_value_text = f"{field_value_text[:2000]}…"
+            normalized.append(
+                {
+                    "field_name": field_name,
+                    "field_value_text": field_value_text,
+                    "field_value_json": field_value_json,
+                }
+            )
+        return normalized
+
     def _parse_page_number(value: Any) -> Tuple[int, Optional[str]]:
         warning = None
         try:
@@ -2084,6 +2102,62 @@ def create_app() -> Flask:
         )
         return int(result.inserted_primary_key[0]), True
 
+    def _upsert_pcl_case_fields(
+        conn: Any, case_id: int, record: Dict[str, Any]
+    ) -> Tuple[int, int]:
+        pcl_case_fields = pcl_tables.get("pcl_case_fields")
+        if not pcl_case_fields:
+            return 0, 0
+        fields = _normalize_case_fields(record)
+        if not fields:
+            return 0, 0
+        now = datetime.utcnow()
+        inserted = 0
+        updated = 0
+        for field in fields:
+            field_name = field["field_name"]
+            existing = (
+                conn.execute(
+                    select(
+                        pcl_case_fields.c.id,
+                        pcl_case_fields.c.field_value_text,
+                        pcl_case_fields.c.field_value_json,
+                    ).where(
+                        (pcl_case_fields.c.case_id == case_id)
+                        & (pcl_case_fields.c.field_name == field_name)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            payload = {
+                "field_value_text": field.get("field_value_text"),
+                "field_value_json": field.get("field_value_json"),
+            }
+            if existing:
+                if (
+                    existing.get("field_value_text") != payload["field_value_text"]
+                    or existing.get("field_value_json") != payload["field_value_json"]
+                ):
+                    conn.execute(
+                        update(pcl_case_fields)
+                        .where(pcl_case_fields.c.id == existing["id"])
+                        .values(**payload, updated_at=now)
+                    )
+                    updated += 1
+                continue
+            conn.execute(
+                insert(pcl_case_fields).values(
+                    **payload,
+                    case_id=case_id,
+                    field_name=field_name,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            inserted += 1
+        return inserted, updated
+
     def _upsert_pcl_party(
         conn: Any,
         party_record: Dict[str, Any],
@@ -2158,6 +2232,7 @@ def create_app() -> Flask:
             json.dumps(raw_response, default=str) if isinstance(raw_response, dict) else None
         )
         default_court_id = (criteria.get("ui_inputs") or {}).get("court_id")
+        case_fields_enabled = _case_fields_enabled()
         with engine.begin() as conn:
             run_timestamp = datetime.utcnow()
             run_result = conn.execute(
@@ -2188,12 +2263,14 @@ def create_app() -> Flask:
                     )
                     if not normalized:
                         continue
-                    _, inserted = _upsert_pcl_case(
+                    case_id, inserted = _upsert_pcl_case(
                         conn,
                         normalized,
                         search_run_id=search_run_id,
                         search_run_at=run_timestamp,
                     )
+                    if case_fields_enabled:
+                        _upsert_pcl_case_fields(conn, case_id, record)
                     if inserted:
                         counts["cases_inserted"] += 1
                     else:
@@ -2216,6 +2293,8 @@ def create_app() -> Flask:
                         search_run_id=search_run_id,
                         search_run_at=run_timestamp,
                     )
+                    if case_fields_enabled:
+                        _upsert_pcl_case_fields(conn, case_id, court_case)
                     if case_inserted:
                         counts["cases_inserted"] += 1
                     else:
@@ -2518,6 +2597,24 @@ def create_app() -> Flask:
             codes = [row[0] for row in rows if row and row[0]]
             return [(code, code) for code in codes]
         return list(PCL_CASE_TYPES)
+
+    def _load_case_field_choices(limit: int = 200) -> List[str]:
+        pcl_case_fields = pcl_tables.get("pcl_case_fields")
+        if not pcl_case_fields:
+            return []
+        stmt = (
+            select(pcl_case_fields.c.field_name)
+            .distinct()
+            .order_by(pcl_case_fields.c.field_name.asc())
+            .limit(limit)
+        )
+        try:
+            with engine.begin() as conn:
+                rows = conn.execute(stmt).fetchall()
+        except SQLAlchemyError as exc:
+            app.logger.warning("PACER case fields unavailable: %s", exc)
+            return []
+        return [row[0] for row in rows if row and row[0]]
 
     def _load_sortable_case_fields() -> List[str]:
         pacer_sortable_case_fields = pcl_tables["pacer_sortable_case_fields"]
@@ -7229,6 +7326,7 @@ def create_app() -> Flask:
             page_url=page_url,
             court_choices=_load_court_choices(),
             case_type_choices=_load_case_type_choices(),
+            case_field_choices=_load_case_field_choices(),
         )
 
     @app.get("/admin/federal-data-dashboard/logs")
@@ -7544,6 +7642,7 @@ def create_app() -> Flask:
             page_url=page_url,
             available_courts=result.available_courts,
             available_case_types=result.available_case_types,
+            case_field_choices=_load_case_field_choices(),
             saved_searches=_load_pacer_saved_searches(limit=6),
             search_run_history=_load_pacer_search_runs(limit=6),
         )
