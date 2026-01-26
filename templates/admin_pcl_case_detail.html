@@ -114,6 +114,42 @@
         <p class="small">Every field saved as a searchable value.</p>
       </div>
     </div>
+    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None) %}
+    {% if case_detail.case_fields %}
+      {% for field in case_detail.case_fields %}
+        {% if field.field_name == 'docket_text' %}
+          {% set docket.text = field.field_value_json %}
+          {% set docket.updated_at = field.updated_at %}
+        {% elif field.field_name == 'docket_text_preview' %}
+          {% set docket.preview = field.field_value_text %}
+          {% set docket.updated_at = field.updated_at %}
+        {% elif field.field_name == 'docket_entries' %}
+          {% set docket.entries = field.field_value_json %}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+    {% if docket.text or docket.preview or docket.entries %}
+      <article class="pcl-detail-card">
+        <h3>Docket text</h3>
+        <p class="small">Latest docket text captured from PACER.</p>
+        {% if docket.updated_at %}
+          <p class="small">Updated {{ docket.updated_at.isoformat() }}</p>
+        {% endif %}
+        {% if docket.preview %}
+          <pre class="code-block">{{ docket.preview }}</pre>
+        {% elif docket.text and docket.text.text %}
+          <pre class="code-block">{{ docket.text.text }}</pre>
+        {% else %}
+          <p class="small">Docket text stored without preview.</p>
+        {% endif %}
+        {% if docket.entries %}
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show docket entries</summary>
+            <pre class="code-block">{{ docket.entries | tojson(indent=2) }}</pre>
+          </details>
+        {% endif %}
+      </article>
+    {% endif %}
     {% if case_detail.case_fields %}
       <div class="table-wrap">
         <table>
