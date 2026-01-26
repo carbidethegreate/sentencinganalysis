@@ -137,6 +137,26 @@
           </tbody>
         </table>
       </div>
+    {% elif case_detail.case_fields_preview %}
+      <p class="small">Preview from raw PACER payload (not yet indexed).</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for field in case_detail.case_fields_preview %}
+              <tr>
+                <td>{{ field.field_name }}</td>
+                <td class="pcl-mono">{{ field.field_value_text or "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     {% else %}
       <p class="small">No field snapshot saved yet. Save a PACER search to populate these fields.</p>
     {% endif %}

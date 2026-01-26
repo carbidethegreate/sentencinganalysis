@@ -7873,18 +7873,24 @@ def create_app() -> Flask:
                 receipt_payload = None
         harvested_info: Dict[str, Any] = {}
         if isinstance(receipt_payload, list) and receipt_payload:
-            first_receipt = receipt_payload[0].get("receipt") if isinstance(receipt_payload[0], dict) else None
-            if isinstance(first_receipt, dict):
-                harvested_info = {
-                    "login_id": first_receipt.get("loginId"),
-                    "cso_id": first_receipt.get("csoId"),
-                    "transaction_date": first_receipt.get("transactionDate"),
-                    "report_id": first_receipt.get("reportId"),
-                    "search_fee": first_receipt.get("searchFee"),
-                    "client_code": first_receipt.get("clientCode"),
-                    "description": first_receipt.get("description"),
-                    "search": first_receipt.get("search"),
-                }
+            first_item = receipt_payload[0] if isinstance(receipt_payload[0], dict) else None
+            if isinstance(first_item, dict):
+                receipt_record = first_item.get("receipt") if "receipt" in first_item else first_item
+                if isinstance(receipt_record, dict):
+                    harvested_info = {
+                        "login_id": receipt_record.get("loginId"),
+                        "cso_id": receipt_record.get("csoId"),
+                        "transaction_date": receipt_record.get("transactionDate"),
+                        "report_id": receipt_record.get("reportId"),
+                        "search_fee": receipt_record.get("searchFee"),
+                        "client_code": receipt_record.get("clientCode"),
+                        "description": receipt_record.get("description"),
+                        "search": receipt_record.get("search"),
+                    }
+        case_fields_preview: List[Dict[str, Any]] = []
+        if not detail.get("case_fields") and isinstance(parsed_payload, dict):
+            case_fields_preview = _normalize_case_fields(parsed_payload)
+        detail["case_fields_preview"] = case_fields_preview
         detail["data_json_parsed"] = parsed_payload
         detail["harvested_info"] = harvested_info
         return render_template(
