@@ -111,6 +111,10 @@ class PacerHttpClient:
         self._capture_refreshed_token(headers)
         return PacerHttpResponse(status_code=status_code, headers=headers, body=body)
 
+    def refresh_token(self) -> Optional[PacerTokenRecord]:
+        """Force a token refresh if a refresher is configured."""
+        return self._refresh_token()
+
     def _capture_refreshed_token(self, headers: Dict[str, Any]) -> None:
         refreshed = None
         for key, value in headers.items():

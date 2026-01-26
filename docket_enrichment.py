@@ -258,7 +258,8 @@ class DocketEnrichmentWorker:
             output_format=self._docket_output,
             url_template=self._docket_url_template,
         )
-        response = self._http_client.request(
+        response = _request_with_login_retry(
+            self._http_client,
             "GET",
             url,
             headers={"Accept": "application/xml, text/html"},
@@ -670,7 +671,8 @@ def _submit_docket_form(
     payload.setdefault("format", payload.get("output_format"))
     action_url = _resolve_form_action(base_url, action)
     encoded = urlencode(payload).encode("utf-8")
-    response = http_client.request(
+    response = _request_with_login_retry(
+        http_client,
         "POST",
         action_url,
         headers={
@@ -747,7 +749,8 @@ def _submit_confirm_form(
         return None
     action_url = _resolve_form_action(referer, action)
     encoded = urlencode(payload).encode("utf-8")
-    follow = http_client.request(
+    follow = _request_with_login_retry(
+        http_client,
         "POST",
         action_url,
         headers={
@@ -812,7 +815,8 @@ def _fetch_docket_report_multistep(
         return None
     base_url = f"{parsed.scheme}://{parsed.netloc}"
     search_url = f"{base_url}/n/beam/servlet/TransportRoom?servlet=CaseSearch.jsp"
-    search_response = http_client.request(
+    search_response = _request_with_login_retry(
+        http_client,
         "GET",
         search_url,
         headers={"Accept": "text/html"},
@@ -831,7 +835,8 @@ def _fetch_docket_report_multistep(
     search_payload.setdefault("aName", "")
     search_payload.setdefault("searchPty", "pty")
     search_action_url = _resolve_form_action(search_url, search_action)
-    search_submit = http_client.request(
+    search_submit = _request_with_login_retry(
+        http_client,
         "POST",
         search_action_url,
         headers={
@@ -850,7 +855,8 @@ def _fetch_docket_report_multistep(
     if not summary_link:
         return None
     summary_url = _resolve_form_action(search_action_url, summary_link)
-    summary_response = http_client.request(
+    summary_response = _request_with_login_retry(
+        http_client,
         "GET",
         summary_url,
         headers={"Accept": "text/html"},
@@ -864,7 +870,8 @@ def _fetch_docket_report_multistep(
         return None
     docket_action, docket_payload = full_docket_form
     docket_action_url = _resolve_form_action(summary_url, docket_action)
-    docket_submit = http_client.request(
+    docket_submit = _request_with_login_retry(
+        http_client,
         "POST",
         docket_action_url,
         headers={
@@ -885,7 +892,8 @@ def _fetch_docket_report_multistep(
     filter_action, filter_payload = filter_form
     filter_payload["outputXML_TXT"] = "XML"
     filter_action_url = _resolve_form_action(docket_action_url, filter_action)
-    filter_response = http_client.request(
+    filter_response = _request_with_login_retry(
+        http_client,
         "POST",
         filter_action_url,
         headers={
@@ -942,6 +950,55 @@ def _extract_case_summary_link(html_text: str) -> Optional[str]:
         return match.group(1)
     match = re.search(r'href=[\"\\']([^\"\\']*CaseSummary.*?)[\"\\']', html_text)
     return match.group(1) if match else None
+
+
+def _looks_like_login_redirect(html_text: str) -> bool:
+    if not html_text:
+        return False
+    lowered = html_text.lower()
+    return (
+        "pacer.login.uscourts.gov" in lowered
+        or "csologin" in lowered
+        or "login.jsf" in lowered
+    )
+
+
+def _request_with_login_retry(
+    http_client: Any,
+    method: str,
+    url: str,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    data: Optional[bytes] = None,
+    include_cookie: bool = False,
+    _retried: bool = False,
+) -> Any:
+    response = http_client.request(
+        method,
+        url,
+        headers=headers,
+        data=data,
+        include_cookie=include_cookie,
+    )
+    content_type = response.headers.get("Content-Type", "")
+    if (
+        not _retried
+        and "html" in content_type.lower()
+        and _looks_like_login_redirect(response.body.decode("utf-8", errors="replace"))
+    ):
+        refresh = getattr(http_client, "refresh_token", None)
+        if callable(refresh):
+            refresh()
+            return _request_with_login_retry(
+                http_client,
+                method,
+                url,
+                headers=headers,
+                data=data,
+                include_cookie=include_cookie,
+                _retried=True,
+            )
+    return response
 
 
 def _extract_form_fields(html: str) -> Dict[str, str]:
