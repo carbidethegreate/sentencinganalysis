@@ -4552,6 +4552,7 @@ def create_app() -> Flask:
     @app.get("/admin/database-dashboard")
     @admin_required
     def admin_database_dashboard():
+        engine.dispose()
         inspector = inspect(engine)
         schema_names = sorted(inspector.get_schema_names())
 
@@ -4704,7 +4705,8 @@ def create_app() -> Flask:
                 table_preview_error = "Selected table was not found in this schema."
 
         database_url = engine.url.render_as_string(hide_password=True)
-        return render_template(
+        response = make_response(
+            render_template(
             "admin_database_dashboard.html",
             active_page="database_dashboard",
             database_url=database_url,
@@ -4724,7 +4726,10 @@ def create_app() -> Flask:
             table_preview_error=table_preview_error,
             column_preview_error=column_preview_error,
             selected_table_columns=selected_table_columns,
+            )
         )
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        return response
 
     @app.get("/admin/database-dashboard/db-check")
     @admin_required
@@ -4807,6 +4812,76 @@ def create_app() -> Flask:
         response = make_response(output.getvalue())
         response.headers["Content-Type"] = "text/csv"
         response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+    @app.get("/admin/database-dashboard/export-all")
+    @admin_required
+    def admin_database_dashboard_export_all():
+        inspector = inspect(engine)
+        schema_names = sorted(inspector.get_schema_names())
+        schemas: List[Dict[str, Any]] = []
+        for schema_name in schema_names:
+            if _is_system_schema(schema_name):
+                continue
+            schema_error: Optional[str] = None
+            table_entries: List[Dict[str, Any]] = []
+            view_names: List[str] = []
+            try:
+                table_names = sorted(inspector.get_table_names(schema=schema_name))
+                view_names = sorted(inspector.get_view_names(schema=schema_name))
+            except SQLAlchemyError as exc:
+                table_names = []
+                schema_error = str(exc)
+            except Exception as exc:  # noqa: BLE001
+                table_names = []
+                schema_error = f"{exc.__class__.__name__}: {exc}"
+
+            for table_name in table_names:
+                column_entries: List[Dict[str, Any]] = []
+                column_error: Optional[str] = None
+                try:
+                    columns = inspector.get_columns(table_name, schema=schema_name)
+                    column_entries = [
+                        {
+                            "name": column["name"],
+                            "type": str(column["type"]),
+                            "nullable": column.get("nullable", True),
+                            "default": column.get("default"),
+                        }
+                        for column in columns
+                    ]
+                except SQLAlchemyError as exc:
+                    column_error = str(exc)
+                except Exception as exc:  # noqa: BLE001
+                    column_error = f"{exc.__class__.__name__}: {exc}"
+
+                table_entries.append(
+                    {
+                        "name": table_name,
+                        "columns": column_entries,
+                        "column_count": len(column_entries),
+                        "column_error": column_error,
+                    }
+                )
+
+            schemas.append(
+                {
+                    "name": schema_name,
+                    "tables": table_entries,
+                    "views": view_names,
+                    "schema_error": schema_error,
+                }
+            )
+
+        payload = {
+            "generated_at": datetime.utcnow().isoformat(),
+            "database": engine.url.database,
+            "dialect": engine.dialect.name,
+            "schemas": schemas,
+        }
+        response = make_response(json.dumps(payload, indent=2, default=str))
+        response.headers["Content-Type"] = "application/json"
+        response.headers["Content-Disposition"] = 'attachment; filename="database_catalog.json"'
         return response
 
     @app.get("/admin/federal-data-dashboard")
