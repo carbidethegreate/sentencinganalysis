@@ -8229,12 +8229,22 @@ def create_app() -> Flask:
             return redirect(url_for("admin_docket_enrichment_dashboard"))
 
         def _run_worker() -> None:
-            worker = DocketEnrichmentWorker(engine, pcl_tables, logger=app.logger)
+            docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "xml")
+            docket_url_template = os.environ.get("PACER_DOCKET_URL_TEMPLATE")
+            worker = DocketEnrichmentWorker(
+                engine,
+                pcl_tables,
+                logger=app.logger,
+                endpoint_available=True,
+                http_client=pcl_http_client,
+                docket_output=docket_output,
+                docket_url_template=docket_url_template,
+            )
             worker.run_once(max_jobs=max_jobs_int)
 
         threading.Thread(target=_run_worker, daemon=True).start()
         flash(
-            "Docket enrichment worker started. Jobs will fail with a placeholder error until endpoints are wired.",
+            "Docket enrichment worker started. Jobs will pull docket report data for queued cases.",
             "success",
         )
         return redirect(url_for("admin_docket_enrichment_dashboard"))

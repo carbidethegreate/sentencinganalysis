@@ -11,9 +11,10 @@ Latest update
 - Reworked Docket Enrichment to support filterable batch queueing + clearer admin workflow.
 - Added case detail fallback to display parsed PACER fields when normalized fields are missing.
 - Fixed SQLAlchemy truthy checks causing Internal Server Errors on case lists and details.
+- Wired docket enrichment worker to pull docket reports via PACER case links.
 
 Current focus
-1) Ensure docket enrichment dashboard is stable (filters, batch queue, and job table).
+1) Validate docket enrichment output and confirm docket text is stored in `pcl_case_fields`.
 2) Persist all PACER fields (cases + courtCase) into `pcl_case_fields`.
 3) Make PACER field search filters reliable on Case Cards and Indexed Cases.
 4) Keep PACER run provenance visible on saved cases and cards.
@@ -23,7 +24,7 @@ Next steps
 - Apply the PACER case-field migration in production.
 - Confirm `ck_pcl_cases_case_type` is dropped in production to allow all case types.
 - Add UI affordances for field search (helpers, chips, or suggestions).
-- Wire docket enrichment worker endpoints once available.
+- Confirm docket report URLs resolve across courts and adjust PACER docket template if needed.
 
 Notes
 - This plan will be updated as each step is completed.
