@@ -6,7 +6,7 @@ import html
 import json
 import re
 from typing import Any, Callable, Dict, List, Optional
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 from xml.etree import ElementTree
 
 from lxml import html as lxml_html
@@ -137,10 +137,12 @@ class DocketEnrichmentWorker:
         docket_text, docket_entries, parsed_format = _extract_docket_payload(
             fetch_result.body,
             fetch_result.content_type,
+            base_url=fetch_result.url,
         )
         raw_html = None
         if parsed_format == "html":
             raw_html = fetch_result.body.decode("utf-8", errors="replace")
+        header_fields = _extract_docket_header_fields_from_html(raw_html) if raw_html else None
         if raw_html and _looks_like_login_redirect(raw_html):
             self._store_docket_payload(
                 job,
@@ -149,6 +151,7 @@ class DocketEnrichmentWorker:
                 docket_text,
                 docket_entries,
                 parsed_format,
+                header_fields=header_fields,
                 raw_html=raw_html,
             )
             self._mark_failed(
@@ -164,6 +167,7 @@ class DocketEnrichmentWorker:
                 docket_text,
                 docket_entries,
                 parsed_format,
+                header_fields=header_fields,
                 raw_html=raw_html,
             )
             self._mark_failed(
@@ -184,6 +188,7 @@ class DocketEnrichmentWorker:
             docket_text,
             docket_entries,
             parsed_format,
+            header_fields=header_fields,
             raw_html=raw_html,
         )
         self._mark_completed(job)
@@ -351,6 +356,7 @@ class DocketEnrichmentWorker:
         docket_entries: List[Dict[str, Any]],
         parsed_format: str,
         *,
+        header_fields: Optional[Dict[str, Any]] = None,
         raw_html: Optional[str] = None,
     ) -> None:
         pcl_case_fields = self._tables.get("pcl_case_fields")
@@ -448,6 +454,17 @@ class DocketEnrichmentWorker:
                     field_value_json=None,
                     now=now,
                 )
+                if header_fields:
+                    header_text = _flatten_header_fields(header_fields)
+                    _upsert_case_field(
+                        conn,
+                        pcl_case_fields,
+                        case_row["id"],
+                        "docket_header_fields",
+                        field_value_text=header_text or None,
+                        field_value_json=header_fields,
+                        now=now,
+                    )
 
             if receipt_table is not None:
                 receipt_payload = {
@@ -539,19 +556,23 @@ def _extract_case_id_from_url(url: str) -> Optional[str]:
 def _extract_docket_payload(
     body: bytes,
     content_type: str,
+    *,
+    base_url: Optional[str] = None,
 ) -> tuple[str, List[Dict[str, Any]], str]:
     text = body.decode("utf-8", errors="replace")
     if "xml" in (content_type or "").lower() or text.lstrip().startswith("<"):
         try:
             return _extract_docket_xml(text), _extract_docket_entries(text), "xml"
         except ElementTree.ParseError:
-            entries = _extract_docket_entries_from_html(text)
+            entries = _extract_docket_entries_from_html(text, base_url=base_url)
             return _extract_docket_text_from_entries(entries, text), entries, "html"
-    entries = _extract_docket_entries_from_html(text)
+    entries = _extract_docket_entries_from_html(text, base_url=base_url)
     return _extract_docket_text_from_entries(entries, text), entries, "html"
 
 
-def _extract_docket_entries_from_html(html_text: str) -> List[Dict[str, Any]]:
+def _extract_docket_entries_from_html(
+    html_text: str, *, base_url: Optional[str] = None
+) -> List[Dict[str, Any]]:
     try:
         tree = lxml_html.fromstring(html_text)
     except (ValueError, TypeError):
@@ -579,9 +600,14 @@ def _extract_docket_entries_from_html(html_text: str) -> List[Dict[str, Any]]:
             continue
         doc_number = _normalize_html_text(cells[1])
         description = _normalize_html_text(cells[2])
+        links: List[Dict[str, str]] = []
+        links.extend(_extract_links_from_cell(cells[1], base_url=base_url))
+        links.extend(_extract_links_from_cell(cells[2], base_url=base_url))
         entry = {"dateFiled": date_filed, "description": description}
         if doc_number:
             entry["documentNumber"] = doc_number
+        if links:
+            entry["documentLinks"] = links
         entries.append(entry)
     return entries
 
@@ -645,9 +671,157 @@ def _extract_docket_xml(xml_text: str) -> str:
 
 
 def _strip_html(raw: str) -> str:
-    cleaned = re.sub(r"<[^>]+>", " ", raw)
-    cleaned = re.sub(r"\\s+", " ", cleaned)
-    return cleaned.strip()
+    if not raw:
+        return ""
+    try:
+        tree = lxml_html.fromstring(raw)
+    except (ValueError, TypeError):
+        cleaned = re.sub(r"<[^>]+>", " ", raw)
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned.strip()
+    _drop_tags(tree, {"script", "style", "noscript", "head"})
+    _insert_newlines(tree, {"br", "p", "div", "tr", "li"})
+    text = tree.text_content()
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _drop_tags(tree: Any, tags: set[str]) -> None:
+    for tag in tags:
+        for node in tree.xpath(f"//{tag}"):
+            node.drop_tree()
+
+
+def _insert_newlines(tree: Any, tags: set[str]) -> None:
+    for tag in tags:
+        for node in tree.xpath(f"//{tag}"):
+            node.tail = "\n" + (node.tail or "")
+
+
+def _extract_links_from_cell(cell: Any, *, base_url: Optional[str]) -> List[Dict[str, str]]:
+    links: List[Dict[str, str]] = []
+    for anchor in cell.xpath(".//a[@href]"):
+        href = (anchor.get("href") or "").strip()
+        if not href:
+            continue
+        label = _normalize_html_text(anchor)
+        if base_url:
+            href = _resolve_link(base_url, href)
+        link = {"href": href}
+        if label:
+            link["label"] = label
+        links.append(link)
+    return links
+
+
+def _resolve_link(base_url: str, href: str) -> str:
+    return urljoin(base_url, href)
+
+
+def _extract_docket_header_fields_from_html(html_text: str) -> Dict[str, Any]:
+    if not html_text:
+        return {}
+    try:
+        tree = lxml_html.fromstring(html_text)
+    except (ValueError, TypeError):
+        return {}
+    header_fields: Dict[str, Any] = {}
+    centers = tree.xpath("//center")
+    for center in centers:
+        lines = _extract_lines_from_node(center)
+        if not lines:
+            continue
+        if any("date filed" in line.lower() for line in lines):
+            header_fields.update(_parse_case_header_lines(lines))
+            break
+    criteria = _extract_selection_criteria(tree)
+    if criteria:
+        header_fields["selection_criteria"] = criteria
+    return header_fields
+
+
+def _extract_lines_from_node(node: Any) -> List[str]:
+    try:
+        copied = lxml_html.fromstring(lxml_html.tostring(node))
+    except Exception:
+        text = " ".join(node.xpath(".//text()"))
+        return [re.sub(r"\s+", " ", text).strip()] if text.strip() else []
+    _insert_newlines(copied, {"br"})
+    text = copied.text_content()
+    lines = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"\s+", " ", line).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def _parse_case_header_lines(lines: List[str]) -> Dict[str, Any]:
+    header: Dict[str, Any] = {}
+    if lines:
+        header["case_number_header"] = lines[0]
+    if len(lines) > 1:
+        header["case_title"] = lines[1]
+    for line in lines[2:]:
+        lowered = line.lower()
+        if "date filed" in lowered:
+            header["date_filed"] = _extract_value_after_label(line, "Date filed:")
+        if "date of last filing" in lowered:
+            header["date_last_filing"] = _extract_value_after_label(
+                line, "Date of last filing:"
+            )
+        if "presiding" in lowered or "assigned" in lowered or "judge" in lowered:
+            header["judge_line"] = line
+    return header
+
+
+def _extract_value_after_label(text: str, label: str) -> Optional[str]:
+    if label.lower() not in text.lower():
+        return None
+    parts = re.split(label, text, flags=re.IGNORECASE)
+    if len(parts) < 2:
+        return None
+    value = parts[1].strip()
+    return value or None
+
+
+def _extract_selection_criteria(tree: Any) -> Dict[str, str]:
+    criteria: Dict[str, str] = {}
+    headers = tree.xpath(
+        "//h3[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'selection criteria for query')]"
+    )
+    if not headers:
+        return criteria
+    header = headers[0]
+    table = header.getparent().xpath(".//table")[0] if header.getparent().xpath(".//table") else None
+    if table is None:
+        return criteria
+    rows = table.xpath(".//tr")
+    for row in rows:
+        cells = row.xpath("./td")
+        if len(cells) < 2:
+            continue
+        key = _normalize_html_text(cells[0]).strip(":")
+        value = _normalize_html_text(cells[1])
+        if key and value:
+            criteria[key] = value
+    return criteria
+
+
+def _flatten_header_fields(header_fields: Dict[str, Any]) -> str:
+    if not header_fields:
+        return ""
+    parts: List[str] = []
+    for key in ("case_number_header", "case_title", "judge_line", "date_filed", "date_last_filing"):
+        value = header_fields.get(key)
+        if value:
+            parts.append(str(value))
+    selection = header_fields.get("selection_criteria")
+    if isinstance(selection, dict):
+        for key, value in selection.items():
+            parts.append(f"{key}: {value}")
+    return " | ".join(parts)
 
 
 def _truncate_text(value: str, max_len: int) -> str:
@@ -668,6 +842,19 @@ def _looks_like_docket_shell(text: str) -> bool:
         "district court cm/ecf" in lowered
         and ("docket sheet" in lowered or "docket report" in lowered)
         and ("case_number_text_area" in lowered or "output_format" in lowered)
+    ) or _looks_like_case_query_page(lowered)
+
+
+def _looks_like_case_query_page(lowered_text: str) -> bool:
+    if not lowered_text:
+        return False
+    return (
+        "cmecfmaincontent" in lowered_text
+        and (
+            "selection criteria for query" in lowered_text
+            or "/cgi-bin/dktrpt.pl" in lowered_text
+            or "docket report" in lowered_text
+        )
     )
 
 
@@ -1263,6 +1450,8 @@ def _upsert_case_field(
     field_value_json: Optional[Any],
     now: datetime,
 ) -> None:
+    if isinstance(field_value_text, str) and len(field_value_text) > 2000:
+        field_value_text = f"{field_value_text[:1997]}..."
     existing = (
         conn.execute(
             select(pcl_case_fields.c.id).where(

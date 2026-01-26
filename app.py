@@ -2201,6 +2201,53 @@ def create_app() -> Flask:
             inserted += 1
         return inserted, updated
 
+    def _upsert_case_field_value(
+        conn: Any,
+        case_id: int,
+        field_name: str,
+        *,
+        field_value_text: Optional[str],
+        field_value_json: Optional[Any] = None,
+    ) -> None:
+        pcl_case_fields = pcl_tables.get("pcl_case_fields")
+        if pcl_case_fields is None:
+            return
+        if isinstance(field_value_text, str) and len(field_value_text) > 2000:
+            field_value_text = f"{field_value_text[:1997]}..."
+        now = datetime.utcnow()
+        existing = (
+            conn.execute(
+                select(pcl_case_fields.c.id).where(
+                    (pcl_case_fields.c.case_id == case_id)
+                    & (pcl_case_fields.c.field_name == field_name)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        payload = {
+            "field_value_text": field_value_text,
+            "field_value_json": field_value_json,
+            "updated_at": now,
+        }
+        if existing:
+            conn.execute(
+                update(pcl_case_fields)
+                .where(pcl_case_fields.c.id == existing["id"])
+                .values(**payload)
+            )
+            return
+        conn.execute(
+            insert(pcl_case_fields).values(
+                case_id=case_id,
+                field_name=field_name,
+                field_value_text=field_value_text,
+                field_value_json=field_value_json,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
     def _upsert_pcl_party(
         conn: Any,
         party_record: Dict[str, Any],
@@ -8143,6 +8190,38 @@ def create_app() -> Flask:
             csrf_token=get_csrf_token(),
             case_detail=detail,
         )
+
+    @app.post("/admin/pcl/cases/<int:case_id>/ai-notes")
+    @admin_required
+    def admin_pcl_case_ai_notes(case_id: int):
+        require_csrf()
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+        case_ai_review = (request.form.get("case_ai_review") or "").strip() or None
+        case_ai_prompt = (request.form.get("case_ai_prompt") or "").strip() or None
+        system_ai_prompt = (request.form.get("system_ai_prompt") or "").strip() or None
+        with engine.begin() as conn:
+            _upsert_case_field_value(
+                conn,
+                case_id,
+                "case_ai_review",
+                field_value_text=case_ai_review,
+            )
+            _upsert_case_field_value(
+                conn,
+                case_id,
+                "case_ai_prompt",
+                field_value_text=case_ai_prompt,
+            )
+            _upsert_case_field_value(
+                conn,
+                case_id,
+                "system_ai_prompt",
+                field_value_text=system_ai_prompt,
+            )
+        flash("AI notes saved.", "success")
+        return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#ai-notes")
 
     @app.get("/admin/pcl/cases/<int:case_id>/sentencing-events/new")
     @admin_required

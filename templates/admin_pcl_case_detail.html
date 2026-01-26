@@ -114,7 +114,8 @@
         <p class="small">Every field saved as a searchable value.</p>
       </div>
     </div>
-    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None) %}
+    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None, header_fields=None) %}
+    {% set ai = namespace(review=None, case_prompt=None, system_prompt=None) %}
     {% if case_detail.case_fields %}
       {% for field in case_detail.case_fields %}
         {% if field.field_name == 'docket_text' %}
@@ -131,6 +132,14 @@
           {% set docket.updated_at = field.updated_at %}
         {% elif field.field_name == 'docket_entries' %}
           {% set docket.entries = field.field_value_json %}
+        {% elif field.field_name == 'docket_header_fields' %}
+          {% set docket.header_fields = field.field_value_json %}
+        {% elif field.field_name == 'case_ai_review' %}
+          {% set ai.review = field.field_value_text %}
+        {% elif field.field_name == 'case_ai_prompt' %}
+          {% set ai.case_prompt = field.field_value_text %}
+        {% elif field.field_name == 'system_ai_prompt' %}
+          {% set ai.system_prompt = field.field_value_text %}
         {% endif %}
       {% endfor %}
     {% endif %}
@@ -143,6 +152,12 @@
         <p class="small">Latest docket text captured from PACER.</p>
         {% if docket.updated_at %}
           <p class="small">Updated {{ docket.updated_at.isoformat() }}</p>
+        {% endif %}
+        {% if docket.header_fields %}
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show docket header fields</summary>
+            <pre class="code-block">{{ docket.header_fields | tojson(indent=2) }}</pre>
+          </details>
         {% endif %}
         {% if docket.preview %}
           <pre class="code-block">{{ docket.preview }}</pre>
@@ -158,7 +173,44 @@
         {% if docket.entries %}
           <details class="pcl-detail-card" style="margin-top: 12px;">
             <summary class="pcl-detail-summary">Show docket entries</summary>
-            <pre class="code-block">{{ docket.entries | tojson(indent=2) }}</pre>
+            <div class="table-wrap" style="margin-top: 12px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date filed</th>
+                    <th>ECF #</th>
+                    <th>Description</th>
+                    <th>Links</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for entry in docket.entries %}
+                    <tr>
+                      <td>{{ entry.dateFiled or "—" }}</td>
+                      <td>{{ entry.documentNumber or "—" }}</td>
+                      <td>{{ entry.description or "—" }}</td>
+                      <td>
+                        {% if entry.documentLinks %}
+                          {% for link in entry.documentLinks %}
+                            <div>
+                              <a href="{{ link.href }}" target="_blank" rel="noopener">
+                                {{ link.label or link.href }}
+                              </a>
+                            </div>
+                          {% endfor %}
+                        {% else %}
+                          —
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <details class="pcl-detail-card" style="margin-top: 12px;">
+              <summary class="pcl-detail-summary">Show raw JSON</summary>
+              <pre class="code-block">{{ docket.entries | tojson(indent=2) }}</pre>
+            </details>
           </details>
         {% endif %}
         {% if docket_is_html %}
@@ -169,6 +221,21 @@
         {% endif %}
       </article>
     {% endif %}
+
+    <article id="ai-notes" class="pcl-detail-card" style="margin-top: 20px;">
+      <h3>AI case notes & prompts</h3>
+      <p class="small">Store case-specific AI review text and prompts for later analysis.</p>
+      <form method="post" action="{{ url_for('admin_pcl_case_ai_notes', case_id=case_detail.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="case-ai-review">Case AI review</label>
+        <textarea id="case-ai-review" name="case_ai_review" rows="6">{{ ai.review or "" }}</textarea>
+        <label for="case-ai-prompt">Case-level prompt</label>
+        <textarea id="case-ai-prompt" name="case_ai_prompt" rows="5">{{ ai.case_prompt or "" }}</textarea>
+        <label for="system-ai-prompt">System-level prompt</label>
+        <textarea id="system-ai-prompt" name="system_ai_prompt" rows="5">{{ ai.system_prompt or "" }}</textarea>
+        <button class="primary" type="submit">Save AI notes</button>
+      </form>
+    </article>
     {% if case_detail.case_fields %}
       <div class="table-wrap">
         <table>
