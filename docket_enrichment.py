@@ -148,10 +148,11 @@ class DocketEnrichmentWorker:
                 job,
                 case_row,
                 fetch_result,
-                docket_text,
-                docket_entries,
+                "",
+                [],
                 parsed_format,
                 header_fields=header_fields,
+                force_store_html=True,
                 raw_html=raw_html,
             )
             self._mark_failed(
@@ -164,10 +165,11 @@ class DocketEnrichmentWorker:
                 job,
                 case_row,
                 fetch_result,
-                docket_text,
-                docket_entries,
+                "",
+                [],
                 parsed_format,
                 header_fields=header_fields,
+                force_store_html=True,
                 raw_html=raw_html,
             )
             self._mark_failed(
@@ -357,6 +359,7 @@ class DocketEnrichmentWorker:
         parsed_format: str,
         *,
         header_fields: Optional[Dict[str, Any]] = None,
+        force_store_html: bool = False,
         raw_html: Optional[str] = None,
     ) -> None:
         pcl_case_fields = self._tables.get("pcl_case_fields")
@@ -389,7 +392,7 @@ class DocketEnrichmentWorker:
                         field_value_json=None,
                         now=now,
                     )
-                elif docket_text:
+                elif docket_text or force_store_html:
                     html_preview = _truncate_text(_strip_html(html_body or ""), 1000)
                     _upsert_case_field(
                         conn,
@@ -676,7 +679,10 @@ def _strip_html(raw: str) -> str:
     try:
         tree = lxml_html.fromstring(raw)
     except (ValueError, TypeError):
-        cleaned = re.sub(r"<[^>]+>", " ", raw)
+        cleaned = re.sub(r"<script\\b[^>]*>.*?</script>", " ", raw, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(r"<style\\b[^>]*>.*?</style>", " ", cleaned, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(r"<noscript\\b[^>]*>.*?</noscript>", " ", cleaned, flags=re.IGNORECASE | re.DOTALL)
+        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned)
         return cleaned.strip()
     _drop_tags(tree, {"script", "style", "noscript", "head"})
