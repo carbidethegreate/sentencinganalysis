@@ -134,7 +134,10 @@
         {% endif %}
       {% endfor %}
     {% endif %}
-    {% if docket.text or docket.preview or docket.html or docket.html_preview or docket.entries %}
+    {% set docket_html_text = docket.html_preview or (docket.html.text if docket.html and docket.html.text) %}
+    {% set docket_is_html = docket_html_text %}
+    {% set docket_is_login = docket_html_text and ('pacer.login.uscourts.gov' in docket_html_text or 'csologin' in docket_html_text) %}
+    {% if docket.text or docket.preview or docket.entries or docket_is_html %}
       <article class="pcl-detail-card">
         <h3>Docket text</h3>
         <p class="small">Latest docket text captured from PACER.</p>
@@ -145,12 +148,10 @@
           <pre class="code-block">{{ docket.preview }}</pre>
         {% elif docket.text and docket.text.text %}
           <pre class="code-block">{{ docket.text.text }}</pre>
-        {% elif docket.html_preview %}
-          <p class="small">PACER returned a docket form (HTML). Raw response stored for troubleshooting.</p>
-          <pre class="code-block">{{ docket.html_preview }}</pre>
-        {% elif docket.html and docket.html.text %}
-          <p class="small">PACER returned a docket form (HTML). Raw response stored for troubleshooting.</p>
-          <pre class="code-block">{{ docket.html.text }}</pre>
+        {% elif docket_is_html and docket_is_login %}
+          <p class="small">PACER returned a login redirect. Docket text was not captured.</p>
+        {% elif docket_is_html %}
+          <p class="small">PACER returned a docket request form. Docket text was not captured.</p>
         {% else %}
           <p class="small">Docket text stored without preview.</p>
         {% endif %}
@@ -158,6 +159,12 @@
           <details class="pcl-detail-card" style="margin-top: 12px;">
             <summary class="pcl-detail-summary">Show docket entries</summary>
             <pre class="code-block">{{ docket.entries | tojson(indent=2) }}</pre>
+          </details>
+        {% endif %}
+        {% if docket_is_html %}
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show raw PACER response</summary>
+            <pre class="code-block">{{ docket_html_text }}</pre>
           </details>
         {% endif %}
       </article>
