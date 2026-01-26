@@ -29,7 +29,7 @@ from typing import (
     Set,
     Tuple,
 )
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import requests
 from flask import (
@@ -1388,9 +1388,12 @@ def create_app() -> Flask:
             "date_filed_from": "",
             "date_filed_to": "",
             "court_id": "",
+            "region_code": "",
             "page": 1,
             "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
             "case_types": [],
+            "sort_field": "",
+            "sort_order": "asc",
         }
         party_defaults = {
             "search_mode": "immediate",
@@ -1401,8 +1404,11 @@ def create_app() -> Flask:
             "date_filed_from": "",
             "date_filed_to": "",
             "court_id": "",
+            "region_code": "",
             "page": 1,
             "max_records": PCL_EXPLORE_DEFAULT_MAX_RECORDS,
+            "sort_field": "",
+            "sort_order": "asc",
         }
         return case_defaults, party_defaults
 
@@ -1444,7 +1450,10 @@ def create_app() -> Flask:
             pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
             pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
             courts=_load_court_choices(),
+            regions=_load_region_choices(),
             case_type_choices=_load_case_type_choices(),
+            case_sort_fields=_load_sortable_case_fields(),
+            party_sort_fields=_load_sortable_party_fields(),
             mode=mode,
             case_defaults=case_defaults,
             party_defaults=party_defaults,
@@ -1501,6 +1510,26 @@ def create_app() -> Flask:
             court_id = row["pcl_court_id"]
             label = f"{court_id}, {name}".strip().rstrip(",")
             choices.append({"court_id": court_id, "name": name, "label": label})
+        return choices
+
+    def _load_region_choices() -> List[Dict[str, Any]]:
+        search_regions = pcl_tables["search_regions"]
+        stmt = select(
+            search_regions.c.region_code,
+            search_regions.c.region_name,
+        ).order_by(search_regions.c.region_code.asc())
+        try:
+            with engine.begin() as conn:
+                rows = conn.execute(stmt).mappings().all()
+        except SQLAlchemyError as exc:
+            app.logger.warning("Search regions unavailable: %s", exc)
+            return []
+        choices: List[Dict[str, Any]] = []
+        for row in rows:
+            code = row.get("region_code") or ""
+            name = row.get("region_name") or ""
+            label = f"{code}, {name}".strip().rstrip(",")
+            choices.append({"region_code": code, "name": name, "label": label})
         return choices
 
     def _parse_iso_date(value: str) -> Optional[datetime.date]:
@@ -1674,6 +1703,15 @@ def create_app() -> Flask:
             warning = "Page must be at least 1. Defaulting to page 1."
         return parsed, warning
 
+    def _build_sort_params(
+        sort_field: Optional[str], sort_order: Optional[str]
+    ) -> List[Tuple[str, str]]:
+        if not sort_field:
+            return []
+        order_value = (sort_order or "asc").strip().lower()
+        order = "DESC" if order_value == "desc" else "ASC"
+        return [("sort", f"{sort_field},{order}")]
+
     def _extract_case_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         if "content" in payload:
             value = payload.get("content")
@@ -1755,11 +1793,14 @@ def create_app() -> Flask:
         mode: str,
         search_mode: str,
         court_id: str,
+        region_code: Optional[str] = None,
         date_filed_from: str,
         date_filed_to: str,
         last_name: Optional[str],
         exact_name_match: Optional[bool],
         first_name: Optional[str],
+        sort_field: Optional[str] = None,
+        sort_order: Optional[str] = None,
         max_records: int,
         requested_page: Optional[int],
         unexpected_input_keys: Sequence[str],
@@ -1783,16 +1824,21 @@ def create_app() -> Flask:
         ]
         if court_id:
             preamble_lines.append(f"court_id: {court_id}")
+        if region_code:
+            preamble_lines.append(f"region_code: {region_code}")
         bundle = {
             "inputs": {
                 "mode": mode,
                 "search_mode": search_mode,
                 "court_id": court_id,
+                "region_code": region_code,
                 "date_filed_from": date_filed_from,
                 "date_filed_to": date_filed_to,
                 "last_name": last_name,
                 "exact_name_match": exact_name_match,
                 "first_name": first_name,
+                "sort_field": sort_field,
+                "sort_order": sort_order,
                 "max_records": max_records,
                 "requested_page": requested_page,
                 "page_size": PCL_PAGE_SIZE,
@@ -2248,11 +2294,14 @@ def create_app() -> Flask:
             case_types = [case_types]
         return {
             "court_id": ui_inputs.get("court_id") or "",
+            "region_code": ui_inputs.get("region_code") or "",
             "date_from": ui_inputs.get("date_filed_from") or "",
             "date_to": ui_inputs.get("date_filed_to") or "",
             "case_types": [str(value) for value in case_types if value],
             "last_name": ui_inputs.get("last_name") or "",
             "first_name": ui_inputs.get("first_name") or "",
+            "sort_field": ui_inputs.get("sort_field") or "",
+            "sort_order": ui_inputs.get("sort_order") or "",
         }
 
     def _normalize_saved_search_schedule(value: Optional[str]) -> Optional[str]:
@@ -2267,7 +2316,7 @@ def create_app() -> Flask:
         *, search_type: str, search_mode: str, criteria: Dict[str, Any]
     ) -> str:
         summary = _summarize_saved_search(criteria)
-        court = summary.get("court_id") or "all courts"
+        court = summary.get("court_id") or summary.get("region_code") or "all courts"
         date_from = summary.get("date_from") or ""
         date_to = summary.get("date_to") or ""
         label_parts = [search_type.capitalize(), search_mode.capitalize(), court]
@@ -2297,6 +2346,7 @@ def create_app() -> Flask:
 
         for key in (
             "court_id",
+            "region_code",
             "date_filed_from",
             "date_filed_to",
             "page",
@@ -2304,6 +2354,8 @@ def create_app() -> Flask:
             "last_name",
             "first_name",
             "ssn",
+            "sort_field",
+            "sort_order",
         ):
             add_field(key, ui_inputs.get(key))
 
@@ -2372,6 +2424,32 @@ def create_app() -> Flask:
             return [(code, code) for code in codes]
         return list(PCL_CASE_TYPES)
 
+    def _load_sortable_case_fields() -> List[str]:
+        pacer_sortable_case_fields = pcl_tables["pacer_sortable_case_fields"]
+        stmt = select(pacer_sortable_case_fields.c.field_name).order_by(
+            pacer_sortable_case_fields.c.field_name.asc()
+        )
+        try:
+            with engine.begin() as conn:
+                rows = conn.execute(stmt).fetchall()
+        except SQLAlchemyError as exc:
+            app.logger.warning("PACER sortable case fields unavailable: %s", exc)
+            rows = []
+        return [row[0] for row in rows if row and row[0]]
+
+    def _load_sortable_party_fields() -> List[str]:
+        pacer_sortable_party_fields = pcl_tables["pacer_sortable_party_fields"]
+        stmt = select(pacer_sortable_party_fields.c.field_name).order_by(
+            pacer_sortable_party_fields.c.field_name.asc()
+        )
+        try:
+            with engine.begin() as conn:
+                rows = conn.execute(stmt).fetchall()
+        except SQLAlchemyError as exc:
+            app.logger.warning("PACER sortable party fields unavailable: %s", exc)
+            rows = []
+        return [row[0] for row in rows if row and row[0]]
+
     def _load_pacer_search_run(run_id: int) -> Optional[Dict[str, Any]]:
         pacer_search_runs = pcl_tables["pacer_search_runs"]
         with engine.begin() as conn:
@@ -2418,8 +2496,11 @@ def create_app() -> Flask:
                     **row,
                     "created_at_display": _format_run_timestamp(created_at),
                     "court_id": ui_inputs.get("court_id"),
+                    "region_code": ui_inputs.get("region_code"),
                     "date_from": ui_inputs.get("date_filed_from"),
                     "date_to": ui_inputs.get("date_filed_to"),
+                    "sort_field": ui_inputs.get("sort_field"),
+                    "sort_order": ui_inputs.get("sort_order"),
                 }
             )
         return runs
@@ -2431,11 +2512,14 @@ def create_app() -> Flask:
             case_values = {
                 "search_mode": search_mode,
                 "court_id": ui_inputs.get("court_id", ""),
+                "region_code": ui_inputs.get("region_code", ""),
                 "date_filed_from": ui_inputs.get("date_filed_from", ""),
                 "date_filed_to": ui_inputs.get("date_filed_to", ""),
                 "page": ui_inputs.get("page", 1),
                 "max_records": ui_inputs.get("max_records", ""),
                 "case_types": ui_inputs.get("case_types") or [],
+                "sort_field": ui_inputs.get("sort_field", ""),
+                "sort_order": ui_inputs.get("sort_order", "asc"),
             }
             return case_values, None
         party_values = {
@@ -2447,8 +2531,11 @@ def create_app() -> Flask:
             "date_filed_from": ui_inputs.get("date_filed_from", ""),
             "date_filed_to": ui_inputs.get("date_filed_to", ""),
             "court_id": ui_inputs.get("court_id", ""),
+            "region_code": ui_inputs.get("region_code", ""),
             "page": ui_inputs.get("page", 1),
             "max_records": ui_inputs.get("max_records", ""),
+            "sort_field": ui_inputs.get("sort_field", ""),
+            "sort_order": ui_inputs.get("sort_order", "asc"),
         }
         return None, party_values
 
@@ -4700,7 +4787,13 @@ def create_app() -> Flask:
             "Yes" if billable_flag is True else "No" if billable_flag is False else "Unknown"
         )
         courts = _load_court_choices()
+        regions = _load_region_choices()
         court_ids = {row["court_id"] for row in courts}
+        region_codes = {row["region_code"] for row in regions}
+        case_sort_fields = _load_sortable_case_fields()
+        party_sort_fields = _load_sortable_party_fields()
+        case_sort_set = set(case_sort_fields)
+        party_sort_set = set(party_sort_fields)
         mode = (request.form.get("mode") or "cases").strip().lower()
         if mode not in {"cases", "parties"}:
             mode = "cases"
@@ -4709,6 +4802,9 @@ def create_app() -> Flask:
             multi_keys={"case_types"},
         )
         ui_inputs["court_id"] = (ui_inputs.get("court_id") or "").strip().lower()
+        ui_inputs["region_code"] = (ui_inputs.get("region_code") or "").strip().lower()
+        ui_inputs["sort_field"] = (ui_inputs.get("sort_field") or "").strip()
+        ui_inputs["sort_order"] = (ui_inputs.get("sort_order") or "").strip().lower()
         unexpected_input_keys = validate_ui_inputs(mode, ui_inputs)
         if unexpected_input_keys:
             app.logger.info(
@@ -4726,11 +4822,14 @@ def create_app() -> Flask:
             case_values = {
                 "search_mode": search_mode,
                 "court_id": ui_inputs.get("court_id", ""),
+                "region_code": ui_inputs.get("region_code", ""),
                 "date_filed_from": ui_inputs.get("date_filed_from", ""),
                 "date_filed_to": ui_inputs.get("date_filed_to", ""),
                 "page": ui_inputs.get("page", "") or 1,
                 "max_records": ui_inputs.get("max_records", ""),
                 "case_types": ui_inputs.get("case_types") or [],
+                "sort_field": ui_inputs.get("sort_field", ""),
+                "sort_order": ui_inputs.get("sort_order", "asc"),
             }
             if search_mode == "batch":
                 max_records, max_records_warning = _clamp_max_records(
@@ -4759,8 +4858,11 @@ def create_app() -> Flask:
                 "date_filed_from": ui_inputs.get("date_filed_from", ""),
                 "date_filed_to": ui_inputs.get("date_filed_to", ""),
                 "court_id": ui_inputs.get("court_id", ""),
+                "region_code": ui_inputs.get("region_code", ""),
                 "page": ui_inputs.get("page", "") or 1,
                 "max_records": ui_inputs.get("max_records", ""),
+                "sort_field": ui_inputs.get("sort_field", ""),
+                "sort_order": ui_inputs.get("sort_order", "asc"),
             }
             if search_mode == "batch":
                 max_records, max_records_warning = _clamp_max_records(
@@ -5070,8 +5172,17 @@ def create_app() -> Flask:
             return render_response(False)
 
         if mode == "cases":
-            if case_values["court_id"] not in court_ids:
+            if not case_values["court_id"] and not case_values["region_code"]:
+                run_result["errors"].append("Select a court or a region from the list.")
+            if case_values["court_id"] and case_values["court_id"] not in court_ids:
                 run_result["errors"].append("Select a valid court from the list.")
+            if case_values["region_code"] and case_values["region_code"] not in region_codes:
+                run_result["errors"].append("Select a valid region from the list.")
+            if case_values.get("sort_field"):
+                if case_sort_set and case_values["sort_field"] not in case_sort_set:
+                    run_result["errors"].append("Select a valid case sort field from the list.")
+            if case_values.get("sort_order") and case_values["sort_order"] not in {"asc", "desc"}:
+                run_result["errors"].append("Sort order must be ASC or DESC.")
 
             date_from = _parse_iso_date(case_values["date_filed_from"])
             date_to = _parse_iso_date(case_values["date_filed_to"])
@@ -5086,6 +5197,13 @@ def create_app() -> Flask:
         else:
             if party_values["court_id"] and party_values["court_id"] not in court_ids:
                 run_result["errors"].append("Select a valid court from the list.")
+            if party_values["region_code"] and party_values["region_code"] not in region_codes:
+                run_result["errors"].append("Select a valid region from the list.")
+            if party_values.get("sort_field"):
+                if party_sort_set and party_values["sort_field"] not in party_sort_set:
+                    run_result["errors"].append("Select a valid party sort field from the list.")
+            if party_values.get("sort_order") and party_values["sort_order"] not in {"asc", "desc"}:
+                run_result["errors"].append("Sort order must be ASC or DESC.")
             if not party_values["last_name"]:
                 run_result["errors"].append("Last name is required.")
             date_from = _parse_iso_date(party_values["date_filed_from"])
@@ -5126,6 +5244,9 @@ def create_app() -> Flask:
                 ui_inputs,
                 include_date_range=bool(date_from and date_to),
             )
+        sort_field = (case_values or party_values or {}).get("sort_field") or ""
+        sort_order = (case_values or party_values or {}).get("sort_order") or ""
+        sort_params = _build_sort_params(sort_field, sort_order)
 
         endpoint_base = (
             f"{pcl_base_url}/cases/find"
@@ -5139,9 +5260,15 @@ def create_app() -> Flask:
         )
         if search_mode == "immediate":
             api_page = max(0, (requested_page or 1) - 1)
-            request_urls = [f"{endpoint_base}?page={api_page}"]
+            query_params = [("page", api_page), *sort_params]
+            query_string = urlencode(query_params)
+            request_urls = [f"{endpoint_base}?{query_string}"]
         else:
-            request_urls = [batch_endpoint_base]
+            query_string = urlencode(sort_params) if sort_params else ""
+            if query_string:
+                request_urls = [f"{batch_endpoint_base}?{query_string}"]
+            else:
+                request_urls = [batch_endpoint_base]
 
         if not run_result["errors"]:
             valid_payload, invalid_keys, missing_keys = validate_pcl_payload(
@@ -5247,9 +5374,13 @@ def create_app() -> Flask:
             report_code_details: Optional[str] = None
             try:
                 if mode == "cases":
-                    report_payload = pcl_client.start_case_download(request_body)
+                    report_payload = pcl_client.start_case_download(
+                        request_body, sort_params=sort_params
+                    )
                 else:
-                    report_payload = pcl_client.start_party_download(request_body)
+                    report_payload = pcl_client.start_party_download(
+                        request_body, sort_params=sort_params
+                    )
             except TokenExpired:
                 report_error = (
                     "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
@@ -5405,13 +5536,18 @@ def create_app() -> Flask:
 
         for api_page in api_pages:
             display_page = api_page + 1
-            endpoint_url = f"{endpoint_base}?page={api_page}"
+            query_params = [("page", api_page), *sort_params]
+            endpoint_url = f"{endpoint_base}?{urlencode(query_params)}"
             started = time.perf_counter()
             try:
                 if mode == "cases":
-                    response = pcl_client.immediate_case_search(api_page, request_body)
+                    response = pcl_client.immediate_case_search(
+                        api_page, request_body, sort_params=sort_params
+                    )
                 else:
-                    response = pcl_client.immediate_party_search(api_page, request_body)
+                    response = pcl_client.immediate_party_search(
+                        api_page, request_body, sort_params=sort_params
+                    )
                 elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                 payload = response.payload
                 last_payload = payload

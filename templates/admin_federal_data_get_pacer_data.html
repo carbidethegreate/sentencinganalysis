@@ -347,7 +347,10 @@
                         · Schedule: {{ saved.schedule_label|capitalize }}
                       </p>
                       <p class="small">
-                        Court: <code>{{ saved.summary.court_id or 'All' }}</code>
+                        Court/Region: <code>{{ saved.summary.court_id or saved.summary.region_code or 'All' }}</code>
+                        {% if saved.summary.court_id and saved.summary.region_code %}
+                          · Region: <code>{{ saved.summary.region_code }}</code>
+                        {% endif %}
                         {% if saved.summary.date_from or saved.summary.date_to %}
                           · Date range: {{ saved.summary.date_from or '—' }} → {{ saved.summary.date_to or '—' }}
                         {% endif %}
@@ -357,6 +360,9 @@
                       {% endif %}
                       {% if saved.summary.last_name %}
                         <p class="small">Party: {{ saved.summary.last_name }}{% if saved.summary.first_name %}, {{ saved.summary.first_name }}{% endif %}</p>
+                      {% endif %}
+                      {% if saved.summary.sort_field %}
+                        <p class="small">Sort: {{ saved.summary.sort_field }} · {{ (saved.summary.sort_order or 'asc') | upper }}</p>
                       {% endif %}
                       {% if saved.last_run_display %}
                         <p class="small">Last run: {{ saved.last_run_display }}</p>
@@ -397,11 +403,17 @@
                     <div>
                       <p class="small"><strong>{{ run.search_type|capitalize }}</strong> · {{ run.search_mode|capitalize }} · {{ run.created_at_display }}</p>
                       <p class="small">
-                        Court: <code>{{ run.court_id or 'All' }}</code>
+                        Court/Region: <code>{{ run.court_id or run.region_code or 'All' }}</code>
+                        {% if run.court_id and run.region_code %}
+                          · Region: <code>{{ run.region_code }}</code>
+                        {% endif %}
                         {% if run.date_from or run.date_to %}
                           · Date range: {{ run.date_from or '—' }} → {{ run.date_to or '—' }}
                         {% endif %}
                       </p>
+                      {% if run.sort_field %}
+                        <p class="small">Sort: {{ run.sort_field }} · {{ (run.sort_order or 'asc') | upper }}</p>
+                      {% endif %}
                       <p class="small">
                         New cases: {{ run.cases_inserted or 0 }} · Updated cases: {{ run.cases_updated or 0 }}
                         · New parties: {{ run.parties_inserted or 0 }} · Updated parties: {{ run.parties_updated or 0 }}

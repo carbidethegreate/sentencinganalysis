@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 import urllib.error
+from urllib.parse import urlencode
 
 from pacer_http import PacerEnvironmentMismatch, PacerHttpClient, TokenExpired
 
@@ -37,8 +38,14 @@ class PclClient:
         self._base_url = base_url.rstrip("/")
         self._logger = logger
 
-    def start_case_download(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request_json("POST", "/cases/download", payload)
+    def start_case_download(
+        self,
+        payload: Dict[str, Any],
+        *,
+        sort_params: Optional[list[tuple[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        path = _build_path_with_params("/cases/download", sort_params)
+        return self._request_json("POST", path, payload)
 
     def get_case_download_status(self, report_id: str) -> Dict[str, Any]:
         return self._request_json("GET", f"/cases/download/status/{report_id}")
@@ -52,8 +59,14 @@ class PclClient:
     def delete_case_report(self, report_id: str) -> Dict[str, Any]:
         return self._request_json("DELETE", f"/cases/reports/{report_id}")
 
-    def start_party_download(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return self._request_json("POST", "/parties/download", payload)
+    def start_party_download(
+        self,
+        payload: Dict[str, Any],
+        *,
+        sort_params: Optional[list[tuple[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        path = _build_path_with_params("/parties/download", sort_params)
+        return self._request_json("POST", path, payload)
 
     def get_party_download_status(self, report_id: str) -> Dict[str, Any]:
         return self._request_json("GET", f"/parties/download/status/{report_id}")
@@ -67,18 +80,40 @@ class PclClient:
     def delete_party_report(self, report_id: str) -> Dict[str, Any]:
         return self._request_json("DELETE", f"/parties/reports/{report_id}")
 
-    def immediate_case_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
+    def immediate_case_search(
+        self,
+        page: int,
+        payload: Dict[str, Any],
+        *,
+        sort_params: Optional[list[tuple[str, str]]] = None,
+    ) -> PclJsonResponse:
         page_num = max(0, int(page))
         sanitized = _sanitize_case_search_payload(payload)
+        params = [("page", page_num)]
+        if sort_params:
+            params.extend(sort_params)
         return self._request_json_with_meta(
             "POST",
-            f"/cases/find?page={page_num}",
+            _build_path_with_params("/cases/find", params),
             sanitized,
         )
 
-    def immediate_party_search(self, page: int, payload: Dict[str, Any]) -> PclJsonResponse:
+    def immediate_party_search(
+        self,
+        page: int,
+        payload: Dict[str, Any],
+        *,
+        sort_params: Optional[list[tuple[str, str]]] = None,
+    ) -> PclJsonResponse:
         page_num = max(0, int(page))
-        return self._request_json_with_meta("POST", f"/parties/find?page={page_num}", payload)
+        params = [("page", page_num)]
+        if sort_params:
+            params.extend(sort_params)
+        return self._request_json_with_meta(
+            "POST",
+            _build_path_with_params("/parties/find", params),
+            payload,
+        )
 
     def _request_json(
         self, method: str, path: str, payload: Optional[Dict[str, Any]] = None
@@ -140,3 +175,12 @@ def _sanitize_case_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("pageSize", "page_size", "page", "pageNumber", "page_number"):
         cleaned.pop(key, None)
     return cleaned
+
+
+def _build_path_with_params(
+    path: str, params: Optional[list[tuple[str, str]]]
+) -> str:
+    if not params:
+        return path
+    query = urlencode(params, doseq=True)
+    return f"{path}?{query}"

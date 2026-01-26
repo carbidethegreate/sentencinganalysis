@@ -13,11 +13,14 @@ EXPLORE_PACER_UI_FIELDS: Dict[str, Set[str]] = {
         "mode",
         "search_mode",
         "court_id",
+        "region_code",
         "date_filed_from",
         "date_filed_to",
         "page",
         "max_records",
         "case_types",
+        "sort_field",
+        "sort_order",
     },
     "parties": {
         "mode",
@@ -29,8 +32,11 @@ EXPLORE_PACER_UI_FIELDS: Dict[str, Set[str]] = {
         "date_filed_from",
         "date_filed_to",
         "court_id",
+        "region_code",
         "page",
         "max_records",
+        "sort_field",
+        "sort_order",
     },
 }
 
@@ -99,11 +105,13 @@ def validate_ui_inputs(mode: str, ui_inputs: Mapping[str, Any]) -> List[str]:
 
 
 def build_case_search_payload(ui_inputs: Mapping[str, Any]) -> Dict[str, Any]:
+    court_value = ui_inputs.get("court_id") or ui_inputs.get("region_code")
     body: Dict[str, Any] = {
-        "courtId": [ui_inputs.get("court_id")],
         "dateFiledFrom": ui_inputs.get("date_filed_from"),
         "dateFiledTo": ui_inputs.get("date_filed_to"),
     }
+    if court_value:
+        body["courtId"] = [court_value]
     case_types = ui_inputs.get("case_types") or []
     if isinstance(case_types, list):
         case_types = [value for value in case_types if value]
@@ -136,8 +144,9 @@ def build_party_search_payload(
         body["firstName"] = ui_inputs.get("first_name")
     if ui_inputs.get("ssn"):
         body["ssn"] = ui_inputs.get("ssn")
-    if ui_inputs.get("court_id"):
-        body["courtId"] = [ui_inputs.get("court_id")]
+    court_value = ui_inputs.get("court_id") or ui_inputs.get("region_code")
+    if court_value:
+        body["courtId"] = [court_value]
     if include_date_range:
         body["dateFiledFrom"] = ui_inputs.get("date_filed_from")
         body["dateFiledTo"] = ui_inputs.get("date_filed_to")

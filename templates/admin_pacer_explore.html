@@ -113,8 +113,8 @@
 
         <div class="grid two">
           <div>
-            <label for="explore-court">Court</label>
-            <select id="explore-court" name="court_id" required>
+            <label for="explore-court">Court (optional)</label>
+            <select id="explore-court" name="court_id">
               <option value="">Select a court…</option>
               {% for court in courts %}
                 <option value="{{ court.court_id }}" {% if case_values and case_values.court_id == court.court_id %}selected{% endif %}>
@@ -122,7 +122,22 @@
                 </option>
               {% endfor %}
             </select>
+            <p class="small">Choose a court or a region below.</p>
           </div>
+          <div>
+            <label for="explore-region">Region (optional)</label>
+            <select id="explore-region" name="region_code">
+              <option value="">Select a region…</option>
+              {% for region in regions %}
+                <option value="{{ region.region_code }}" {% if case_values and case_values.region_code == region.region_code %}selected{% endif %}>
+                  {{ region.label }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="grid two">
           <div data-search-mode-field="immediate">
             <label for="case-page-number">Page</label>
             <input
@@ -176,6 +191,27 @@
             {% endfor %}
           </select>
           <p class="small">Leave blank to include all case types.</p>
+        </div>
+
+        <div class="grid two">
+          <div>
+            <label for="case-sort-field">Sort field (optional)</label>
+            <select id="case-sort-field" name="sort_field">
+              <option value="">Default order</option>
+              {% for field in case_sort_fields %}
+                <option value="{{ field }}" {% if case_values and case_values.sort_field == field %}selected{% endif %}>
+                  {{ field }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="case-sort-order">Sort order</label>
+            <select id="case-sort-order" name="sort_order">
+              <option value="asc" {% if not case_values or case_values.sort_order == 'asc' %}selected{% endif %}>ASC</option>
+              <option value="desc" {% if case_values and case_values.sort_order == 'desc' %}selected{% endif %}>DESC</option>
+            </select>
+          </div>
         </div>
 
         <div class="actions">
@@ -242,6 +278,20 @@
               {% endfor %}
             </select>
           </div>
+          <div>
+            <label for="party-region">Region (optional)</label>
+            <select id="party-region" name="region_code">
+              <option value="">All regions</option>
+              {% for region in regions %}
+                <option value="{{ region.region_code }}" {% if party_values and party_values.region_code == region.region_code %}selected{% endif %}>
+                  {{ region.label }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="grid two">
           <div data-search-mode-field="immediate">
             <label for="party-page-number">Page</label>
             <input
@@ -270,6 +320,27 @@
               required
             >
             <p class="small">Default {{ explore_page_size }} (one page). Hard cap {{ explore_max_records }}.</p>
+          </div>
+        </div>
+
+        <div class="grid two">
+          <div>
+            <label for="party-sort-field">Sort field (optional)</label>
+            <select id="party-sort-field" name="sort_field">
+              <option value="">Default order</option>
+              {% for field in party_sort_fields %}
+                <option value="{{ field }}" {% if party_values and party_values.sort_field == field %}selected{% endif %}>
+                  {{ field }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label for="party-sort-order">Sort order</label>
+            <select id="party-sort-order" name="sort_order">
+              <option value="asc" {% if not party_values or party_values.sort_order == 'asc' %}selected{% endif %}>ASC</option>
+              <option value="desc" {% if party_values and party_values.sort_order == 'desc' %}selected{% endif %}>DESC</option>
+            </select>
           </div>
         </div>
 
@@ -408,6 +479,7 @@
                     <input type="hidden" name="mode" value="cases">
                     <input type="hidden" name="search_mode" value="immediate">
                     <input type="hidden" name="court_id" value="{{ case_values.court_id if case_values else '' }}">
+                    <input type="hidden" name="region_code" value="{{ case_values.region_code if case_values else '' }}">
                     <input type="hidden" name="date_filed_from" value="{{ case_values.date_filed_from if case_values else '' }}">
                     <input type="hidden" name="date_filed_to" value="{{ case_values.date_filed_to if case_values else '' }}">
                     {% if case_values and case_values.case_types %}
@@ -415,6 +487,8 @@
                         <input type="hidden" name="case_types" value="{{ case_type }}">
                       {% endfor %}
                     {% endif %}
+                    <input type="hidden" name="sort_field" value="{{ case_values.sort_field if case_values else '' }}">
+                    <input type="hidden" name="sort_order" value="{{ case_values.sort_order if case_values else '' }}">
                     <input type="hidden" name="page" value="{{ current_page - 1 }}">
                     <button class="secondary" type="submit">Previous page</button>
                   </form>
@@ -425,6 +499,7 @@
                     <input type="hidden" name="mode" value="cases">
                     <input type="hidden" name="search_mode" value="immediate">
                     <input type="hidden" name="court_id" value="{{ case_values.court_id if case_values else '' }}">
+                    <input type="hidden" name="region_code" value="{{ case_values.region_code if case_values else '' }}">
                     <input type="hidden" name="date_filed_from" value="{{ case_values.date_filed_from if case_values else '' }}">
                     <input type="hidden" name="date_filed_to" value="{{ case_values.date_filed_to if case_values else '' }}">
                     {% if case_values and case_values.case_types %}
@@ -432,6 +507,8 @@
                         <input type="hidden" name="case_types" value="{{ case_type }}">
                       {% endfor %}
                     {% endif %}
+                    <input type="hidden" name="sort_field" value="{{ case_values.sort_field if case_values else '' }}">
+                    <input type="hidden" name="sort_order" value="{{ case_values.sort_order if case_values else '' }}">
                     <input type="hidden" name="page" value="{{ current_page + 1 }}">
                     <button class="secondary" type="submit">Next page</button>
                   </form>
@@ -506,8 +583,11 @@
                     <input type="hidden" name="first_name" value="{{ party_values.first_name if party_values else '' }}">
                     <input type="hidden" name="ssn" value="{{ party_values.ssn if party_values else '' }}">
                     <input type="hidden" name="court_id" value="{{ party_values.court_id if party_values else '' }}">
+                    <input type="hidden" name="region_code" value="{{ party_values.region_code if party_values else '' }}">
                     <input type="hidden" name="date_filed_from" value="{{ party_values.date_filed_from if party_values else '' }}">
                     <input type="hidden" name="date_filed_to" value="{{ party_values.date_filed_to if party_values else '' }}">
+                    <input type="hidden" name="sort_field" value="{{ party_values.sort_field if party_values else '' }}">
+                    <input type="hidden" name="sort_order" value="{{ party_values.sort_order if party_values else '' }}">
                     {% if party_values and party_values.exact_name_match %}
                       <input type="hidden" name="exact_name_match" value="true">
                     {% endif %}
@@ -524,8 +604,11 @@
                     <input type="hidden" name="first_name" value="{{ party_values.first_name if party_values else '' }}">
                     <input type="hidden" name="ssn" value="{{ party_values.ssn if party_values else '' }}">
                     <input type="hidden" name="court_id" value="{{ party_values.court_id if party_values else '' }}">
+                    <input type="hidden" name="region_code" value="{{ party_values.region_code if party_values else '' }}">
                     <input type="hidden" name="date_filed_from" value="{{ party_values.date_filed_from if party_values else '' }}">
                     <input type="hidden" name="date_filed_to" value="{{ party_values.date_filed_to if party_values else '' }}">
+                    <input type="hidden" name="sort_field" value="{{ party_values.sort_field if party_values else '' }}">
+                    <input type="hidden" name="sort_order" value="{{ party_values.sort_order if party_values else '' }}">
                     {% if party_values and party_values.exact_name_match %}
                       <input type="hidden" name="exact_name_match" value="true">
                     {% endif %}
