@@ -5911,7 +5911,8 @@ def create_app() -> Flask:
                 "page_number": requested_page,
                 "raw_response": last_payload,
                 "cases_view": _build_case_view_rows(
-                    records_limited, default_court_id=default_court_id
+                    records_limited,
+                    default_court_id=(case_values or party_values or {}).get("court_id"),
                 )
                 if mode == "cases" and records_limited
                 else None,
