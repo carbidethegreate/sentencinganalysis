@@ -2200,6 +2200,31 @@ button.danger {
   color: var(--primary-dark);
 }
 
+.pacer-token-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 6px 0;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.status-dot--connected {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.status-dot--offline {
+  background: var(--muted);
+  border-color: var(--muted);
+}
+
 .pacer-eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.08em;

@@ -24,6 +24,10 @@
 
       <article class="pcl-detail-card">
         <h3>Run worker</h3>
+        <p class="small pacer-token-status">
+          <span class="status-dot {% if service_token.connected %}status-dot--connected{% else %}status-dot--offline{% endif %}" aria-hidden="true"></span>
+          Token {{ "connected" if service_token.connected else "not connected" }} ({{ service_token.environment_label }})
+        </p>
         <p class="small">Runs one worker cycle on queued jobs.</p>
         <form method="post" action="{{ url_for('admin_docket_enrichment_run') }}" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

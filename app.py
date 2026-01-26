@@ -8236,6 +8236,16 @@ def create_app() -> Flask:
         filter_choices = _load_docket_filter_choices()
         filters = _parse_docket_filters(request.args.to_dict(flat=True))
         candidates = _load_docket_case_candidates(filters)
+        service_record = pacer_service_token_store.get_token(
+            expected_environment=pacer_env_config.pcl_env
+        )
+        service_token = {
+            "connected": bool(service_record),
+            "fingerprint": token_fingerprint(service_record.token if service_record else None),
+            "environment_label": pacer_env_label(
+                (service_record.environment if service_record else None) or "unknown"
+            ),
+        }
         params = request.args.to_dict(flat=True)
 
         def page_url(target_page: int) -> str:
@@ -8250,6 +8260,7 @@ def create_app() -> Flask:
             jobs=rows,
             status_counts=counts,
             filter_choices=filter_choices,
+            service_token=service_token,
             case_candidates=candidates["rows"],
             candidate_total=candidates["total"],
             candidate_page=candidates["page"],

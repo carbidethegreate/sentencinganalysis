@@ -236,6 +236,7 @@ class DocketEnrichmentWorker:
         pcl_case_fields = self._tables.get("pcl_case_fields")
         receipt_table = self._tables.get("docket_enrichment_receipts")
         now = self._now()
+        docket_text_preview = _truncate_text(docket_text, 1000) if docket_text else ""
 
         with self._engine.begin() as conn:
             if pcl_case_fields is not None:
@@ -245,7 +246,16 @@ class DocketEnrichmentWorker:
                         pcl_case_fields,
                         case_row["id"],
                         "docket_text",
-                        field_value_text=docket_text,
+                        field_value_text=None,
+                        field_value_json={"text": docket_text},
+                        now=now,
+                    )
+                    _upsert_case_field(
+                        conn,
+                        pcl_case_fields,
+                        case_row["id"],
+                        "docket_text_preview",
+                        field_value_text=docket_text_preview,
                         field_value_json=None,
                         now=now,
                     )
@@ -418,6 +428,14 @@ def _strip_html(raw: str) -> str:
     cleaned = re.sub(r"<[^>]+>", " ", raw)
     cleaned = re.sub(r"\\s+", " ", cleaned)
     return cleaned.strip()
+
+
+def _truncate_text(value: str, max_len: int) -> str:
+    if not value:
+        return ""
+    if len(value) <= max_len:
+        return value
+    return f"{value[: max_len - 3]}..."
 
 
 def _upsert_case_field(
