@@ -9,9 +9,11 @@ Status
 Latest update
 - Added a safe fallback when the saved-search table is not migrated yet to prevent 500 errors.
 - Re-read the PACER/PCL PDFs and updated the reference summary to align with available tables.
+- Generated reference-table migration from Appendix A/E/F data and wired the UI to prefer PACER tables for courts and case types.
+- Added PACER response-code context to PCL API errors.
 
 Current focus
-1) Stabilize saved-search loading to avoid 500s when the new table is not yet migrated.
+1) Apply the PACER reference-table migration in production.
 2) Leverage PACER/PCL reference tables to tighten validation and improve search UX:
    - Pacer Response Codes: map API status to human-readable errors.
    - Search Regions in Production: limit and validate court region filters.
@@ -23,7 +25,7 @@ Current focus
    - Link saved searches to their last run and run counts.
 
 Next steps
-- Apply the saved search migration in production.
+- Apply the PACER reference-table migration in production.
 - Wire table-backed select lists and validation for case types, courts, regions, and sortable fields.
 - Expand run history details and link cases back to the originating run.
 - Add enrichment actions from results and case detail pages.

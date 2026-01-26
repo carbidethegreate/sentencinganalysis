@@ -1441,7 +1441,7 @@ def create_app() -> Flask:
             pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
             pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
             courts=_load_court_choices(),
-            case_type_choices=PCL_CASE_TYPES,
+            case_type_choices=_load_case_type_choices(),
             mode=mode,
             case_defaults=case_defaults,
             party_defaults=party_defaults,
@@ -1457,17 +1457,42 @@ def create_app() -> Flask:
         )
 
     def _load_court_choices() -> List[Dict[str, Any]]:
+        pacer_courts = pcl_tables["pacer_courts"]
+        pcl_courts_table = pcl_tables["pcl_courts"]
+        choices: List[Dict[str, Any]] = []
+        try:
+            with engine.begin() as conn:
+                pacer_rows = (
+                    conn.execute(
+                        select(pacer_courts.c.court_id, pacer_courts.c.court_name).order_by(
+                            pacer_courts.c.court_id.asc()
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+        except SQLAlchemyError as exc:
+            app.logger.warning("PACER courts unavailable: %s", exc)
+            pacer_rows = []
+
+        if pacer_rows:
+            for row in pacer_rows:
+                name = row.get("court_name") or ""
+                court_id = row.get("court_id") or ""
+                label = f"{court_id}, {name}".strip().rstrip(",")
+                choices.append({"court_id": court_id, "name": name, "label": label})
+            return choices
+
         stmt = (
             select(
-                pcl_courts.c.pcl_court_id,
-                pcl_courts.c.name,
+                pcl_courts_table.c.pcl_court_id,
+                pcl_courts_table.c.name,
             )
-            .where(pcl_courts.c.active.is_(True))
-            .order_by(pcl_courts.c.pcl_court_id.asc())
+            .where(pcl_courts_table.c.active.is_(True))
+            .order_by(pcl_courts_table.c.pcl_court_id.asc())
         )
         with engine.begin() as conn:
             rows = conn.execute(stmt).mappings().all()
-        choices: List[Dict[str, Any]] = []
         for row in rows:
             name = row.get("name") or ""
             court_id = row["pcl_court_id"]
@@ -2165,6 +2190,47 @@ def create_app() -> Flask:
             )
         return rows
 
+    def _load_pacer_response_code(status_code: Optional[int]) -> Optional[Dict[str, Any]]:
+        if not status_code:
+            return None
+        pacer_response_codes = pcl_tables["pacer_response_codes"]
+        stmt = select(pacer_response_codes).where(
+            pacer_response_codes.c.http_status_code == status_code
+        )
+        try:
+            with engine.begin() as conn:
+                row = conn.execute(stmt).mappings().first()
+        except SQLAlchemyError as exc:
+            app.logger.warning("PACER response code lookup failed: %s", exc)
+            return None
+        return dict(row) if row else None
+
+    def _format_pacer_response_code(status_code: Optional[int]) -> Optional[str]:
+        record = _load_pacer_response_code(status_code)
+        if not record:
+            return None
+        reason = record.get("reason_phrase") or ""
+        usage = record.get("application_usage") or ""
+        description = record.get("description") or ""
+        details = f"{reason}."
+        if usage:
+            details = f"{details} {usage}."
+        if description:
+            details = f"{details} {description}"
+        return details.strip()
+
+    def _append_pcl_api_error(
+        errors: List[str],
+        exc: PclApiError,
+        *,
+        prefix: str,
+    ) -> None:
+        errors.append(f"{prefix} status {exc.status_code}.")
+        errors.append(exc.message)
+        details = _format_pacer_response_code(exc.status_code)
+        if details:
+            errors.append(details)
+
     def _format_run_timestamp(value: Any) -> str:
         if isinstance(value, datetime):
             return value.isoformat().replace("T", " ")
@@ -2286,6 +2352,22 @@ def create_app() -> Flask:
                 }
             )
         return saved
+
+    def _load_case_type_choices() -> List[Tuple[str, str]]:
+        pacer_case_types = pcl_tables["pacer_case_types"]
+        stmt = select(pacer_case_types.c.case_type_code).order_by(
+            pacer_case_types.c.case_type_code.asc()
+        )
+        try:
+            with engine.begin() as conn:
+                rows = conn.execute(stmt).fetchall()
+        except SQLAlchemyError as exc:
+            app.logger.warning("PACER case types unavailable: %s", exc)
+            rows = []
+        if rows:
+            codes = [row[0] for row in rows if row and row[0]]
+            return [(code, code) for code in codes]
+        return list(PCL_CASE_TYPES)
 
     def _load_pacer_search_run(run_id: int) -> Optional[Dict[str, Any]]:
         pacer_search_runs = pcl_tables["pacer_search_runs"]
@@ -4131,6 +4213,60 @@ def create_app() -> Flask:
             return schema_name.startswith("sqlite")
         return False
 
+    def _db_check_reference_tables() -> List[Dict[str, Any]]:
+        preparer = engine.dialect.identifier_preparer
+        tables = [
+            "pacer_response_codes",
+            "search_regions",
+            "pacer_case_types",
+            "pacer_courts",
+            "pacer_sortable_case_fields",
+            "pacer_sortable_party_fields",
+            "pacer_saved_searches",
+            "pacer_search_runs",
+            "pcl_cases",
+        ]
+        results: List[Dict[str, Any]] = []
+        with engine.connect() as connection:
+            for table_name in tables:
+                qualified = preparer.quote(table_name)
+                try:
+                    count = connection.execute(
+                        sa_text(f"SELECT count(*) AS count FROM {qualified}")
+                    ).scalar()
+                    results.append(
+                        {
+                            "table": table_name,
+                            "exists": True,
+                            "count": int(count) if count is not None else 0,
+                        }
+                    )
+                except ProgrammingError as exc:
+                    message = str(exc)
+                    if "does not exist" in message or "UndefinedTable" in message:
+                        results.append(
+                            {"table": table_name, "exists": False, "count": None}
+                        )
+                    else:
+                        results.append(
+                            {
+                                "table": table_name,
+                                "exists": False,
+                                "count": None,
+                                "error": message,
+                            }
+                        )
+                except SQLAlchemyError as exc:
+                    results.append(
+                        {
+                            "table": table_name,
+                            "exists": False,
+                            "count": None,
+                            "error": str(exc),
+                        }
+                    )
+        return results
+
     @app.get("/admin/database-dashboard")
     @admin_required
     def admin_database_dashboard():
@@ -4306,6 +4442,17 @@ def create_app() -> Flask:
             table_preview_error=table_preview_error,
             column_preview_error=column_preview_error,
             selected_table_columns=selected_table_columns,
+        )
+
+    @app.get("/admin/database-dashboard/db-check")
+    @admin_required
+    def admin_database_dashboard_db_check():
+        return jsonify(
+            {
+                "ok": True,
+                "checked_at": datetime.utcnow().isoformat(),
+                "tables": _db_check_reference_tables(),
+            }
         )
 
     @app.post("/admin/database-dashboard/refresh")
@@ -5094,6 +5241,7 @@ def create_app() -> Flask:
             report_payload: Optional[Dict[str, Any]] = None
             report_error: Optional[str] = None
             report_details: Optional[str] = None
+            report_code_details: Optional[str] = None
             try:
                 if mode == "cases":
                     report_payload = pcl_client.start_case_download(request_body)
@@ -5106,6 +5254,7 @@ def create_app() -> Flask:
             except PclApiError as exc:
                 report_error = f"PCL request failed with status {exc.status_code}."
                 report_details = exc.message
+                report_code_details = _format_pacer_response_code(exc.status_code)
             except Exception as exc:  # pragma: no cover - defensive guardrail
                 report_error = "Unexpected error while submitting batch report."
                 report_details = str(exc)
@@ -5115,6 +5264,8 @@ def create_app() -> Flask:
                 run_result["errors"].append(report_error)
                 if report_details:
                     run_result["errors"].append(report_details)
+                if report_code_details:
+                    run_result["errors"].append(report_code_details)
                 run_result["debug_bundle"] = _build_debug_bundle(
                     mode=mode,
                     search_mode=search_mode,
@@ -5366,6 +5517,7 @@ def create_app() -> Flask:
                 elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                 status_codes.append(exc.status_code)
                 snippet_payload = _truncate_value(exc.details or {"message": exc.message})
+                code_details = _format_pacer_response_code(exc.status_code)
                 response_snippets.append(
                     {
                         "page": display_page,
@@ -5390,6 +5542,8 @@ def create_app() -> Flask:
                     )
                 else:
                     error_details = exc.message
+                if code_details:
+                    error_details = f"{error_details} {code_details}" if error_details else code_details
                 if mode == "cases":
                     request_summary = {
                         "courtId": request_body.get("courtId"),
@@ -5737,8 +5891,11 @@ def create_app() -> Flask:
                 "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
             )
         except PclApiError as exc:
-            run_result["errors"].append(f"PCL status check failed with status {exc.status_code}.")
-            run_result["errors"].append(exc.message)
+            _append_pcl_api_error(
+                run_result["errors"],
+                exc,
+                prefix="PCL status check failed with",
+            )
         except Exception as exc:  # pragma: no cover - defensive guardrail
             run_result["errors"].append("Unexpected error while checking report status.")
             run_result["errors"].append(str(exc))
@@ -5864,8 +6021,11 @@ def create_app() -> Flask:
                 "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
             )
         except PclApiError as exc:
-            run_result["errors"].append(f"PCL status check failed with status {exc.status_code}.")
-            run_result["errors"].append(exc.message)
+            _append_pcl_api_error(
+                run_result["errors"],
+                exc,
+                prefix="PCL status check failed with",
+            )
         except Exception as exc:  # pragma: no cover - defensive guardrail
             run_result["errors"].append("Unexpected error while checking report status.")
             run_result["errors"].append(str(exc))
@@ -5907,8 +6067,11 @@ def create_app() -> Flask:
                 "Token expired or invalid. Next step: re-authorize from the Get PACER Data page."
             )
         except PclApiError as exc:
-            run_result["errors"].append(f"PCL report download failed with status {exc.status_code}.")
-            run_result["errors"].append(exc.message)
+            _append_pcl_api_error(
+                run_result["errors"],
+                exc,
+                prefix="PCL report download failed with",
+            )
         except Exception as exc:  # pragma: no cover - defensive guardrail
             run_result["errors"].append("Unexpected error while downloading report.")
             run_result["errors"].append(str(exc))
@@ -6150,7 +6313,9 @@ def create_app() -> Flask:
         except TokenExpired as exc:
             abort(401, description=str(exc))
         except PclApiError as exc:
-            abort(exc.status_code, description=exc.message)
+            details = _format_pacer_response_code(exc.status_code)
+            description = f"{exc.message} {details}" if details else exc.message
+            abort(exc.status_code, description=description)
 
         response = make_response(json.dumps(payload, indent=2, sort_keys=True, default=str))
         response.headers["Content-Type"] = "application/json"

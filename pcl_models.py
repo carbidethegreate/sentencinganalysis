@@ -182,6 +182,48 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Index("ix_pacer_saved_searches_created_at", "created_at"),
     )
 
+    pacer_response_codes = Table(
+        "pacer_response_codes",
+        metadata,
+        Column("http_status_code", Integer, primary_key=True),
+        Column("reason_phrase", Text, nullable=False),
+        Column("enum_name", Text, nullable=False),
+        Column("application_usage", Text, nullable=False),
+        Column("description", Text, nullable=False),
+    )
+
+    pacer_case_types = Table(
+        "pacer_case_types",
+        metadata,
+        Column("case_type_code", Text, primary_key=True),
+    )
+
+    pacer_courts = Table(
+        "pacer_courts",
+        metadata,
+        Column("court_id", Text, primary_key=True),
+        Column("court_name", Text, nullable=False),
+    )
+
+    pacer_sortable_case_fields = Table(
+        "pacer_sortable_case_fields",
+        metadata,
+        Column("field_name", Text, primary_key=True),
+    )
+
+    pacer_sortable_party_fields = Table(
+        "pacer_sortable_party_fields",
+        metadata,
+        Column("field_name", Text, primary_key=True),
+    )
+
+    search_regions = Table(
+        "search_regions",
+        metadata,
+        Column("region_code", Text, primary_key=True),
+        Column("region_name", Text, nullable=False),
+    )
+
     pcl_batch_searches = Table(
         "pcl_batch_searches",
         metadata,
@@ -499,6 +541,12 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         "pacer_search_requests": pacer_search_requests,
         "pacer_search_runs": pacer_search_runs,
         "pacer_saved_searches": pacer_saved_searches,
+        "pacer_response_codes": pacer_response_codes,
+        "pacer_case_types": pacer_case_types,
+        "pacer_courts": pacer_courts,
+        "pacer_sortable_case_fields": pacer_sortable_case_fields,
+        "pacer_sortable_party_fields": pacer_sortable_party_fields,
+        "search_regions": search_regions,
         "pcl_batch_searches": pcl_batch_searches,
         "pcl_batch_requests": pcl_batch_requests,
         "pcl_batch_segments": pcl_batch_segments,
