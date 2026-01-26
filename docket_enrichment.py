@@ -141,6 +141,21 @@ class DocketEnrichmentWorker:
         raw_html = None
         if parsed_format == "html":
             raw_html = fetch_result.body.decode("utf-8", errors="replace")
+        if raw_html and _looks_like_login_redirect(raw_html):
+            self._store_docket_payload(
+                job,
+                case_row,
+                fetch_result,
+                docket_text,
+                docket_entries,
+                parsed_format,
+                raw_html=raw_html,
+            )
+            self._mark_failed(
+                job,
+                "PACER login redirect; token expired or missing.",
+            )
+            return
         if raw_html and _looks_like_docket_shell(raw_html):
             self._store_docket_payload(
                 job,
@@ -277,6 +292,9 @@ class DocketEnrichmentWorker:
                 base_url=url,
                 case_number_full=case_row.get("case_number_full"),
                 case_number=case_row.get("case_number"),
+                case_office=case_row.get("case_office"),
+                case_year=case_row.get("case_year"),
+                case_type=case_row.get("case_type"),
             )
             if submit:
                 if _looks_like_docket_shell(
@@ -293,8 +311,28 @@ class DocketEnrichmentWorker:
                         self._http_client,
                         case_row["case_link"],
                         case_number_full=case_row.get("case_number_full"),
+                        case_office=case_row.get("case_office"),
+                        case_year=case_row.get("case_year"),
+                        case_type=case_row.get("case_type"),
+                        case_number=case_row.get("case_number"),
+                        output_format="xml",
                     )
                     if multistep:
+                        if _looks_like_docket_shell(
+                            multistep.body.decode("utf-8", errors="replace")
+                        ):
+                            multistep_html = _fetch_docket_report_multistep(
+                                self._http_client,
+                                case_row["case_link"],
+                                case_number_full=case_row.get("case_number_full"),
+                                case_office=case_row.get("case_office"),
+                                case_year=case_row.get("case_year"),
+                                case_type=case_row.get("case_type"),
+                                case_number=case_row.get("case_number"),
+                                output_format="html",
+                            )
+                            if multistep_html:
+                                return multistep_html
                         return multistep
                 return submit
         return DocketFetchResult(
@@ -520,16 +558,19 @@ def _extract_docket_entries_from_html(html_text: str) -> List[Dict[str, Any]]:
         return []
 
     rows = tree.xpath(
-        "//table[.//text()[contains(., 'Docket Text')]]/tbody/tr"
+        "//table[.//text()[contains(., 'Docket Text')]]//tr"
     )
     if not rows:
         rows = tree.xpath(
             "//table[preceding-sibling::table[.//text()[contains(., 'Docket Text')]]]"
-            "/tbody/tr"
+            "//tr"
         )
 
     entries: List[Dict[str, Any]] = []
-    for row in rows[1:]:
+    for row in rows:
+        row_text = _normalize_html_text(row)
+        if "docket text" in row_text.lower() and "date filed" in row_text.lower():
+            continue
         cells = row.xpath("./td")
         if len(cells) < 3:
             continue
@@ -620,11 +661,23 @@ def _truncate_text(value: str, max_len: int) -> str:
 def _looks_like_docket_shell(text: str) -> bool:
     if not text:
         return False
+    if _looks_like_docket_report(text):
+        return False
     lowered = text.lower()
     return (
         "district court cm/ecf" in lowered
         and ("docket sheet" in lowered or "docket report" in lowered)
         and ("case_number_text_area" in lowered or "output_format" in lowered)
+    )
+
+
+def _looks_like_docket_report(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    return (
+        "docket text" in lowered
+        and ("docket for case" in lowered or "criminal docket for case" in lowered or "civil docket for case" in lowered)
     )
 
 
@@ -634,6 +687,9 @@ def _submit_docket_form(
     base_url: str,
     case_number_full: Optional[str] = None,
     case_number: Optional[str] = None,
+    case_office: Optional[str] = None,
+    case_year: Optional[str] = None,
+    case_type: Optional[str] = None,
 ) -> Optional[DocketFetchResult]:
     action, payload, form_html = _select_docket_form(html)
     if not action or not payload:
@@ -642,12 +698,20 @@ def _submit_docket_form(
     if case_id:
         payload.setdefault("case_id", case_id)
         payload.setdefault("all_case_ids", case_id)
+    formatted_case_number = _format_case_number_for_pacer(
+        case_office=case_office,
+        case_year=case_year,
+        case_type=case_type,
+        case_number=case_number,
+        case_number_full=case_number_full,
+    )
     if case_number_full:
         payload.setdefault("case_number_full", case_number_full)
         payload.setdefault("case_number", case_number_full)
         payload.setdefault("case_number_text_area_0", case_number_full)
-    if case_number_full or case_number:
-        payload["case_num"] = case_number_full or case_number
+    if formatted_case_number:
+        payload["case_num"] = formatted_case_number
+        payload["case_number_text_area_0"] = formatted_case_number
     if case_id and "case_number_text_area_0" not in payload:
         payload["case_number_text_area_0"] = case_id
     payload.setdefault("date_range_type", "Filed")
@@ -662,39 +726,58 @@ def _submit_docket_form(
         output_format = output_format.lower()
     if output_format not in {"xml", "html", "pdf"}:
         output_format = "xml" if _form_supports_xml(form_html or html) else "html"
-        payload["output_format"] = "XML" if output_format == "xml" else output_format
-    elif output_format == "xml":
-        payload["output_format"] = "XML"
 
-    payload.setdefault("output_format_type", payload.get("output_format"))
-    payload.setdefault("report_type", "docket")
-    payload.setdefault("format", payload.get("output_format"))
-    action_url = _resolve_form_action(base_url, action)
-    encoded = urlencode(payload).encode("utf-8")
-    response = _request_with_login_retry(
-        http_client,
-        "POST",
-        action_url,
-        headers={
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": base_url,
-            "Accept": "application/xml, text/html",
-        },
-        data=encoded,
-        include_cookie=True,
-    )
-    followup = _submit_confirm_form(http_client, response, referer=action_url)
-    if followup is not None:
-        return followup
-    content_type = response.headers.get("Content-Type", "")
-    return DocketFetchResult(
-        url=action_url,
-        status_code=response.status_code,
-        content_type=content_type,
-        body=response.body,
-        form_action=action_url,
-        form_payload=payload,
-    )
+    def _submit_with_format(fmt: str) -> DocketFetchResult:
+        local_payload = dict(payload)
+        if fmt == "xml":
+            local_payload["output_format"] = "XML"
+            local_payload["outputXML_TXT"] = "XML"
+            local_payload["output_format_type"] = "XML"
+            local_payload["format"] = "XML"
+        elif fmt == "html":
+            local_payload["output_format"] = "html"
+            local_payload["outputXML_TXT"] = "HTML"
+            local_payload["output_format_type"] = "html"
+            local_payload["format"] = "html"
+        local_payload.setdefault("report_type", "docket")
+        action_url = _resolve_form_action(base_url, action)
+        encoded = urlencode(local_payload).encode("utf-8")
+        response = _request_with_login_retry(
+            http_client,
+            "POST",
+            action_url,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": base_url,
+                "Accept": "application/xml, text/html",
+            },
+            data=encoded,
+            include_cookie=True,
+        )
+        followup = _submit_confirm_form(
+            http_client,
+            response,
+            referer=action_url,
+            desired_output=fmt,
+        )
+        if followup is not None:
+            followup.form_payload = local_payload
+            return followup
+        content_type = response.headers.get("Content-Type", "")
+        return DocketFetchResult(
+            url=action_url,
+            status_code=response.status_code,
+            content_type=content_type,
+            body=response.body,
+            form_action=action_url,
+            form_payload=local_payload,
+        )
+
+    result = _submit_with_format(output_format)
+    if output_format == "xml":
+        if _looks_like_docket_shell(result.body.decode("utf-8", errors="replace")):
+            return _submit_with_format("html")
+    return result
 
 
 def _resolve_form_action(base_url: str, action: str) -> str:
@@ -737,6 +820,7 @@ def _submit_confirm_form(
     response: Any,
     *,
     referer: str,
+    desired_output: str = "xml",
 ) -> Optional[DocketFetchResult]:
     content_type = response.headers.get("Content-Type", "")
     if "html" not in content_type.lower():
@@ -744,7 +828,7 @@ def _submit_confirm_form(
     body = response.body.decode("utf-8", errors="replace")
     if not _looks_like_docket_shell(body) and "confirm" not in body.lower():
         return None
-    action, payload = _select_confirm_form(body)
+    action, payload = _select_confirm_form(body, desired_output=desired_output)
     if not action or not payload:
         return None
     action_url = _resolve_form_action(referer, action)
@@ -771,7 +855,7 @@ def _submit_confirm_form(
     )
 
 
-def _select_confirm_form(html: str) -> tuple[Optional[str], Dict[str, str]]:
+def _select_confirm_form(html: str, *, desired_output: str = "xml") -> tuple[Optional[str], Dict[str, str]]:
     forms = []
     for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
         form_html = match.group(0)
@@ -795,10 +879,24 @@ def _select_confirm_form(html: str) -> tuple[Optional[str], Dict[str, str]]:
         payload["confirmCharge"] = "Y"
     if "confirmCharges" in payload:
         payload["confirmCharges"] = "Y"
-    if "outputXML_TXT" in payload:
-        payload["outputXML_TXT"] = "XML"
-    if "output_format" in payload:
-        payload["output_format"] = "XML"
+    if desired_output.lower() == "html":
+        if "outputXML_TXT" in payload:
+            payload["outputXML_TXT"] = "HTML"
+        if "output_format" in payload:
+            payload["output_format"] = "html"
+        if "output_format_type" in payload:
+            payload["output_format_type"] = "html"
+        if "format" in payload:
+            payload["format"] = "html"
+    else:
+        if "outputXML_TXT" in payload:
+            payload["outputXML_TXT"] = "XML"
+        if "output_format" in payload:
+            payload["output_format"] = "XML"
+        if "output_format_type" in payload:
+            payload["output_format_type"] = "XML"
+        if "format" in payload:
+            payload["format"] = "XML"
     return action, payload
 
 
@@ -807,6 +905,11 @@ def _fetch_docket_report_multistep(
     case_link: str,
     *,
     case_number_full: Optional[str],
+    case_office: Optional[str] = None,
+    case_year: Optional[str] = None,
+    case_type: Optional[str] = None,
+    case_number: Optional[str] = None,
+    output_format: str = "xml",
 ) -> Optional[DocketFetchResult]:
     if not case_number_full:
         return None
@@ -830,7 +933,14 @@ def _fetch_docket_report_multistep(
         return None
     search_action, search_payload = search_form
     search_payload.setdefault("servlet", "CaseSelectionTable.jsp")
-    search_payload.setdefault("csnum1", case_number_full)
+    formatted_case_number = _format_case_number_for_pacer(
+        case_office=case_office,
+        case_year=case_year,
+        case_type=case_type,
+        case_number=case_number,
+        case_number_full=case_number_full,
+    )
+    search_payload.setdefault("csnum1", formatted_case_number or case_number_full)
     search_payload.setdefault("csnum2", "")
     search_payload.setdefault("aName", "")
     search_payload.setdefault("searchPty", "pty")
@@ -890,7 +1000,16 @@ def _fetch_docket_report_multistep(
     if not filter_form:
         return None
     filter_action, filter_payload = filter_form
-    filter_payload["outputXML_TXT"] = "XML"
+    if output_format == "html":
+        filter_payload["outputXML_TXT"] = "HTML"
+        filter_payload["output_format"] = "html"
+        filter_payload["output_format_type"] = "html"
+        filter_payload["format"] = "html"
+    else:
+        filter_payload["outputXML_TXT"] = "XML"
+        filter_payload["output_format"] = "XML"
+        filter_payload["output_format_type"] = "XML"
+        filter_payload["format"] = "XML"
     filter_action_url = _resolve_form_action(docket_action_url, filter_action)
     filter_response = _request_with_login_retry(
         http_client,
@@ -906,7 +1025,12 @@ def _fetch_docket_report_multistep(
     )
     if filter_response.status_code != 200:
         return None
-    confirm = _submit_confirm_form(http_client, filter_response, referer=filter_action_url)
+    confirm = _submit_confirm_form(
+        http_client,
+        filter_response,
+        referer=filter_action_url,
+        desired_output=output_format,
+    )
     if confirm is not None:
         return confirm
     return DocketFetchResult(
@@ -1001,6 +1125,25 @@ def _request_with_login_retry(
     return response
 
 
+def _format_case_number_for_pacer(
+    *,
+    case_office: Optional[str],
+    case_year: Optional[str],
+    case_type: Optional[str],
+    case_number: Optional[str],
+    case_number_full: Optional[str],
+) -> Optional[str]:
+    if case_office and case_year and case_type and case_number:
+        year = str(case_year)[-2:]
+        try:
+            num = int(case_number)
+            number_part = f"{num:05d}"
+        except (ValueError, TypeError):
+            number_part = str(case_number)
+        return f"{case_office}:{year}-{case_type}-{number_part}"
+    return case_number_full
+
+
 def _extract_form_fields(html: str) -> Dict[str, str]:
     fields: Dict[str, str] = {}
     for match in re.finditer(r"<input([^>]+)>", html, re.IGNORECASE):
@@ -1064,6 +1207,10 @@ def _form_supports_xml(html: str) -> bool:
         r"name=[\"']output_format[\"'][^>]*value=[\"']xml[\"']",
         html,
         re.IGNORECASE,
+    ) is not None or re.search(
+        r"name=[\"']outputXML_TXT[\"'][^>]*value=[\"']XML[\"']",
+        html,
+        re.IGNORECASE,
     ) is not None
 
 
@@ -1073,28 +1220,37 @@ def _force_docket_report(
     *,
     case_number_full: Optional[str] = None,
 ) -> Optional[DocketFetchResult]:
-    try:
-        url = _build_docket_report_url(
-            case_link,
-            case_number_full=case_number_full,
-            case_number=None,
-            output_format="XML",
-            url_template=None,
+    def _request_with_output(fmt: str) -> Optional[DocketFetchResult]:
+        try:
+            url = _build_docket_report_url(
+                case_link,
+                case_number_full=case_number_full,
+                case_number=None,
+                output_format=fmt,
+                url_template=None,
+            )
+        except ValueError:
+            return None
+        response = _request_with_login_retry(
+            http_client,
+            "GET",
+            url,
+            headers={"Accept": "application/xml, text/html"},
+            include_cookie=True,
         )
-    except ValueError:
-        return None
-    response = http_client.request(
-        "GET",
-        url,
-        headers={"Accept": "application/xml, text/html"},
-        include_cookie=True,
-    )
-    return DocketFetchResult(
-        url=url,
-        status_code=response.status_code,
-        content_type=response.headers.get("Content-Type", ""),
-        body=response.body,
-    )
+        return DocketFetchResult(
+            url=url,
+            status_code=response.status_code,
+            content_type=response.headers.get("Content-Type", ""),
+            body=response.body,
+        )
+
+    result = _request_with_output("XML")
+    if result and _looks_like_docket_shell(
+        result.body.decode("utf-8", errors="replace")
+    ):
+        return _request_with_output("HTML")
+    return result
 
 
 def _upsert_case_field(
