@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode, urlparse
 from xml.etree import ElementTree
 
+from lxml import html as lxml_html
 from sqlalchemy import Table, select, update
 
 
@@ -497,8 +498,63 @@ def _extract_docket_payload(
         try:
             return _extract_docket_xml(text), _extract_docket_entries(text), "xml"
         except ElementTree.ParseError:
-            return _strip_html(text), [], "html"
-    return _strip_html(text), [], "html"
+            entries = _extract_docket_entries_from_html(text)
+            return _extract_docket_text_from_entries(entries, text), entries, "html"
+    entries = _extract_docket_entries_from_html(text)
+    return _extract_docket_text_from_entries(entries, text), entries, "html"
+
+
+def _extract_docket_entries_from_html(html_text: str) -> List[Dict[str, Any]]:
+    try:
+        tree = lxml_html.fromstring(html_text)
+    except (ValueError, TypeError):
+        return []
+
+    rows = tree.xpath(
+        "//table[.//text()[contains(., 'Docket Text')]]/tbody/tr"
+    )
+    if not rows:
+        rows = tree.xpath(
+            "//table[preceding-sibling::table[.//text()[contains(., 'Docket Text')]]]"
+            "/tbody/tr"
+        )
+
+    entries: List[Dict[str, Any]] = []
+    for row in rows[1:]:
+        cells = row.xpath("./td")
+        if len(cells) < 3:
+            continue
+        date_filed = _normalize_html_text(cells[0])
+        if not date_filed:
+            continue
+        doc_number = _normalize_html_text(cells[1])
+        description = _normalize_html_text(cells[2])
+        entry = {"dateFiled": date_filed, "description": description}
+        if doc_number:
+            entry["documentNumber"] = doc_number
+        entries.append(entry)
+    return entries
+
+
+def _extract_docket_text_from_entries(
+    entries: List[Dict[str, Any]], fallback_html: str
+) -> str:
+    if not entries:
+        return _strip_html(fallback_html)
+    lines = []
+    for entry in entries:
+        date_filed = entry.get("dateFiled") or ""
+        doc_number = entry.get("documentNumber") or ""
+        description = entry.get("description") or ""
+        parts = [part for part in [date_filed, doc_number, description] if part]
+        if parts:
+            lines.append(" | ".join(parts))
+    return "\n".join(lines)
+
+
+def _normalize_html_text(node: Any) -> str:
+    text = " ".join(node.xpath(".//text()"))
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _extract_docket_entries(xml_text: str) -> List[Dict[str, Any]]:
@@ -583,6 +639,9 @@ def _submit_docket_form(
         payload.setdefault("case_number_text_area_0", case_number_full)
     if case_id and "case_number_text_area_0" not in payload:
         payload["case_number_text_area_0"] = case_id
+    payload.setdefault("date_range_type", "Filed")
+    payload.setdefault("date_from", "1/1/1960")
+    payload.setdefault("date_to", "")
     payload.setdefault("report_type", "docket")
     payload.setdefault("sort1", "docnum")
     payload.setdefault("sort2", "filingdate")

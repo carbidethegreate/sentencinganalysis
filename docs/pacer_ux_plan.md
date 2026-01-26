@@ -13,6 +13,7 @@ Latest update
 - Fixed SQLAlchemy truthy checks causing Internal Server Errors on case lists and details.
 - Wired docket enrichment worker to pull docket reports via PACER case links.
 - Added CM/ECF docket form auto-submit to retrieve the actual docket report.
+- Added HTML docket parsing (lxml) to extract structured entries when XML is unavailable.
 
 Current focus
 1) Validate docket enrichment output and confirm docket text is stored in `pcl_case_fields`.
