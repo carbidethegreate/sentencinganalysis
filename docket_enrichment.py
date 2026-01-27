@@ -267,6 +267,9 @@ class DocketEnrichmentWorker:
                     select(
                         pcl_cases.c.id,
                         pcl_cases.c.court_id,
+                        pcl_cases.c.case_office,
+                        pcl_cases.c.case_year,
+                        pcl_cases.c.case_type,
                         pcl_cases.c.case_number,
                         pcl_cases.c.case_number_full,
                         pcl_cases.c.case_link,
@@ -281,10 +284,18 @@ class DocketEnrichmentWorker:
 
     def _fetch_docket_report(self, case_row: Dict[str, Any]) -> DocketFetchResult:
         case_id = _extract_case_id_from_url(case_row.get("case_link") or "")
+        formatted_case_number = _format_case_number_for_pacer(
+            case_office=case_row.get("case_office"),
+            case_year=case_row.get("case_year"),
+            case_type=case_row.get("case_type"),
+            case_number=case_row.get("case_number"),
+            case_number_full=case_row.get("case_number_full"),
+        )
         _seed_case_cookies(
             self._http_client,
             case_id,
             case_row.get("case_number_full"),
+            formatted_case_number=formatted_case_number,
         )
         _prime_case_session(self._http_client, case_row.get("case_link"))
         url = _build_docket_report_url(
@@ -600,6 +611,7 @@ def _seed_case_cookies(
     http_client: Any,
     case_id: Optional[str],
     case_number_full: Optional[str],
+    formatted_case_number: Optional[str] = None,
 ) -> None:
     if not http_client:
         return
@@ -609,9 +621,12 @@ def _seed_case_cookies(
     if case_id:
         setter("RECENT_CASES", f"{case_id};")
         setter("case_id", case_id)
-    if case_number_full:
+    case_value = formatted_case_number or case_number_full
+    if case_value:
         for name in ("case_num", "case_number", "CaseNumber", "caseNumber"):
-            setter(name, case_number_full)
+            setter(name, case_value)
+        if case_id:
+            setter("CASE_NUM", f"{case_value}({case_id})")
 
 
 def _extract_case_id_from_url(url: str) -> Optional[str]:
