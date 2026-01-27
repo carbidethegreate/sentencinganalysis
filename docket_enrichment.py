@@ -783,24 +783,56 @@ def _insert_newlines(tree: Any, tags: set[str]) -> None:
             node.tail = "\n" + (node.tail or "")
 
 
-def _extract_links_from_cell(cell: Any, *, base_url: Optional[str]) -> List[Dict[str, str]]:
-    links: List[Dict[str, str]] = []
-    for anchor in cell.xpath(".//a[@href]"):
+def _extract_links_from_cell(cell: Any, *, base_url: Optional[str]) -> List[Dict[str, Any]]:
+    links: List[Dict[str, Any]] = []
+    for anchor in cell.xpath(".//a"):
         href = (anchor.get("href") or "").strip()
-        if not href:
-            continue
         label = _normalize_html_text(anchor)
-        if base_url:
+        onclick = (anchor.get("onclick") or "").strip()
+        go_dls = None
+        if onclick and "goDLS" in onclick:
+            go_dls = _reverse_go_dls_function(onclick)
+        if not href and go_dls and go_dls.get("form_post_url"):
+            href = go_dls.get("form_post_url") or ""
+        if href and base_url:
             href = _resolve_link(base_url, href)
-        link = {"href": href}
+        if not href and not go_dls:
+            continue
+        link: Dict[str, Any] = {}
+        if href:
+            link["href"] = href
         if label:
             link["label"] = label
+        if go_dls:
+            link["goDLS"] = go_dls
         links.append(link)
     return links
 
 
 def _resolve_link(base_url: str, href: str) -> str:
     return urljoin(base_url, href)
+
+
+def _reverse_go_dls_function(s: str) -> Optional[Dict[str, str]]:
+    args = re.findall(r"'(.*?)'", s)
+    if len(args) < 7:
+        return None
+    parts: Dict[str, str] = {
+        "form_post_url": args[0],
+        "caseid": args[1],
+        "de_seq_num": args[2],
+        "got_receipt": args[3],
+        "pdf_header": args[4],
+        "pdf_toggle_possible": args[5],
+        "magic_num": args[6],
+    }
+    if len(args) >= 10:
+        parts["claim_id"] = args[7]
+        parts["claim_num"] = args[8]
+        parts["claim_doc_seq"] = args[9]
+    elif len(args) >= 8:
+        parts["hdr"] = args[7]
+    return parts
 
 
 def _extract_docket_header_fields_from_html(html_text: str) -> Dict[str, Any]:
@@ -1003,6 +1035,7 @@ def _submit_docket_form(
     action, payload, form_html = _select_docket_form(html)
     if not action or not payload:
         return None
+    enctype = _extract_form_enctype(form_html or html)
     case_id = _extract_case_id_from_url(base_url)
     if case_id:
         payload.setdefault("case_id", case_id)
@@ -1066,13 +1099,19 @@ def _submit_docket_form(
         if case_id and "case_id=" not in action_url:
             separator = "&" if "?" in action_url else "?"
             action_url = f"{action_url}{separator}case_id={case_id}"
-        encoded = urlencode(local_payload).encode("utf-8")
+        if enctype and "multipart/form-data" in enctype.lower():
+            boundary = _make_multipart_boundary()
+            encoded = _encode_multipart_form(local_payload, boundary)
+            content_type = f"multipart/form-data; boundary={boundary}"
+        else:
+            encoded = urlencode(local_payload).encode("utf-8")
+            content_type = "application/x-www-form-urlencoded"
         response = _request_with_login_retry(
             http_client,
             "POST",
             action_url,
             headers={
-                "Content-Type": "application/x-www-form-urlencoded",
+                "Content-Type": content_type,
                 "Referer": base_url,
                 "Accept": "application/xml, text/html",
             },
@@ -1157,6 +1196,36 @@ def _select_any_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
         if payload:
             return action, payload, form_html
     return None, {}, ""
+
+
+def _extract_form_enctype(form_html: str) -> Optional[str]:
+    if not form_html:
+        return None
+    tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
+    attrs = tag_match.group(1) if tag_match else ""
+    enctype = _extract_attr(attrs, "enctype") or _extract_attr(attrs, "ENCtype")
+    if enctype:
+        return enctype
+    return None
+
+
+def _make_multipart_boundary() -> str:
+    seed = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    return f"----PacerBoundary{seed}"
+
+
+def _encode_multipart_form(fields: Dict[str, Any], boundary: str) -> bytes:
+    lines: List[str] = []
+    for name, value in fields.items():
+        if value is None:
+            value = ""
+        lines.append(f"--{boundary}")
+        lines.append(f'Content-Disposition: form-data; name="{name}"')
+        lines.append("")
+        lines.append(str(value))
+    lines.append(f"--{boundary}--")
+    lines.append("")
+    return "\r\n".join(lines).encode("utf-8")
 
 
 def _submit_confirm_form(
