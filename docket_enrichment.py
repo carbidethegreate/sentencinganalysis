@@ -280,6 +280,7 @@ class DocketEnrichmentWorker:
         return dict(row) if row else None
 
     def _fetch_docket_report(self, case_row: Dict[str, Any]) -> DocketFetchResult:
+        _prime_case_session(self._http_client, case_row.get("case_link"))
         url = _build_docket_report_url(
             case_row["case_link"],
             case_number_full=case_row.get("case_number_full"),
@@ -573,6 +574,20 @@ def _build_docket_report_url(
     if output_format:
         params["output"] = output_format
     return f"{base}?{urlencode(params)}"
+
+
+def _prime_case_session(http_client: Any, case_link: Optional[str]) -> None:
+    if not case_link:
+        return
+    try:
+        http_client.request(
+            "GET",
+            case_link,
+            headers={"Accept": "text/html"},
+            include_cookie=True,
+        )
+    except Exception:
+        return
 
 
 def _extract_case_id_from_url(url: str) -> Optional[str]:
