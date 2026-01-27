@@ -978,17 +978,18 @@ def _submit_docket_form(
     if case_number_full:
         payload.setdefault("case_number_full", case_number_full)
         payload.setdefault("case_number", case_number_full)
-        payload.setdefault("case_number_text_area_0", case_number_full)
         payload.setdefault("case_num", case_number_full)
+        payload["case_number_text_area_0"] = case_number_full
     if formatted_case_number:
         payload["case_num"] = formatted_case_number
         payload["case_number_text_area_0"] = formatted_case_number
-    if case_id and "case_number_text_area_0" not in payload:
-        payload["case_number_text_area_0"] = case_id
-    if "case_number_text_area_0" not in payload and case_number:
+    if case_number and "case_number_text_area_0" not in payload:
         payload["case_number_text_area_0"] = case_number
-    if case_id and "all_case_ids" not in payload:
+    if case_id:
         payload["all_case_ids"] = case_id
+        payload.setdefault("case_id", case_id)
+        if "case_number_text_area_0" not in payload:
+            payload["case_number_text_area_0"] = case_id
     payload.setdefault("date_range_type", "Filed")
     payload.setdefault("date_from", "1/1/1960")
     payload.setdefault("date_to", "")
