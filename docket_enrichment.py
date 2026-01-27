@@ -280,6 +280,12 @@ class DocketEnrichmentWorker:
         return dict(row) if row else None
 
     def _fetch_docket_report(self, case_row: Dict[str, Any]) -> DocketFetchResult:
+        case_id = _extract_case_id_from_url(case_row.get("case_link") or "")
+        _seed_case_cookies(
+            self._http_client,
+            case_id,
+            case_row.get("case_number_full"),
+        )
         _prime_case_session(self._http_client, case_row.get("case_link"))
         url = _build_docket_report_url(
             case_row["case_link"],
@@ -588,6 +594,24 @@ def _prime_case_session(http_client: Any, case_link: Optional[str]) -> None:
         )
     except Exception:
         return
+
+
+def _seed_case_cookies(
+    http_client: Any,
+    case_id: Optional[str],
+    case_number_full: Optional[str],
+) -> None:
+    if not http_client:
+        return
+    setter = getattr(http_client, "set_cookie", None)
+    if not callable(setter):
+        return
+    if case_id:
+        setter("RECENT_CASES", f"{case_id};")
+        setter("case_id", case_id)
+    if case_number_full:
+        for name in ("case_num", "case_number", "CaseNumber", "caseNumber"):
+            setter(name, case_number_full)
 
 
 def _extract_case_id_from_url(url: str) -> Optional[str]:
@@ -1006,7 +1030,7 @@ def _submit_docket_form(
         if "case_number_text_area_0" not in payload:
             payload["case_number_text_area_0"] = case_id
     payload.setdefault("date_range_type", "Filed")
-    payload.setdefault("date_from", "1/1/1960")
+    payload.setdefault("date_from", "")
     payload.setdefault("date_to", "")
     payload.setdefault("documents_numbered_from_", "")
     payload.setdefault("documents_numbered_to_", "")
@@ -1039,6 +1063,9 @@ def _submit_docket_form(
             local_payload["output"] = "html"
         local_payload.setdefault("report_type", "docket")
         action_url = _resolve_form_action(base_url, action)
+        if case_id and "case_id=" not in action_url:
+            separator = "&" if "?" in action_url else "?"
+            action_url = f"{action_url}{separator}case_id={case_id}"
         encoded = urlencode(local_payload).encode("utf-8")
         response = _request_with_login_retry(
             http_client,
@@ -1092,15 +1119,9 @@ def _submit_docket_form(
 
 
 def _resolve_form_action(base_url: str, action: str) -> str:
-    if action.startswith("http://") or action.startswith("https://"):
-        return action
-    parsed = urlparse(base_url)
-    scheme = parsed.scheme or "https"
-    host = parsed.netloc
-    if action.startswith("/"):
-        return f"{scheme}://{host}{action}"
-    base_path = parsed.path.rsplit("/", 1)[0]
-    return f"{scheme}://{host}{base_path}/{action}"
+    if not action:
+        return base_url
+    return urljoin(base_url, action)
 
 
 def _select_docket_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:

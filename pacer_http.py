@@ -44,6 +44,11 @@ class PacerHttpClient:
         self._token_refresher = token_refresher
         self._cookie_jar: Dict[str, str] = {}
 
+    def set_cookie(self, name: str, value: str) -> None:
+        if not name or value is None:
+            return
+        self._cookie_jar[name] = str(value)
+
     def request(
         self,
         method: str,
@@ -92,11 +97,12 @@ class PacerHttpClient:
             with urllib.request.urlopen(request_obj, timeout=timeout) as response:
                 body = response.read()
                 status_code = response.getcode()
-                headers = dict(response.headers)
+                headers_obj = response.headers
+                headers = dict(headers_obj)
         except urllib.error.HTTPError as exc:
             if exc.headers:
-                self._capture_refreshed_token(dict(exc.headers))
-                self._capture_cookies(dict(exc.headers))
+                self._capture_refreshed_token(exc.headers)
+                self._capture_cookies(exc.headers)
             if exc.code == 401:
                 if not _retried and self._token_refresher:
                     refreshed = self._refresh_token()
@@ -113,20 +119,19 @@ class PacerHttpClient:
                 raise TokenExpired("PACER token expired.") from exc
             raise
 
-        self._capture_refreshed_token(headers)
-        self._capture_cookies(headers)
+        self._capture_refreshed_token(headers_obj)
+        self._capture_cookies(headers_obj)
         return PacerHttpResponse(status_code=status_code, headers=headers, body=body)
 
     def refresh_token(self) -> Optional[PacerTokenRecord]:
         """Force a token refresh if a refresher is configured."""
         return self._refresh_token()
 
-    def _capture_refreshed_token(self, headers: Dict[str, Any]) -> None:
+    def _capture_refreshed_token(self, headers: Any) -> None:
         refreshed = None
-        for key, value in headers.items():
-            if key.lower() == "x-next-gen-cso":
-                refreshed = value
-                break
+        for value in _iter_header_values(headers, "X-NEXT-GEN-CSO"):
+            refreshed = value
+            break
         if refreshed:
             self._token_store.save_token(
                 refreshed,
@@ -134,14 +139,10 @@ class PacerHttpClient:
                 environment=self._expected_environment,
             )
 
-    def _capture_cookies(self, headers: Dict[str, Any]) -> None:
+    def _capture_cookies(self, headers: Any) -> None:
         if not headers:
             return
-        cookie_headers = []
-        for key, value in headers.items():
-            if key.lower() == "set-cookie":
-                cookie_headers.append(value)
-        for header in cookie_headers:
+        for header in _iter_header_values(headers, "Set-Cookie"):
             try:
                 cookie = SimpleCookie()
                 cookie.load(header)
@@ -169,3 +170,18 @@ class PacerHttpClient:
                 environment=self._expected_environment,
             )
         return None
+
+
+def _iter_header_values(headers: Any, name: str) -> list[str]:
+    if headers is None:
+        return []
+    if hasattr(headers, "get_all"):
+        values = headers.get_all(name)  # type: ignore[attr-defined]
+        if values:
+            return [value for value in values if value]
+    if isinstance(headers, dict):
+        for key in (name, name.lower(), name.upper()):
+            value = headers.get(key)
+            if value:
+                return [value]
+    return []
