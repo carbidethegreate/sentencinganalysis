@@ -4,9 +4,15 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import Table, select, update, func
+
+try:
+    import boto3  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    boto3 = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +39,8 @@ class DocketDocumentWorker:
         self._http_client = http_client
         self._logger = logger
         self._documents_dir = documents_dir or os.path.join(os.getcwd(), "pacer_documents")
+        self._s3_bucket = os.environ.get("PACER_DOCUMENTS_S3_BUCKET")
+        self._s3_prefix = (os.environ.get("PACER_DOCUMENTS_S3_PREFIX") or "").strip().strip("/")
 
     def run_job(self, job_id: int, max_docs: int = 50) -> int:
         job = self._load_job(job_id)
@@ -105,43 +113,55 @@ class DocketDocumentWorker:
         url = item.get("source_url")
         if not url:
             raise ValueError("Missing source URL for document.")
-        response = self._http_client.request(
-            "GET",
-            url,
-            headers={"Accept": "application/pdf"},
-            include_cookie=True,
-        )
-        if response.status_code != 200:
-            raise ValueError(f"Download failed with status {response.status_code}.")
-        content_type = response.headers.get("Content-Type", "")
-        filename = _build_filename(
-            job["case_id"],
-            item.get("document_number"),
-            item["id"],
-            content_type=content_type,
-        )
-        target_dir = os.path.join(self._documents_dir, f"case_{job['case_id']}")
-        os.makedirs(target_dir, exist_ok=True)
-        target_path = os.path.join(target_dir, filename)
-        with open(target_path, "wb") as handle:
-            handle.write(response.body)
-        items_table = self._tables["docket_document_items"]
-        now = datetime.utcnow()
-        updates = {
-            "status": "downloaded",
-            "file_path": target_path,
-            "content_type": content_type,
-            "bytes": len(response.body),
-            "downloaded_at": now,
-            "updated_at": now,
-            "error": None,
-        }
-        with self._engine.begin() as conn:
-            conn.execute(
-                update(items_table)
-                .where(items_table.c.id == item["id"])
-                .values(**updates)
-            )
+        retries, backoff = _download_retry_config()
+        last_error = None
+        for attempt in range(retries + 1):
+            try:
+                response = self._http_client.request(
+                    "GET",
+                    url,
+                    headers={"Accept": "application/pdf"},
+                    include_cookie=True,
+                )
+                if response.status_code != 200:
+                    raise ValueError(f"Download failed with status {response.status_code}.")
+                content_type = response.headers.get("Content-Type", "")
+                filename = _build_filename(
+                    job["case_id"],
+                    item.get("document_number"),
+                    item["id"],
+                    content_type=content_type,
+                )
+                stored_path = self._store_document(job["case_id"], filename, response.body)
+                items_table = self._tables["docket_document_items"]
+                now = datetime.utcnow()
+                updates = {
+                    "status": "downloaded",
+                    "file_path": stored_path,
+                    "content_type": content_type,
+                    "bytes": len(response.body),
+                    "downloaded_at": now,
+                    "updated_at": now,
+                    "error": None,
+                }
+                with self._engine.begin() as conn:
+                    conn.execute(
+                        update(items_table)
+                        .where(items_table.c.id == item["id"])
+                        .values(**updates)
+                    )
+                return
+            except Exception as exc:
+                last_error = str(exc)
+                if attempt < retries:
+                    time.sleep(backoff * (2 ** attempt))
+                else:
+                    raise ValueError(last_error) from exc
+
+    def _store_document(self, case_id: int, filename: str, data: bytes) -> str:
+        if self._s3_bucket:
+            return _write_s3(self._s3_bucket, self._s3_prefix, case_id, filename, data)
+        return _write_local(self._documents_dir, case_id, filename, data)
 
     def _finalize_job(self, job: Dict[str, Any]) -> None:
         items_table = self._tables["docket_document_items"]
@@ -213,3 +233,47 @@ def _build_filename(
         safe = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(doc_number))
         return f"case_{case_id}_doc_{safe}_{item_id}{ext}"
     return f"case_{case_id}_doc_{item_id}{ext}"
+
+
+def _download_retry_config() -> tuple[int, float]:
+    retries_raw = os.environ.get("PACER_DOCUMENT_DOWNLOAD_RETRIES", "2")
+    backoff_raw = os.environ.get("PACER_DOCUMENT_DOWNLOAD_BACKOFF", "2.0")
+    try:
+        retries = max(0, int(retries_raw))
+    except ValueError:
+        retries = 2
+    try:
+        backoff = max(0.5, float(backoff_raw))
+    except ValueError:
+        backoff = 2.0
+    return retries, backoff
+
+
+def _s3_key(prefix: str, case_id: int, filename: str) -> str:
+    base = f"case_{case_id}/{filename}"
+    if not prefix:
+        return base
+    return f"{prefix}/{base}"
+
+
+def _ensure_s3_client():
+    if boto3 is None:
+        raise ValueError("boto3 is required for S3 storage but is not installed.")
+    return boto3.client("s3")
+
+
+def _write_local(documents_dir: str, case_id: int, filename: str, data: bytes) -> str:
+    target_dir = os.path.join(documents_dir, f"case_{case_id}")
+    os.makedirs(target_dir, exist_ok=True)
+    target_path = os.path.join(target_dir, filename)
+    with open(target_path, "wb") as handle:
+        handle.write(data)
+    return target_path
+
+
+def _write_s3(bucket: str, prefix: str, case_id: int, filename: str, data: bytes) -> str:
+    client = _ensure_s3_client()
+    key = _s3_key(prefix, case_id, filename)
+    client.put_object(Bucket=bucket, Key=key, Body=data)
+    return f"s3://{bucket}/{key}"
+

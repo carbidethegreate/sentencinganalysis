@@ -2251,6 +2251,8 @@ def create_app() -> Flask:
 
     def _extract_document_links_from_case_fields(
         case_fields: List[Dict[str, Any]],
+        *,
+        allowed_numbers: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
         entries = []
         for field in case_fields or []:
@@ -2261,6 +2263,9 @@ def create_app() -> Flask:
         items: List[Dict[str, Any]] = []
         seen = set()
         for entry in entries or []:
+            doc_number = entry.get("documentNumber")
+            if allowed_numbers and not _matches_document_number(doc_number, allowed_numbers):
+                continue
             links = entry.get("documentLinks") or []
             for link in links:
                 href = (link.get("href") or "").strip()
@@ -2269,12 +2274,45 @@ def create_app() -> Flask:
                 seen.add(href)
                 items.append(
                     {
-                        "document_number": entry.get("documentNumber"),
+                        "document_number": doc_number,
                         "description": entry.get("description"),
                         "source_url": href,
                     }
                 )
         return items
+
+    def _parse_document_numbers(raw: Optional[str]) -> Optional[Set[str]]:
+        if not raw:
+            return None
+        raw = raw.strip()
+        if not raw:
+            return None
+        tokens = re.split(r"[,\s]+", raw)
+        numbers: Set[str] = set()
+        for token in tokens:
+            if not token:
+                continue
+            if "-" in token:
+                parts = token.split("-", 1)
+                if parts[0].isdigit() and parts[1].isdigit():
+                    start = int(parts[0])
+                    end = int(parts[1])
+                    if start <= end:
+                        for value in range(start, end + 1):
+                            numbers.add(str(value))
+                        continue
+            numbers.add(token)
+        return numbers or None
+
+    def _matches_document_number(doc_number: Optional[str], allowed: Set[str]) -> bool:
+        if not doc_number:
+            return False
+        if doc_number in allowed:
+            return True
+        digits = re.sub(r"\\D+", "", doc_number)
+        if digits and digits in allowed:
+            return True
+        return False
 
     def _queue_document_job(
         conn: Any, case_id: int, items: List[Dict[str, Any]]
@@ -8294,7 +8332,11 @@ def create_app() -> Flask:
         detail = get_case_detail(engine, pcl_tables, case_id)
         if not detail:
             abort(404)
-        items = _extract_document_links_from_case_fields(detail.get("case_fields") or [])
+        allowed_numbers = _parse_document_numbers(request.form.get("document_numbers"))
+        items = _extract_document_links_from_case_fields(
+            detail.get("case_fields") or [],
+            allowed_numbers=allowed_numbers,
+        )
         if not items:
             flash("No document links found in docket entries.", "error")
             return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
@@ -8314,7 +8356,11 @@ def create_app() -> Flask:
         detail = get_case_detail(engine, pcl_tables, case_id)
         if not detail:
             abort(404)
-        items = _extract_document_links_from_case_fields(detail.get("case_fields") or [])
+        allowed_numbers = _parse_document_numbers(request.form.get("document_numbers"))
+        items = _extract_document_links_from_case_fields(
+            detail.get("case_fields") or [],
+            allowed_numbers=allowed_numbers,
+        )
         if not items:
             flash("No document links found in docket entries.", "error")
             return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")

@@ -501,7 +501,7 @@ def _load_document_jobs(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, 
         .all()
     )
     jobs = [dict(row) for row in job_rows]
-    if not items_table or not jobs:
+    if items_table is None or not jobs:
         return jobs
     job_ids = [job["id"] for job in jobs]
     item_rows = (

@@ -3,6 +3,7 @@ SQLAlchemy==2.0.25
 gunicorn==21.2.0
 requests==2.32.3
 lxml==5.2.2
+boto3==1.34.137
 
 # Needed for PostgreSQL when using InternalDatabaseURL / ExternalDatabaseURL
 psycopg[binary]
