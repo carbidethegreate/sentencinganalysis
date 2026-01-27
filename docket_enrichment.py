@@ -1005,8 +1005,12 @@ def _submit_docket_form(
     if output_format not in {"xml", "html", "pdf"}:
         output_format = "xml" if _form_supports_xml(form_html or html) else "html"
 
-    def _submit_with_format(fmt: str) -> DocketFetchResult:
+    def _submit_with_format(fmt: str, *, case_value: Optional[str], all_case_ids: Optional[str]) -> DocketFetchResult:
         local_payload = dict(payload)
+        if case_value:
+            local_payload["case_number_text_area_0"] = case_value
+        if all_case_ids is not None:
+            local_payload["all_case_ids"] = all_case_ids
         if fmt == "xml":
             local_payload["output_format"] = "XML"
             local_payload["outputXML_TXT"] = "XML"
@@ -1052,10 +1056,23 @@ def _submit_docket_form(
             form_payload=local_payload,
         )
 
-    result = _submit_with_format(output_format)
-    if output_format == "xml":
+    case_values = [
+        formatted_case_number or case_number_full or case_number,
+        case_number_full,
+        case_number,
+    ]
+    case_values = [value for value in case_values if value]
+    case_values = list(dict.fromkeys(case_values))
+    all_case_options = [case_id, "", None]
+    result = None
+    for case_value in case_values:
+        for all_case_ids in all_case_options:
+            result = _submit_with_format(output_format, case_value=case_value, all_case_ids=all_case_ids)
+            if not _looks_like_docket_shell(result.body.decode("utf-8", errors="replace")):
+                return result
+    if output_format == "xml" and result is not None:
         if _looks_like_docket_shell(result.body.decode("utf-8", errors="replace")):
-            return _submit_with_format("html")
+            result = _submit_with_format("html", case_value=case_values[0] if case_values else None, all_case_ids=case_id)
     return result
 
 
