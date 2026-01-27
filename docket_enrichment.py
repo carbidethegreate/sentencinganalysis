@@ -600,7 +600,10 @@ def _extract_docket_entries_from_html(
     entries: List[Dict[str, Any]] = []
     for row in rows:
         row_text = _normalize_html_text(row)
-        if "docket text" in row_text.lower() and "date filed" in row_text.lower():
+        lowered_row = row_text.lower()
+        if ("docket text" in lowered_row and "date filed" in lowered_row) or (
+            "docket text" in lowered_row and "filing date" in lowered_row
+        ):
             continue
         cells = row.xpath("./td")
         if len(cells) < 3:
@@ -608,11 +611,16 @@ def _extract_docket_entries_from_html(
         date_filed = _normalize_html_text(cells[0])
         if not date_filed:
             continue
-        doc_number = _normalize_html_text(cells[1])
-        description = _normalize_html_text(cells[2])
+        doc_cell = cells[1]
+        desc_cell = cells[2]
+        if len(cells) >= 4:
+            doc_cell = cells[2]
+            desc_cell = cells[3]
+        doc_number = _normalize_html_text(doc_cell)
+        description = _normalize_html_text(desc_cell)
         links: List[Dict[str, str]] = []
-        links.extend(_extract_links_from_cell(cells[1], base_url=base_url))
-        links.extend(_extract_links_from_cell(cells[2], base_url=base_url))
+        links.extend(_extract_links_from_cell(doc_cell, base_url=base_url))
+        links.extend(_extract_links_from_cell(desc_cell, base_url=base_url))
         entry = {"dateFiled": date_filed, "description": description}
         if doc_number:
             entry["documentNumber"] = doc_number
@@ -907,10 +915,16 @@ def _looks_like_docket_report(text: str) -> bool:
     if not text:
         return False
     lowered = text.lower()
-    return (
+    if (
         "docket text" in lowered
         and ("docket for case" in lowered or "criminal docket for case" in lowered or "civil docket for case" in lowered)
-    )
+    ):
+        return True
+    if "docket text" in lowered and "filing date" in lowered:
+        return True
+    if "docket text" in lowered and "u.s. bankruptcy court" in lowered:
+        return True
+    return False
 
 
 def _submit_docket_form(
