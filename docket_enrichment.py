@@ -853,6 +853,8 @@ def _with_form_details(
     fetch_result: DocketFetchResult, html_text: str
 ) -> DocketFetchResult:
     action, payload, _ = _select_docket_form(html_text)
+    if not action and not payload:
+        action, payload, _ = _select_any_form(html_text)
     if not action or not payload:
         return fetch_result
     resolved = _resolve_form_action(fetch_result.url, action)
@@ -1043,6 +1045,18 @@ def _select_docket_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
     _, action, form_html = forms[0]
     payload = _extract_form_fields(form_html)
     return action, payload, form_html
+
+
+def _select_any_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
+    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
+        form_html = match.group(0)
+        tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
+        attrs = tag_match.group(1) if tag_match else ""
+        action = _extract_attr(attrs, "action")
+        payload = _extract_form_fields(form_html)
+        if payload:
+            return action, payload, form_html
+    return None, {}, ""
 
 
 def _submit_confirm_form(
