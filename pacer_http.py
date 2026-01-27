@@ -49,6 +49,9 @@ class PacerHttpClient:
             return
         self._cookie_jar[name] = str(value)
 
+    def get_cookie_names(self) -> list[str]:
+        return sorted(self._cookie_jar.keys())
+
     def request(
         self,
         method: str,

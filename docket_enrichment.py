@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import html
 import json
+import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode, urljoin, urlparse
@@ -33,6 +34,7 @@ class DocketFetchResult:
     body: bytes
     form_action: Optional[str] = None
     form_payload: Optional[Dict[str, str]] = None
+    request_debug: Optional[Dict[str, Any]] = None
 
 
 class DocketEnrichmentWorker:
@@ -371,20 +373,48 @@ class DocketEnrichmentWorker:
                         case_row["case_link"],
                         case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
                         output_format="html",
+                        all_case_ids=_extract_case_id_from_url(case_row.get("case_link") or ""),
+                        case_num=formatted_case_number or " ",
                     )
                     if direct is not None and not _looks_like_docket_shell(
                         direct.body.decode("utf-8", errors="replace")
                     ):
                         return direct
+                    direct_comma = _submit_docket_report_direct(
+                        self._http_client,
+                        case_row["case_link"],
+                        case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
+                        output_format="html",
+                        all_case_ids=f"{_extract_case_id_from_url(case_row.get('case_link') or '')},",
+                        case_num=formatted_case_number or " ",
+                    )
+                    if direct_comma is not None and not _looks_like_docket_shell(
+                        direct_comma.body.decode("utf-8", errors="replace")
+                    ):
+                        return direct_comma
                 return submit
             direct = _submit_docket_report_direct(
                 self._http_client,
                 case_row["case_link"],
                 case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
                 output_format="html",
+                all_case_ids=_extract_case_id_from_url(case_row.get("case_link") or ""),
+                case_num=formatted_case_number or " ",
             )
-            if direct is not None:
+            if direct is not None and not _looks_like_docket_shell(
+                direct.body.decode("utf-8", errors="replace")
+            ):
                 return direct
+            direct_comma = _submit_docket_report_direct(
+                self._http_client,
+                case_row["case_link"],
+                case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
+                output_format="html",
+                all_case_ids=f"{_extract_case_id_from_url(case_row.get('case_link') or '')},",
+                case_num=formatted_case_number or " ",
+            )
+            if direct_comma is not None:
+                return direct_comma
         return DocketFetchResult(
             url=url,
             status_code=response.status_code,
@@ -535,6 +565,16 @@ class DocketEnrichmentWorker:
                         field_value_json=header_fields,
                         now=now,
                     )
+                if fetch_result.request_debug and os.environ.get("PACER_DOCKET_DEBUG"):
+                    _upsert_case_field(
+                        conn,
+                        pcl_case_fields,
+                        case_row["id"],
+                        "docket_request_debug",
+                        field_value_text=None,
+                        field_value_json=fetch_result.request_debug,
+                        now=now,
+                    )
 
             if receipt_table is not None:
                 receipt_payload = {
@@ -552,6 +592,8 @@ class DocketEnrichmentWorker:
                     receipt_payload["form_payload"] = _truncate_map(
                         fetch_result.form_payload, 200
                     )
+                if fetch_result.request_debug:
+                    receipt_payload["request_debug"] = fetch_result.request_debug
                 conn.execute(
                     receipt_table.insert().values(
                         job_id=job["id"],
@@ -1002,6 +1044,7 @@ def _with_form_details(
         body=fetch_result.body,
         form_action=resolved,
         form_payload=truncated,
+        request_debug=fetch_result.request_debug,
     )
 
 
@@ -1110,7 +1153,12 @@ def _submit_docket_form(
     if output_format not in {"xml", "html", "pdf"}:
         output_format = "xml" if _form_supports_xml(form_html or html) else "html"
 
-    def _submit_with_format(fmt: str, *, case_value: Optional[str], all_case_ids: Optional[str]) -> DocketFetchResult:
+    def _submit_with_format(
+        fmt: str,
+        *,
+        case_value: Optional[str],
+        all_case_ids: Optional[str],
+    ) -> DocketFetchResult:
         local_payload = dict(payload)
         if case_value:
             local_payload["case_number_text_area_0"] = case_value
@@ -1151,6 +1199,14 @@ def _submit_docket_form(
             data=encoded,
             include_cookie=True,
         )
+        request_debug = _build_request_debug(
+            http_client,
+            url=action_url,
+            method="POST",
+            content_type=content_type,
+            payload=local_payload,
+            note="docket_form_submit",
+        )
         followup = _submit_confirm_form(
             http_client,
             response,
@@ -1159,6 +1215,7 @@ def _submit_docket_form(
         )
         if followup is not None:
             followup.form_payload = local_payload
+            followup.request_debug = request_debug
             return followup
         content_type = response.headers.get("Content-Type", "")
         return DocketFetchResult(
@@ -1168,6 +1225,7 @@ def _submit_docket_form(
             body=response.body,
             form_action=action_url,
             form_payload=local_payload,
+            request_debug=request_debug,
         )
 
     case_values = [
@@ -1248,6 +1306,8 @@ def _submit_docket_report_direct(
     *,
     case_id: Optional[str],
     output_format: str = "html",
+    all_case_ids: Optional[str] = None,
+    case_num: Optional[str] = None,
 ) -> Optional[DocketFetchResult]:
     if not case_link or not case_id:
         return None
@@ -1255,12 +1315,16 @@ def _submit_docket_report_direct(
     if not parsed.scheme or not parsed.netloc:
         return None
     action_url = f"{parsed.scheme}://{parsed.netloc}/cgi-bin/DktRpt.pl?1-L_1_0-1"
+    if all_case_ids is None:
+        all_case_ids = case_id
+    if case_num is None:
+        case_num = " "
     payload = {
-        "all_case_ids": case_id,
+        "all_case_ids": all_case_ids,
         "sort1": "oldest date first",
         "date_range_type": "Filed",
         "output_format": output_format,
-        "case_num": " ",
+        "case_num": case_num,
         "date_from": "1/1/1960",
         "date_to": "",
         "documents_numbered_from_": "",
@@ -1271,17 +1335,26 @@ def _submit_docket_report_direct(
     }
     boundary = _make_multipart_boundary()
     encoded = _encode_multipart_form(payload, boundary)
+    content_type = f"multipart/form-data; boundary={boundary}"
     response = _request_with_login_retry(
         http_client,
         "POST",
         action_url,
         headers={
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Type": content_type,
             "Referer": case_link,
             "Accept": "application/xml, text/html",
         },
         data=encoded,
         include_cookie=True,
+    )
+    request_debug = _build_request_debug(
+        http_client,
+        url=action_url,
+        method="POST",
+        content_type=content_type,
+        payload=payload,
+        note="docket_direct_submit",
     )
     return DocketFetchResult(
         url=action_url,
@@ -1290,6 +1363,7 @@ def _submit_docket_report_direct(
         body=response.body,
         form_action=action_url,
         form_payload=payload,
+        request_debug=request_debug,
     )
 
 
@@ -1692,6 +1766,53 @@ def _truncate_map(values: Dict[str, str], max_len: int) -> Dict[str, str]:
         string_value = str(value)
         trimmed[key] = _truncate_text(string_value, max_len)
     return trimmed
+
+
+def _build_request_debug(
+    http_client: Any,
+    *,
+    url: str,
+    method: str,
+    content_type: str,
+    payload: Dict[str, Any],
+    note: str,
+) -> Dict[str, Any]:
+    cookie_names: List[str] = []
+    getter = getattr(http_client, "get_cookie_names", None)
+    if callable(getter):
+        try:
+            cookie_names = list(getter())
+        except Exception:
+            cookie_names = []
+    safe_fields = {
+        "all_case_ids",
+        "case_num",
+        "case_number_text_area_0",
+        "output_format",
+        "outputXML_TXT",
+        "date_from",
+        "date_to",
+        "documents_numbered_from_",
+        "documents_numbered_to_",
+        "sort1",
+        "report_type",
+        "list_of_parties_and_counsel",
+        "terminated_parties",
+        "pdf_header",
+    }
+    payload_preview: Dict[str, Any] = {}
+    for key in safe_fields:
+        if key in payload:
+            payload_preview[key] = payload.get(key)
+    return {
+        "note": note,
+        "method": method,
+        "url": url,
+        "content_type": content_type,
+        "payload_keys": sorted(list(payload.keys())),
+        "payload_preview": payload_preview,
+        "cookie_names": cookie_names,
+    }
 
 
 def _extract_attr(attrs: str, name: str) -> Optional[str]:
