@@ -228,6 +228,87 @@
       </article>
     {% endif %}
 
+    <article id="docket-documents" class="pcl-detail-card" style="margin-top: 20px;">
+      <h3>Docket documents</h3>
+      <p class="small">Queue document downloads from the docket entries. Downloads incur PACER fees.</p>
+      <form method="post" action="{{ url_for('admin_pcl_case_queue_documents', case_id=case_detail.id) }}" style="display:inline-block; margin-right: 8px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="secondary" type="submit">Queue document downloads</button>
+      </form>
+      <form method="post" action="{{ url_for('admin_pcl_case_download_documents_now', case_id=case_detail.id) }}" style="display:inline-block;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="primary" type="submit" onclick="return confirm('Download documents now? This may incur PACER fees.')">
+          Download now
+        </button>
+      </form>
+      {% if case_detail.document_jobs %}
+        <div class="table-wrap" style="margin-top: 16px;">
+          <table>
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Status</th>
+                <th>Total</th>
+                <th>Downloaded</th>
+                <th>Last error</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for job in case_detail.document_jobs %}
+                <tr>
+                  <td>#{{ job.id }}</td>
+                  <td>{{ job.status }}</td>
+                  <td>{{ job.documents_total or "—" }}</td>
+                  <td>{{ job.documents_downloaded or "—" }}</td>
+                  <td>{{ job.last_error or "—" }}</td>
+                  <td>
+                    <form method="post" action="{{ url_for('admin_run_document_job', job_id=job.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <button class="secondary" type="submit">Run job</button>
+                    </form>
+                  </td>
+                </tr>
+                {% if job.items %}
+                  <tr>
+                    <td colspan="6">
+                      <details>
+                        <summary>Show documents ({{ job.items | length }})</summary>
+                        <div class="table-wrap" style="margin-top: 12px;">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Doc #</th>
+                                <th>Description</th>
+                                <th>Status</th>
+                                <th>File</th>
+                                <th>Error</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {% for item in job.items %}
+                                <tr>
+                                  <td>{{ item.document_number or "—" }}</td>
+                                  <td>{{ item.description or "—" }}</td>
+                                  <td>{{ item.status }}</td>
+                                  <td>{{ item.file_path or "—" }}</td>
+                                  <td>{{ item.error or "—" }}</td>
+                                </tr>
+                              {% endfor %}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </article>
+
     <article id="ai-notes" class="pcl-detail-card" style="margin-top: 20px;">
       <h3>AI case notes & prompts</h3>
       <p class="small">Store case-specific AI review text and prompts for later analysis.</p>

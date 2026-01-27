@@ -447,6 +447,55 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Index("ix_pcl_parties_case_id", "case_id"),
     )
 
+    docket_document_jobs = Table(
+        "docket_document_jobs",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("case_id", Integer, ForeignKey("pcl_cases.id"), nullable=False),
+        Column("status", Text, nullable=False, default="queued"),
+        Column("documents_total", Integer, nullable=True),
+        Column("documents_downloaded", Integer, nullable=True),
+        Column("last_error", Text, nullable=True),
+        Column("started_at", DateTime(timezone=True), nullable=True),
+        Column("finished_at", DateTime(timezone=True), nullable=True),
+        Index("ix_docket_document_jobs_case_id", "case_id"),
+        Index("ix_docket_document_jobs_status", "status"),
+    )
+
+    docket_document_items = Table(
+        "docket_document_items",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("job_id", Integer, ForeignKey("docket_document_jobs.id"), nullable=False),
+        Column("document_number", Text, nullable=True),
+        Column("description", Text, nullable=True),
+        Column("source_url", Text, nullable=False),
+        Column("status", Text, nullable=False, default="queued"),
+        Column("file_path", Text, nullable=True),
+        Column("content_type", Text, nullable=True),
+        Column("bytes", Integer, nullable=True),
+        Column("downloaded_at", DateTime(timezone=True), nullable=True),
+        Column("error", Text, nullable=True),
+        Index("ix_docket_document_items_job_id", "job_id"),
+        Index("ix_docket_document_items_status", "status"),
+    )
+
     pcl_remote_jobs = Table(
         "pcl_remote_jobs",
         metadata,
@@ -576,6 +625,8 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         "pcl_cases": pcl_cases,
         "pcl_case_fields": pcl_case_fields,
         "pcl_parties": pcl_parties,
+        "docket_document_jobs": docket_document_jobs,
+        "docket_document_items": docket_document_items,
         "pcl_receipts": pcl_receipts,
         "pcl_batch_receipts": pcl_batch_receipts,
         "docket_enrichment_jobs": docket_enrichment_jobs,

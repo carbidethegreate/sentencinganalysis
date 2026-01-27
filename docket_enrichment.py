@@ -164,6 +164,7 @@ class DocketEnrichmentWorker:
             )
             return
         if raw_html and _looks_like_docket_shell(raw_html):
+            fetch_result = _with_form_details(fetch_result, raw_html)
             self._store_docket_payload(
                 job,
                 case_row,
@@ -846,6 +847,24 @@ def _format_pacer_error(message: str, fetch_result: DocketFetchResult) -> str:
     if not details:
         return message
     return f"{message} ({' ; '.join(details)})"
+
+
+def _with_form_details(
+    fetch_result: DocketFetchResult, html_text: str
+) -> DocketFetchResult:
+    action, payload, _ = _select_docket_form(html_text)
+    if not action or not payload:
+        return fetch_result
+    resolved = _resolve_form_action(fetch_result.url, action)
+    truncated = _truncate_map(payload, 200)
+    return DocketFetchResult(
+        url=fetch_result.url,
+        status_code=fetch_result.status_code,
+        content_type=fetch_result.content_type,
+        body=fetch_result.body,
+        form_action=resolved,
+        form_payload=truncated,
+    )
 
 
 def _truncate_text(value: str, max_len: int) -> str:

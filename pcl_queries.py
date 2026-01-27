@@ -314,6 +314,7 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
         case_fields = _load_case_fields(conn, tables, detail)
         docket_jobs = _load_docket_jobs(conn, tables, detail)
         docket_estimate = _estimate_docket_cost(conn, tables, detail)
+        document_jobs = _load_document_jobs(conn, tables, detail)
         sentencing_detail = _load_sentencing_detail(conn, tables, detail)
 
     detail["raw_payloads"] = raw_payloads
@@ -321,6 +322,7 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
     detail["case_fields"] = case_fields
     detail["docket_jobs"] = docket_jobs
     detail["docket_estimate"] = docket_estimate
+    detail["document_jobs"] = document_jobs
     detail.update(sentencing_detail)
     return detail
 
@@ -480,6 +482,44 @@ def _load_docket_jobs(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, An
         .limit(25)
     )
     return [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+
+def _load_document_jobs(conn, tables, detail: Dict[str, Any]) -> List[Dict[str, Any]]:
+    jobs_table = tables.get("docket_document_jobs")
+    items_table = tables.get("docket_document_items")
+    case_id = detail.get("id")
+    if jobs_table is None or not case_id:
+        return []
+    job_rows = (
+        conn.execute(
+            select(jobs_table)
+            .where(jobs_table.c.case_id == case_id)
+            .order_by(desc(jobs_table.c.created_at), desc(jobs_table.c.id))
+            .limit(25)
+        )
+        .mappings()
+        .all()
+    )
+    jobs = [dict(row) for row in job_rows]
+    if not items_table or not jobs:
+        return jobs
+    job_ids = [job["id"] for job in jobs]
+    item_rows = (
+        conn.execute(
+            select(items_table)
+            .where(items_table.c.job_id.in_(job_ids))
+            .order_by(items_table.c.id.asc())
+        )
+        .mappings()
+        .all()
+    )
+    items_by_job: Dict[int, List[Dict[str, Any]]] = {}
+    for row in item_rows:
+        item = dict(row)
+        items_by_job.setdefault(item["job_id"], []).append(item)
+    for job in jobs:
+        job["items"] = items_by_job.get(job["id"], [])
+    return jobs
 
 
 def _estimate_docket_cost(conn, tables, detail: Dict[str, Any]) -> Dict[str, Any]:

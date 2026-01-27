@@ -109,6 +109,7 @@ from pacer_env import (
     validate_pacer_environment_config,
 )
 from docket_enrichment import DocketEnrichmentWorker
+from docket_documents import DocketDocumentWorker
 from pcl_batch import CRIMINAL_CASE_TYPES, PclBatchPlanner, PclBatchWorker
 from pcl_client import PclApiError, PclClient, PclJsonResponse
 from pcl_models import build_pcl_tables
@@ -2247,6 +2248,69 @@ def create_app() -> Flask:
                 updated_at=now,
             )
         )
+
+    def _extract_document_links_from_case_fields(
+        case_fields: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        entries = []
+        for field in case_fields or []:
+            if field.get("field_name") == "docket_entries" and field.get("field_value_json"):
+                if isinstance(field["field_value_json"], list):
+                    entries = field["field_value_json"]
+                break
+        items: List[Dict[str, Any]] = []
+        seen = set()
+        for entry in entries or []:
+            links = entry.get("documentLinks") or []
+            for link in links:
+                href = (link.get("href") or "").strip()
+                if not href or href in seen:
+                    continue
+                seen.add(href)
+                items.append(
+                    {
+                        "document_number": entry.get("documentNumber"),
+                        "description": entry.get("description"),
+                        "source_url": href,
+                    }
+                )
+        return items
+
+    def _queue_document_job(
+        conn: Any, case_id: int, items: List[Dict[str, Any]]
+    ) -> int:
+        jobs_table = pcl_tables.get("docket_document_jobs")
+        items_table = pcl_tables.get("docket_document_items")
+        if jobs_table is None or items_table is None:
+            raise ValueError("Document download tables are not available.")
+        now = datetime.utcnow()
+        result = conn.execute(
+            insert(jobs_table).values(
+                case_id=case_id,
+                status="queued",
+                documents_total=len(items),
+                documents_downloaded=0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        job_id = int(result.inserted_primary_key[0])
+        if items:
+            payload = []
+            for item in items:
+                payload.append(
+                    {
+                        "job_id": job_id,
+                        "document_number": item.get("document_number"),
+                        "description": item.get("description"),
+                        "source_url": item.get("source_url"),
+                        "status": "queued",
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+            conn.execute(insert(items_table), payload)
+        return job_id
 
     def _upsert_pcl_party(
         conn: Any,
@@ -8222,6 +8286,71 @@ def create_app() -> Flask:
             )
         flash("AI notes saved.", "success")
         return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#ai-notes")
+
+    @app.post("/admin/pcl/cases/<int:case_id>/docket-documents/queue")
+    @admin_required
+    def admin_pcl_case_queue_documents(case_id: int):
+        require_csrf()
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+        items = _extract_document_links_from_case_fields(detail.get("case_fields") or [])
+        if not items:
+            flash("No document links found in docket entries.", "error")
+            return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
+        with engine.begin() as conn:
+            try:
+                job_id = _queue_document_job(conn, case_id, items)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
+        flash(f"Queued document download job {job_id}.", "success")
+        return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
+
+    @app.post("/admin/pcl/cases/<int:case_id>/docket-documents/download-now")
+    @admin_required
+    def admin_pcl_case_download_documents_now(case_id: int):
+        require_csrf()
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+        items = _extract_document_links_from_case_fields(detail.get("case_fields") or [])
+        if not items:
+            flash("No document links found in docket entries.", "error")
+            return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
+        documents_dir = os.environ.get("PACER_DOCUMENTS_DIR")
+        with engine.begin() as conn:
+            try:
+                job_id = _queue_document_job(conn, case_id, items)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
+        worker = DocketDocumentWorker(
+            engine,
+            pcl_tables,
+            http_client=pcl_background_http_client,
+            logger=app.logger,
+            documents_dir=documents_dir,
+        )
+        processed = worker.run_job(job_id, max_docs=50)
+        flash(f"Downloaded {processed} document(s) for job {job_id}.", "success")
+        return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
+
+    @app.post("/admin/docket-documents/run/<int:job_id>")
+    @admin_required
+    def admin_run_document_job(job_id: int):
+        require_csrf()
+        documents_dir = os.environ.get("PACER_DOCUMENTS_DIR")
+        worker = DocketDocumentWorker(
+            engine,
+            pcl_tables,
+            http_client=pcl_background_http_client,
+            logger=app.logger,
+            documents_dir=documents_dir,
+        )
+        processed = worker.run_job(job_id, max_docs=50)
+        flash(f"Ran document job {job_id}. Downloaded {processed} document(s).", "success")
+        return redirect(request.referrer or url_for("admin_docket_enrichment_dashboard"))
 
     @app.post("/admin/pcl/cases/<int:case_id>/docket-clear")
     @admin_required
