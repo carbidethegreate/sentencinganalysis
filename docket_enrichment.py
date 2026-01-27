@@ -366,7 +366,25 @@ class DocketEnrichmentWorker:
                             if multistep_html:
                                 return multistep_html
                         return multistep
+                    direct = _submit_docket_report_direct(
+                        self._http_client,
+                        case_row["case_link"],
+                        case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
+                        output_format="html",
+                    )
+                    if direct is not None and not _looks_like_docket_shell(
+                        direct.body.decode("utf-8", errors="replace")
+                    ):
+                        return direct
                 return submit
+            direct = _submit_docket_report_direct(
+                self._http_client,
+                case_row["case_link"],
+                case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
+                output_format="html",
+            )
+            if direct is not None:
+                return direct
         return DocketFetchResult(
             url=url,
             status_code=response.status_code,
@@ -1222,6 +1240,57 @@ def _extract_form_enctype(form_html: str) -> Optional[str]:
     if enctype:
         return enctype
     return None
+
+
+def _submit_docket_report_direct(
+    http_client: Any,
+    case_link: str,
+    *,
+    case_id: Optional[str],
+    output_format: str = "html",
+) -> Optional[DocketFetchResult]:
+    if not case_link or not case_id:
+        return None
+    parsed = urlparse(case_link)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    action_url = f"{parsed.scheme}://{parsed.netloc}/cgi-bin/DktRpt.pl?1-L_1_0-1"
+    payload = {
+        "all_case_ids": case_id,
+        "sort1": "oldest date first",
+        "date_range_type": "Filed",
+        "output_format": output_format,
+        "case_num": " ",
+        "date_from": "1/1/1960",
+        "date_to": "",
+        "documents_numbered_from_": "",
+        "documents_numbered_to_": "",
+        "list_of_parties_and_counsel": "on",
+        "terminated_parties": "on",
+        "pdf_header": "1",
+    }
+    boundary = _make_multipart_boundary()
+    encoded = _encode_multipart_form(payload, boundary)
+    response = _request_with_login_retry(
+        http_client,
+        "POST",
+        action_url,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Referer": case_link,
+            "Accept": "application/xml, text/html",
+        },
+        data=encoded,
+        include_cookie=True,
+    )
+    return DocketFetchResult(
+        url=action_url,
+        status_code=response.status_code,
+        content_type=response.headers.get("Content-Type", ""),
+        body=response.body,
+        form_action=action_url,
+        form_payload=payload,
+    )
 
 
 def _make_multipart_boundary() -> str:
