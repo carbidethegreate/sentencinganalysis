@@ -979,17 +979,24 @@ def _submit_docket_form(
         payload.setdefault("case_number_full", case_number_full)
         payload.setdefault("case_number", case_number_full)
         payload.setdefault("case_number_text_area_0", case_number_full)
+        payload.setdefault("case_num", case_number_full)
     if formatted_case_number:
         payload["case_num"] = formatted_case_number
         payload["case_number_text_area_0"] = formatted_case_number
     if case_id and "case_number_text_area_0" not in payload:
         payload["case_number_text_area_0"] = case_id
+    if "case_number_text_area_0" not in payload and case_number:
+        payload["case_number_text_area_0"] = case_number
+    if case_id and "all_case_ids" not in payload:
+        payload["all_case_ids"] = case_id
     payload.setdefault("date_range_type", "Filed")
     payload.setdefault("date_from", "1/1/1960")
     payload.setdefault("date_to", "")
+    payload.setdefault("documents_numbered_from_", "")
+    payload.setdefault("documents_numbered_to_", "")
     payload.setdefault("report_type", "docket")
-    payload.setdefault("sort1", "docnum")
-    payload.setdefault("sort2", "filingdate")
+    payload.setdefault("sort1", "oldest date first")
+    payload.setdefault("sort2", "")
 
     output_format = payload.get("output_format", "")
     if output_format:
@@ -1009,6 +1016,7 @@ def _submit_docket_form(
             local_payload["outputXML_TXT"] = "HTML"
             local_payload["output_format_type"] = "html"
             local_payload["format"] = "html"
+            local_payload["output"] = "html"
         local_payload.setdefault("report_type", "docket")
         action_url = _resolve_form_action(base_url, action)
         encoded = urlencode(local_payload).encode("utf-8")
