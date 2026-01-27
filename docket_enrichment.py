@@ -464,6 +464,30 @@ class DocketEnrichmentWorker:
                     field_value_json=None,
                     now=now,
                 )
+                if force_store_html and html_body:
+                    action, payload, _ = _select_docket_form(html_body)
+                    if not action and not payload:
+                        action, payload, _ = _select_any_form(html_body)
+                    if action:
+                        _upsert_case_field(
+                            conn,
+                            pcl_case_fields,
+                            case_row["id"],
+                            "docket_form_action",
+                            field_value_text=_resolve_form_action(fetch_result.url, action),
+                            field_value_json=None,
+                            now=now,
+                        )
+                    if payload:
+                        _upsert_case_field(
+                            conn,
+                            pcl_case_fields,
+                            case_row["id"],
+                            "docket_form_payload",
+                            field_value_text=None,
+                            field_value_json=_truncate_map(payload, 200),
+                            now=now,
+                        )
                 if header_fields:
                     header_text = _flatten_header_fields(header_fields)
                     _upsert_case_field(

@@ -114,7 +114,7 @@
         <p class="small">Every field saved as a searchable value.</p>
       </div>
     </div>
-    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None, header_fields=None) %}
+    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None, header_fields=None, form_action=None, form_payload=None) %}
     {% set ai = namespace(review=None, case_prompt=None, system_prompt=None) %}
     {% if case_detail.case_fields %}
       {% for field in case_detail.case_fields %}
@@ -134,6 +134,10 @@
           {% set docket.entries = field.field_value_json %}
         {% elif field.field_name == 'docket_header_fields' %}
           {% set docket.header_fields = field.field_value_json %}
+        {% elif field.field_name == 'docket_form_action' %}
+          {% set docket.form_action = field.field_value_text %}
+        {% elif field.field_name == 'docket_form_payload' %}
+          {% set docket.form_payload = field.field_value_json %}
         {% elif field.field_name == 'case_ai_review' %}
           {% set ai.review = field.field_value_text %}
         {% elif field.field_name == 'case_ai_prompt' %}
@@ -143,7 +147,8 @@
         {% endif %}
       {% endfor %}
     {% endif %}
-    {% set docket_html_text = docket.html_preview or (docket.html.text if docket.html and docket.html.text) %}
+    {% set docket_html_raw = docket.html.text if docket.html and docket.html.text %}
+    {% set docket_html_text = docket_html_raw or docket.html_preview %}
     {% set docket_is_html = docket_html_text %}
     {% set docket_is_login = docket_html_text and ('pacer.login.uscourts.gov' in docket_html_text or 'csologin' in docket_html_text) %}
     {% if docket.text or docket.preview or docket.entries or docket_is_html %}
@@ -173,6 +178,17 @@
           <p class="small">PACER returned a login redirect. Docket text was not captured.</p>
         {% elif docket_is_html %}
           <p class="small">PACER returned a docket request form. Docket text was not captured.</p>
+          {% if docket.form_action or docket.form_payload %}
+            <details class="pcl-detail-card" style="margin-top: 12px;">
+              <summary class="pcl-detail-summary">Show docket form details</summary>
+              {% if docket.form_action %}
+                <pre class="code-block">form_action: {{ docket.form_action }}</pre>
+              {% endif %}
+              {% if docket.form_payload %}
+                <pre class="code-block">{{ docket.form_payload | tojson(indent=2) }}</pre>
+              {% endif %}
+            </details>
+          {% endif %}
         {% else %}
           <p class="small">Docket text stored without preview.</p>
         {% endif %}
@@ -219,7 +235,12 @@
             </details>
           </details>
         {% endif %}
-        {% if docket_is_html %}
+        {% if docket_is_html and docket_html_raw %}
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show raw PACER response (full)</summary>
+            <pre class="code-block">{{ docket_html_raw }}</pre>
+          </details>
+        {% elif docket_is_html %}
           <details class="pcl-detail-card" style="margin-top: 12px;">
             <summary class="pcl-detail-summary">Show raw PACER response</summary>
             <pre class="code-block">{{ docket_html_text }}</pre>
