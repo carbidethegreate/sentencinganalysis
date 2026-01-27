@@ -157,7 +157,10 @@ class DocketEnrichmentWorker:
             )
             self._mark_failed(
                 job,
-                "PACER login redirect; token expired or missing.",
+                _format_pacer_error(
+                    "PACER login redirect; token expired or missing.",
+                    fetch_result,
+                ),
             )
             return
         if raw_html and _looks_like_docket_shell(raw_html):
@@ -174,7 +177,10 @@ class DocketEnrichmentWorker:
             )
             self._mark_failed(
                 job,
-                "PACER returned a docket form instead of the docket report.",
+                _format_pacer_error(
+                    "PACER returned a docket form instead of the docket report.",
+                    fetch_result,
+                ),
             )
             return
         if not job.get("include_docket_text"):
@@ -828,6 +834,18 @@ def _flatten_header_fields(header_fields: Dict[str, Any]) -> str:
         for key, value in selection.items():
             parts.append(f"{key}: {value}")
     return " | ".join(parts)
+
+
+def _format_pacer_error(message: str, fetch_result: DocketFetchResult) -> str:
+    details = []
+    if fetch_result.form_action:
+        details.append(f"form_action={fetch_result.form_action}")
+    if fetch_result.form_payload:
+        keys = sorted(fetch_result.form_payload.keys())
+        details.append(f"form_keys={','.join(keys[:12])}")
+    if not details:
+        return message
+    return f"{message} ({' ; '.join(details)})"
 
 
 def _truncate_text(value: str, max_len: int) -> str:

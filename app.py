@@ -8223,6 +8223,39 @@ def create_app() -> Flask:
         flash("AI notes saved.", "success")
         return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#ai-notes")
 
+    @app.post("/admin/pcl/cases/<int:case_id>/docket-clear")
+    @admin_required
+    def admin_pcl_case_docket_clear(case_id: int):
+        require_csrf()
+        detail = get_case_detail(engine, pcl_tables, case_id)
+        if not detail:
+            abort(404)
+        pcl_case_fields = pcl_tables.get("pcl_case_fields")
+        if pcl_case_fields is None:
+            flash("Docket fields table is unavailable.", "error")
+            return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-jobs")
+        docket_field_names = [
+            "docket_text",
+            "docket_text_preview",
+            "docket_html",
+            "docket_html_preview",
+            "docket_entries",
+            "docket_source_url",
+            "docket_content_type",
+            "docket_fetched_at",
+            "docket_payload_format",
+            "docket_header_fields",
+        ]
+        with engine.begin() as conn:
+            conn.execute(
+                delete(pcl_case_fields).where(
+                    (pcl_case_fields.c.case_id == case_id)
+                    & (pcl_case_fields.c.field_name.in_(docket_field_names))
+                )
+            )
+        flash("Docket fields cleared.", "success")
+        return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-jobs")
+
     @app.get("/admin/pcl/cases/<int:case_id>/sentencing-events/new")
     @admin_required
     def admin_sentencing_event_new(case_id: int):

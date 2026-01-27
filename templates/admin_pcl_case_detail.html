@@ -153,6 +153,12 @@
         {% if docket.updated_at %}
           <p class="small">Updated {{ docket.updated_at.isoformat() }}</p>
         {% endif %}
+        <form method="post" action="{{ url_for('admin_pcl_case_docket_clear', case_id=case_detail.id) }}" style="margin: 8px 0 12px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="secondary" type="submit" onclick="return confirm('Clear docket fields for this case?')">
+            Clear docket fields
+          </button>
+        </form>
         {% if docket.header_fields %}
           <details class="pcl-detail-card" style="margin-top: 12px;">
             <summary class="pcl-detail-summary">Show docket header fields</summary>
