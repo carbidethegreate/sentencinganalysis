@@ -114,7 +114,7 @@
         <p class="small">Every field saved as a searchable value.</p>
       </div>
     </div>
-    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None, header_fields=None, form_action=None, form_payload=None) %}
+    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None, header_fields=None, form_action=None, form_payload=None, request_debug=None) %}
     {% set ai = namespace(review=None, case_prompt=None, system_prompt=None) %}
     {% if case_detail.case_fields %}
       {% for field in case_detail.case_fields %}
@@ -138,6 +138,8 @@
           {% set docket.form_action = field.field_value_text %}
         {% elif field.field_name == 'docket_form_payload' %}
           {% set docket.form_payload = field.field_value_json %}
+        {% elif field.field_name == 'docket_request_debug' %}
+          {% set docket.request_debug = field.field_value_json %}
         {% elif field.field_name == 'case_ai_review' %}
           {% set ai.review = field.field_value_text %}
         {% elif field.field_name == 'case_ai_prompt' %}
@@ -187,6 +189,12 @@
               {% if docket.form_payload %}
                 <pre class="code-block">{{ docket.form_payload | tojson(indent=2) }}</pre>
               {% endif %}
+            </details>
+          {% endif %}
+          {% if docket.request_debug %}
+            <details class="pcl-detail-card" style="margin-top: 12px;">
+              <summary class="pcl-detail-summary">Show docket request debug</summary>
+              <pre class="code-block">{{ docket.request_debug | tojson(indent=2) }}</pre>
             </details>
           {% endif %}
         {% else %}
