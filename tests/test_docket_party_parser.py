@@ -1,6 +1,10 @@
 import unittest
 
-from docket_enrichment import _extract_docket_header_fields_from_html
+from docket_enrichment import (
+    _extract_docket_entries_from_html,
+    _extract_docket_header_fields_from_html,
+    _strip_html,
+)
 
 
 SAMPLE_DOCKET_HTML = """
@@ -115,6 +119,12 @@ SAMPLE_DOCKET_HTML = """
 
 
 class DocketPartyParserTests(unittest.TestCase):
+    def test_strip_html_handles_blank_fragment_without_exception(self):
+        self.assertEqual(_strip_html("   \n\t  "), "")
+
+    def test_extract_docket_entries_handles_blank_fragment_without_exception(self):
+        self.assertEqual(_extract_docket_entries_from_html(""), [])
+
     def test_extracts_parties_counsel_counts_and_dispositions(self):
         fields = _extract_docket_header_fields_from_html(SAMPLE_DOCKET_HTML)
         parties = fields.get("parties") or []

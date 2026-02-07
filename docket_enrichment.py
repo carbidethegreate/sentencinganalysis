@@ -11,6 +11,7 @@ from urllib.parse import urlencode, urljoin, urlparse
 from xml.etree import ElementTree
 
 from lxml import html as lxml_html
+from lxml import etree as lxml_etree
 from sqlalchemy import Table, select, update
 
 
@@ -776,7 +777,7 @@ def _extract_docket_entries_from_html(
 ) -> List[Dict[str, Any]]:
     try:
         tree = lxml_html.fromstring(html_text)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, lxml_etree.ParserError):
         return []
 
     rows = tree.xpath(
@@ -880,11 +881,14 @@ def _extract_docket_xml(xml_text: str) -> str:
 
 
 def _strip_html(raw: str) -> str:
-    if not raw:
+    if raw is None:
+        return ""
+    raw = str(raw)
+    if not raw.strip():
         return ""
     try:
         tree = lxml_html.fromstring(raw)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, lxml_etree.ParserError):
         cleaned = re.sub(r"<script\\b[^>]*>.*?</script>", " ", raw, flags=re.IGNORECASE | re.DOTALL)
         cleaned = re.sub(r"<style\\b[^>]*>.*?</style>", " ", cleaned, flags=re.IGNORECASE | re.DOTALL)
         cleaned = re.sub(r"<noscript\\b[^>]*>.*?</noscript>", " ", cleaned, flags=re.IGNORECASE | re.DOTALL)
@@ -972,7 +976,7 @@ def _extract_docket_header_fields_from_html(html_text: str) -> Dict[str, Any]:
         return {}
     try:
         tree = lxml_html.fromstring(html_text)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, lxml_etree.ParserError):
         return {}
     header_fields: Dict[str, Any] = {}
     centers = tree.xpath("//center")
