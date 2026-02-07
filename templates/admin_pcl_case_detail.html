@@ -114,7 +114,7 @@
         <p class="small">Every field saved as a searchable value.</p>
       </div>
     </div>
-    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None, header_fields=None, form_action=None, form_payload=None, request_debug=None) %}
+    {% set docket = namespace(text=None, preview=None, entries=None, updated_at=None, html=None, html_preview=None, header_fields=None, form_action=None, form_payload=None, request_debug=None, parties=None, attorneys=None, party_summary=None) %}
     {% set ai = namespace(review=None, case_prompt=None, system_prompt=None) %}
     {% if case_detail.case_fields %}
       {% for field in case_detail.case_fields %}
@@ -134,6 +134,12 @@
           {% set docket.entries = field.field_value_json %}
         {% elif field.field_name == 'docket_header_fields' %}
           {% set docket.header_fields = field.field_value_json %}
+        {% elif field.field_name == 'docket_parties' %}
+          {% set docket.parties = field.field_value_json %}
+        {% elif field.field_name == 'docket_attorneys' %}
+          {% set docket.attorneys = field.field_value_json %}
+        {% elif field.field_name == 'docket_party_summary' %}
+          {% set docket.party_summary = field.field_value_text %}
         {% elif field.field_name == 'docket_form_action' %}
           {% set docket.form_action = field.field_value_text %}
         {% elif field.field_name == 'docket_form_payload' %}
@@ -154,6 +160,8 @@
     {% set docket_is_html = docket_html_text %}
     {% set docket_is_login = docket_html_text and ('pacer.login.uscourts.gov' in docket_html_text or 'csologin' in docket_html_text) %}
     {% set docket_entry_count = docket.entries|length if docket.entries else 0 %}
+    {% set docket_party_count = docket.parties|length if docket.parties else 0 %}
+    {% set docket_attorney_count = docket.attorneys|length if docket.attorneys else 0 %}
     {% set assigned_judges = docket.header_fields.assigned_to if docket.header_fields and docket.header_fields.assigned_to else None %}
     {% set referred_judges = docket.header_fields.referred_to if docket.header_fields and docket.header_fields.referred_to else None %}
     {% if docket.text or docket.preview or docket.entries or docket_is_html %}
@@ -169,12 +177,24 @@
             Clear docket fields
           </button>
         </form>
-        {% if docket.entries or assigned_judges or referred_judges %}
+        {% if docket.entries or docket.parties or assigned_judges or referred_judges %}
           <div class="docket-summary">
             <div class="docket-summary__item">
               <span class="docket-summary__label">Entries</span>
               <span class="docket-summary__value">{{ docket_entry_count }}</span>
             </div>
+            {% if docket.parties %}
+              <div class="docket-summary__item">
+                <span class="docket-summary__label">Parties</span>
+                <span class="docket-summary__value">{{ docket_party_count }}</span>
+              </div>
+            {% endif %}
+            {% if docket.attorneys %}
+              <div class="docket-summary__item">
+                <span class="docket-summary__label">Attorneys</span>
+                <span class="docket-summary__value">{{ docket_attorney_count }}</span>
+              </div>
+            {% endif %}
             {% if assigned_judges %}
               <div class="docket-summary__item docket-summary__item--wide">
                 <span class="docket-summary__label">Assigned judges</span>
@@ -196,6 +216,117 @@
               </div>
             {% endif %}
           </div>
+        {% endif %}
+        {% if docket.parties %}
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show parties, counsel, and count/disposition details</summary>
+            {% for party in docket.parties %}
+              <div class="pcl-detail-card" style="margin-top: 12px;">
+                <h4 style="margin: 0 0 8px;">{{ party.party_heading or party.party_type or 'Party' }}</h4>
+                <dl class="pcl-detail-list">
+                  <div><dt>Name</dt><dd>{{ party.name or "—" }}</dd></div>
+                  {% if party.aliases %}
+                    <div><dt>Aliases</dt><dd>{{ party.aliases | join(', ') }}</dd></div>
+                  {% endif %}
+                  {% if party.highest_offense_level_opening %}
+                    <div><dt>Highest offense level (opening)</dt><dd>{{ party.highest_offense_level_opening }}</dd></div>
+                  {% endif %}
+                  {% if party.highest_offense_level_terminated %}
+                    <div><dt>Highest offense level (terminated)</dt><dd>{{ party.highest_offense_level_terminated }}</dd></div>
+                  {% endif %}
+                </dl>
+                {% if party.represented_by %}
+                  <h5 style="margin: 10px 0 6px;">Represented by</h5>
+                  <div class="table-wrapper">
+                    <table class="table">
+                      <thead>
+                        <tr>
+                          <th>Attorney</th>
+                          <th>Organization / details</th>
+                          <th>Contact</th>
+                          <th>Roles / designation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for attorney in party.represented_by %}
+                          <tr>
+                            <td>{{ attorney.name or "—" }}</td>
+                            <td>
+                              {% if attorney.details %}
+                                {{ attorney.details | join(' | ') }}
+                              {% elif attorney.organization %}
+                                {{ attorney.organization }}
+                              {% else %}
+                                —
+                              {% endif %}
+                            </td>
+                            <td>
+                              {% set contact = [] %}
+                              {% if attorney.emails %}{% set _ = contact.append('Email: ' ~ (attorney.emails | join(', '))) %}{% endif %}
+                              {% if attorney.phones %}{% set _ = contact.append('Phone: ' ~ (attorney.phones | join(', '))) %}{% endif %}
+                              {% if attorney.faxes %}{% set _ = contact.append('Fax: ' ~ (attorney.faxes | join(', '))) %}{% endif %}
+                              {{ contact | join(' | ') if contact else '—' }}
+                            </td>
+                            <td>
+                              {% set role_parts = [] %}
+                              {% if attorney.roles %}{% set _ = role_parts.append(attorney.roles | join(', ')) %}{% endif %}
+                              {% if attorney.designations %}{% set _ = role_parts.append('Designation: ' ~ (attorney.designations | join(', '))) %}{% endif %}
+                              {{ role_parts | join(' | ') if role_parts else '—' }}
+                            </td>
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% endif %}
+                {% if party.pending_counts %}
+                  <h5 style="margin: 10px 0 6px;">Pending counts</h5>
+                  <div class="table-wrapper">
+                    <table class="table">
+                      <thead>
+                        <tr><th>Count</th><th>Disposition</th></tr>
+                      </thead>
+                      <tbody>
+                        {% for item in party.pending_counts %}
+                          <tr><td>{{ item.count or "—" }}</td><td>{{ item.disposition or "—" }}</td></tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% endif %}
+                {% if party.terminated_counts %}
+                  <h5 style="margin: 10px 0 6px;">Terminated counts</h5>
+                  <div class="table-wrapper">
+                    <table class="table">
+                      <thead>
+                        <tr><th>Count</th><th>Disposition</th></tr>
+                      </thead>
+                      <tbody>
+                        {% for item in party.terminated_counts %}
+                          <tr><td>{{ item.count or "—" }}</td><td>{{ item.disposition or "—" }}</td></tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% endif %}
+                {% if party.complaints %}
+                  <h5 style="margin: 10px 0 6px;">Complaints</h5>
+                  <div class="table-wrapper">
+                    <table class="table">
+                      <thead>
+                        <tr><th>Complaint</th><th>Disposition</th></tr>
+                      </thead>
+                      <tbody>
+                        {% for item in party.complaints %}
+                          <tr><td>{{ item.count or "—" }}</td><td>{{ item.disposition or "—" }}</td></tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </details>
         {% endif %}
         {% if docket.header_fields %}
           <details class="pcl-detail-card" style="margin-top: 12px;">

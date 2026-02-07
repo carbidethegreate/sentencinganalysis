@@ -99,7 +99,7 @@ def _run_workers_once(app: Any) -> int:
         logger=app.logger,
         endpoint_available=True,
         http_client=app.pcl_background_http_client,
-        docket_output=os.environ.get("PACER_DOCKET_OUTPUT", "xml"),
+        docket_output=os.environ.get("PACER_DOCKET_OUTPUT", "html"),
         docket_url_template=os.environ.get("PACER_DOCKET_URL_TEMPLATE"),
     )
     total_processed += docket_worker.run_once(max_jobs=max_jobs)

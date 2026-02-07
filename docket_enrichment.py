@@ -48,7 +48,7 @@ class DocketEnrichmentWorker:
         now_fn: Callable[[], datetime] = None,
         endpoint_available: bool = False,
         http_client: Optional[Any] = None,
-        docket_output: str = "xml",
+        docket_output: str = "html",
         docket_url_template: Optional[str] = None,
     ) -> None:
         self._engine = engine
@@ -330,6 +330,7 @@ class DocketEnrichmentWorker:
                 case_office=case_row.get("case_office"),
                 case_year=case_row.get("case_year"),
                 case_type=case_row.get("case_type"),
+                preferred_output_format=self._docket_output,
             )
             if submit:
                 if _looks_like_docket_shell(
@@ -350,12 +351,15 @@ class DocketEnrichmentWorker:
                         case_year=case_row.get("case_year"),
                         case_type=case_row.get("case_type"),
                         case_number=case_row.get("case_number"),
-                        output_format="xml",
+                        output_format=self._docket_output,
                     )
                     if multistep:
                         if _looks_like_docket_shell(
                             multistep.body.decode("utf-8", errors="replace")
                         ):
+                            alternate_output = (
+                                "xml" if str(self._docket_output).lower() == "html" else "html"
+                            )
                             multistep_html = _fetch_docket_report_multistep(
                                 self._http_client,
                                 case_row["case_link"],
@@ -364,7 +368,7 @@ class DocketEnrichmentWorker:
                                 case_year=case_row.get("case_year"),
                                 case_type=case_row.get("case_type"),
                                 case_number=case_row.get("case_number"),
-                                output_format="html",
+                                output_format=alternate_output,
                             )
                             if multistep_html:
                                 return multistep_html
@@ -567,6 +571,41 @@ class DocketEnrichmentWorker:
                         field_value_json=header_fields,
                         now=now,
                     )
+                parties = (
+                    header_fields.get("parties")
+                    if isinstance(header_fields, dict)
+                    and isinstance(header_fields.get("parties"), list)
+                    else []
+                )
+                attorneys = _extract_attorneys_from_parties(parties) if parties else []
+                party_summary = _flatten_parties_for_search(parties) if parties else ""
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_parties",
+                    field_value_text=None,
+                    field_value_json=parties or None,
+                    now=now,
+                )
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_attorneys",
+                    field_value_text=None,
+                    field_value_json=attorneys or None,
+                    now=now,
+                )
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_party_summary",
+                    field_value_text=party_summary or None,
+                    field_value_json=None,
+                    now=now,
+                )
                 if fetch_result.request_debug and os.environ.get("PACER_DOCKET_DEBUG"):
                     _upsert_case_field(
                         conn,
@@ -949,7 +988,434 @@ def _extract_docket_header_fields_from_html(html_text: str) -> Dict[str, Any]:
     criteria = _extract_selection_criteria(tree)
     if criteria:
         header_fields["selection_criteria"] = criteria
+    parties = _extract_party_sections(tree)
+    if parties:
+        header_fields["parties"] = parties
+        header_fields["party_count"] = len(parties)
+        header_fields["attorney_count"] = sum(
+            len(party.get("represented_by") or []) for party in parties
+        )
     return header_fields
+
+
+_PARTY_SECTION_MAP = {
+    "pending counts": "pending_counts",
+    "terminated counts": "terminated_counts",
+    "complaints": "complaints",
+    "highest offense level (opening)": "highest_offense_level_opening",
+    "highest offense level (terminated)": "highest_offense_level_terminated",
+}
+
+_PARTY_ROLE_PREFIXES = (
+    "defendant",
+    "plaintiff",
+    "petitioner",
+    "respondent",
+    "appellant",
+    "appellee",
+    "movant",
+    "claimant",
+    "intervenor",
+    "intervenor defendant",
+    "crossclaim defendant",
+    "cross claimant",
+    "counter claimant",
+    "debtor",
+    "creditor",
+    "trustee",
+    "garnishee",
+    "interested party",
+    "in re",
+)
+
+
+def _extract_party_sections(tree: Any) -> List[Dict[str, Any]]:
+    rows = tree.xpath("//tr")
+    if not rows:
+        return []
+    parties: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+    active_section: Optional[str] = None
+    for row in rows:
+        row_text = _normalize_html_text(row)
+        lowered_row = row_text.lower()
+        if ("docket text" in lowered_row and "date filed" in lowered_row) or (
+            "docket text" in lowered_row and "#" in lowered_row
+        ):
+            break
+        section_heading = _extract_party_section_heading(row)
+        if section_heading:
+            if current is not None:
+                active_section = section_heading
+            continue
+        party_heading = _extract_party_heading(row)
+        if party_heading:
+            if current is not None:
+                finalized = _finalize_party_section(current)
+                if finalized:
+                    parties.append(finalized)
+            current = _new_party_section(party_heading)
+            active_section = None
+            continue
+        if current is None:
+            continue
+
+        represented_by_index = _represented_by_index(row)
+        if represented_by_index is not None:
+            _apply_represented_by_row(current, row, represented_by_index)
+            continue
+
+        if active_section in {"pending_counts", "terminated_counts", "complaints"}:
+            item = _extract_disposition_row(row)
+            if item:
+                current[active_section].append(item)
+            continue
+
+        if active_section in {
+            "highest_offense_level_opening",
+            "highest_offense_level_terminated",
+        }:
+            value = _extract_first_cell_text(row)
+            if value:
+                current[active_section] = value
+                active_section = None
+            continue
+
+        _merge_party_identity(current, row)
+
+    if current is not None:
+        finalized = _finalize_party_section(current)
+        if finalized:
+            parties.append(finalized)
+    return parties
+
+
+def _extract_party_heading(row: Any) -> Optional[str]:
+    underlined = [_normalize_html_text(node) for node in row.xpath(".//u")]
+    for label in underlined:
+        normalized = _normalize_party_label(label)
+        if not normalized:
+            continue
+        if normalized in _PARTY_SECTION_MAP:
+            continue
+        if normalized == "disposition":
+            continue
+        if normalized.startswith("highest offense level"):
+            continue
+        if re.search(r"\(\d+\)\s*$", normalized):
+            return label
+        if any(normalized.startswith(prefix) for prefix in _PARTY_ROLE_PREFIXES):
+            return label
+    return None
+
+
+def _extract_party_section_heading(row: Any) -> Optional[str]:
+    underlined = [_normalize_html_text(node) for node in row.xpath(".//u")]
+    for label in underlined:
+        normalized = _normalize_party_label(label)
+        if normalized in _PARTY_SECTION_MAP:
+            return _PARTY_SECTION_MAP[normalized]
+    return None
+
+
+def _normalize_party_label(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").replace("\xa0", " ")).strip().lower()
+
+
+def _new_party_section(heading: str) -> Dict[str, Any]:
+    cleaned_heading = re.sub(r"\s+", " ", heading).strip()
+    party_type = cleaned_heading
+    party_index: Optional[int] = None
+    match = re.match(r"(.+?)\s*\((\d+)\)\s*$", cleaned_heading)
+    if match:
+        party_type = match.group(1).strip()
+        party_index = int(match.group(2))
+    return {
+        "party_heading": cleaned_heading,
+        "party_type": party_type,
+        "party_index": party_index,
+        "name": None,
+        "aliases": [],
+        "details": [],
+        "represented_by": [],
+        "pending_counts": [],
+        "terminated_counts": [],
+        "complaints": [],
+        "highest_offense_level_opening": None,
+        "highest_offense_level_terminated": None,
+    }
+
+
+def _represented_by_index(row: Any) -> Optional[int]:
+    cells = row.xpath("./td")
+    for index, cell in enumerate(cells):
+        lowered = _normalize_html_text(cell).lower().replace("\xa0", " ")
+        if "represented by" in lowered:
+            return index
+    return None
+
+
+def _apply_represented_by_row(
+    party: Dict[str, Any], row: Any, represented_by_index: int
+) -> None:
+    cells = row.xpath("./td")
+    if not cells:
+        return
+    left_index = represented_by_index - 1 if represented_by_index > 0 else 0
+    left_cell = cells[left_index] if left_index < len(cells) else None
+    right_index = represented_by_index + 1
+    right_cell = cells[right_index] if right_index < len(cells) else None
+    if left_cell is not None:
+        name, details = _extract_party_name_and_details(left_cell)
+        _merge_party_name(party, name)
+        _merge_unique_list(party["details"], details)
+    if right_cell is not None:
+        attorneys = _extract_attorneys_from_cell(right_cell)
+        _merge_attorneys(party["represented_by"], attorneys)
+
+
+def _extract_party_name_and_details(cell: Any) -> tuple[Optional[str], List[str]]:
+    lines = [
+        line
+        for line in _extract_lines_from_node(cell)
+        if "represented by" not in line.lower()
+    ]
+    if not lines:
+        return None, []
+    bold_names = [_normalize_html_text(node) for node in cell.xpath(".//b")]
+    name = bold_names[0] if bold_names else lines[0]
+    details = [line for line in lines if line != name]
+    return name or None, details
+
+
+def _extract_attorneys_from_cell(cell: Any) -> List[Dict[str, Any]]:
+    raw_html = lxml_html.tostring(cell, encoding="unicode")
+    segments = re.split(r"(?i)<b[^>]*>", raw_html)
+    attorneys: List[Dict[str, Any]] = []
+    for segment in segments[1:]:
+        name_html, closing, body_html = segment.partition("</b>")
+        if not closing:
+            continue
+        name = re.sub(r"\s+", " ", _strip_html(name_html)).strip()
+        if not name:
+            continue
+        lines = _split_nonempty_lines(_strip_html(body_html))
+        attorneys.append(_build_attorney_record(name, lines))
+    if attorneys:
+        return attorneys
+    fallback_lines = _split_nonempty_lines(_strip_html(raw_html))
+    if not fallback_lines:
+        return []
+    return [_build_attorney_record(fallback_lines[0], fallback_lines[1:])]
+
+
+def _split_nonempty_lines(text: str) -> List[str]:
+    lines: List[str] = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"\s+", " ", line).strip()
+        if cleaned:
+            lines.append(cleaned)
+    return lines
+
+
+def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
+    attorney: Dict[str, Any] = {"name": name}
+    raw_lines: List[str] = []
+    details: List[str] = []
+    emails: List[str] = []
+    phones: List[str] = []
+    faxes: List[str] = []
+    designations: List[str] = []
+    roles: List[str] = []
+    for line in lines:
+        normalized = re.sub(r"\s+", " ", line).strip()
+        if not normalized:
+            continue
+        raw_lines.append(normalized)
+        lowered = normalized.lower()
+        if lowered.startswith("email:"):
+            value = normalized.split(":", 1)[1].strip()
+            if value:
+                emails.append(value)
+            continue
+        if lowered.startswith("fax:"):
+            value = normalized.split(":", 1)[1].strip()
+            if value:
+                faxes.append(value)
+            continue
+        if lowered.startswith("designation:"):
+            value = normalized.split(":", 1)[1].strip()
+            if value:
+                designations.append(value)
+            continue
+        if "attorney" in lowered and normalized.upper() == normalized:
+            roles.append(normalized)
+            continue
+        if _looks_like_phone_line(normalized):
+            phones.append(normalized)
+            continue
+        details.append(normalized)
+    if raw_lines:
+        attorney["raw_lines"] = _unique_list(raw_lines)
+    if details:
+        attorney["details"] = _unique_list(details)
+        attorney["organization"] = details[0]
+    if emails:
+        attorney["emails"] = _unique_list(emails)
+    if phones:
+        attorney["phones"] = _unique_list(phones)
+    if faxes:
+        attorney["faxes"] = _unique_list(faxes)
+    if designations:
+        attorney["designations"] = _unique_list(designations)
+    if roles:
+        attorney["roles"] = _unique_list(roles)
+    return attorney
+
+
+def _looks_like_phone_line(value: str) -> bool:
+    if not value:
+        return False
+    if "@" in value:
+        return False
+    if re.search(r"\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}", value):
+        return True
+    if re.fullmatch(r"\d{3}[-.\s]\d{4}", value):
+        return True
+    return False
+
+
+def _merge_attorneys(
+    existing: List[Dict[str, Any]], new_attorneys: List[Dict[str, Any]]
+) -> None:
+    for candidate in new_attorneys:
+        key = _attorney_key(candidate)
+        matched = None
+        for attorney in existing:
+            if _attorney_key(attorney) == key:
+                matched = attorney
+                break
+        if matched is None:
+            existing.append(candidate)
+            continue
+        for field in (
+            "raw_lines",
+            "details",
+            "emails",
+            "phones",
+            "faxes",
+            "designations",
+            "roles",
+        ):
+            _merge_unique_list(matched.setdefault(field, []), candidate.get(field) or [])
+        if not matched.get("organization") and candidate.get("organization"):
+            matched["organization"] = candidate["organization"]
+
+
+def _attorney_key(attorney: Dict[str, Any]) -> tuple[str, str]:
+    name = str(attorney.get("name") or "").strip().lower()
+    emails = ",".join(
+        sorted(
+            str(value).strip().lower()
+            for value in (attorney.get("emails") or [])
+            if str(value).strip()
+        )
+    )
+    return (name, emails)
+
+
+def _extract_disposition_row(row: Any) -> Optional[Dict[str, str]]:
+    cells = row.xpath("./td")
+    if not cells:
+        return None
+    count_text = _normalize_html_text(cells[0]) if len(cells) >= 1 else ""
+    disposition = _normalize_html_text(cells[2]) if len(cells) >= 3 else ""
+    normalized_count = _normalize_party_label(count_text)
+    if normalized_count in _PARTY_SECTION_MAP or normalized_count == "disposition":
+        return None
+    if not count_text and not disposition:
+        return None
+    return {"count": count_text, "disposition": disposition}
+
+
+def _extract_first_cell_text(row: Any) -> Optional[str]:
+    cells = row.xpath("./td")
+    if not cells:
+        return None
+    value = _normalize_html_text(cells[0])
+    normalized = _normalize_party_label(value)
+    if not value:
+        return None
+    if normalized in _PARTY_SECTION_MAP or normalized == "disposition":
+        return None
+    return value
+
+
+def _merge_party_identity(party: Dict[str, Any], row: Any) -> None:
+    cells = row.xpath("./td")
+    if not cells:
+        return
+    first_cell = cells[0]
+    name, details = _extract_party_name_and_details(first_cell)
+    _merge_party_name(party, name)
+    _merge_unique_list(party["details"], details)
+
+
+def _merge_party_name(party: Dict[str, Any], name: Optional[str]) -> None:
+    if not name:
+        return
+    cleaned = re.sub(r"\s+", " ", name).strip()
+    if not cleaned:
+        return
+    existing_name = party.get("name")
+    if not existing_name:
+        party["name"] = cleaned
+        return
+    if cleaned == existing_name:
+        return
+    aliases = party.setdefault("aliases", [])
+    if cleaned not in aliases:
+        aliases.append(cleaned)
+
+
+def _merge_unique_list(target: List[str], values: List[str]) -> None:
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", str(value)).strip()
+        if cleaned and cleaned not in target:
+            target.append(cleaned)
+
+
+def _unique_list(values: List[str]) -> List[str]:
+    output: List[str] = []
+    for value in values:
+        cleaned = re.sub(r"\s+", " ", str(value)).strip()
+        if cleaned and cleaned not in output:
+            output.append(cleaned)
+    return output
+
+
+def _finalize_party_section(party: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if party.get("party_index") is None:
+        party.pop("party_index", None)
+    if not party.get("aliases"):
+        party.pop("aliases", None)
+    if not party.get("details"):
+        party.pop("details", None)
+    if not party.get("represented_by"):
+        party.pop("represented_by", None)
+    for key in ("pending_counts", "terminated_counts", "complaints"):
+        items = [item for item in (party.get(key) or []) if item.get("count") or item.get("disposition")]
+        if items:
+            party[key] = items
+        else:
+            party.pop(key, None)
+    if not party.get("highest_offense_level_opening"):
+        party.pop("highest_offense_level_opening", None)
+    if not party.get("highest_offense_level_terminated"):
+        party.pop("highest_offense_level_terminated", None)
+    if not party.get("name") and not party.get("represented_by"):
+        return None
+    return party
 
 
 def _extract_lines_from_node(node: Any) -> List[str]:
@@ -1075,6 +1541,95 @@ def _flatten_header_fields(header_fields: Dict[str, Any]) -> str:
     if isinstance(selection, dict):
         for key, value in selection.items():
             parts.append(f"{key}: {value}")
+    parties = header_fields.get("parties")
+    if isinstance(parties, list):
+        for party in parties:
+            if not isinstance(party, dict):
+                continue
+            label = party.get("party_heading") or party.get("party_type")
+            name = party.get("name")
+            if label and name:
+                parts.append(f"{label}: {name}")
+            elif label:
+                parts.append(str(label))
+            for attorney in party.get("represented_by") or []:
+                attorney_name = attorney.get("name") if isinstance(attorney, dict) else None
+                if attorney_name:
+                    parts.append(f"Counsel: {attorney_name}")
+            for key in ("pending_counts", "terminated_counts", "complaints"):
+                for item in party.get(key) or []:
+                    if not isinstance(item, dict):
+                        continue
+                    count_value = item.get("count")
+                    disposition = item.get("disposition")
+                    if count_value:
+                        parts.append(str(count_value))
+                    if disposition:
+                        parts.append(str(disposition))
+    return " | ".join(parts)
+
+
+def _extract_attorneys_from_parties(parties: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    attorneys: List[Dict[str, Any]] = []
+    for party in parties:
+        if not isinstance(party, dict):
+            continue
+        party_name = party.get("name")
+        party_type = party.get("party_type")
+        for attorney in party.get("represented_by") or []:
+            if not isinstance(attorney, dict):
+                continue
+            enriched = dict(attorney)
+            if party_name:
+                enriched["party_name"] = party_name
+            if party_type:
+                enriched["party_type"] = party_type
+            attorneys.append(enriched)
+    return attorneys
+
+
+def _flatten_parties_for_search(parties: List[Dict[str, Any]]) -> str:
+    parts: List[str] = []
+    for party in parties:
+        if not isinstance(party, dict):
+            continue
+        label = party.get("party_heading") or party.get("party_type")
+        name = party.get("name")
+        if label and name:
+            parts.append(f"{label}: {name}")
+        elif label:
+            parts.append(str(label))
+        elif name:
+            parts.append(str(name))
+        for attorney in party.get("represented_by") or []:
+            if not isinstance(attorney, dict):
+                continue
+            attorney_name = attorney.get("name")
+            if attorney_name:
+                parts.append(str(attorney_name))
+            for field_name in ("organization", "emails", "phones", "faxes", "designations", "roles"):
+                value = attorney.get(field_name)
+                if isinstance(value, list):
+                    for item in value:
+                        if item:
+                            parts.append(str(item))
+                elif value:
+                    parts.append(str(value))
+        for field_name in (
+            "highest_offense_level_opening",
+            "highest_offense_level_terminated",
+        ):
+            value = party.get(field_name)
+            if value:
+                parts.append(str(value))
+        for field_name in ("pending_counts", "terminated_counts", "complaints"):
+            for item in party.get(field_name) or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("count"):
+                    parts.append(str(item["count"]))
+                if item.get("disposition"):
+                    parts.append(str(item["disposition"]))
     return " | ".join(parts)
 
 
@@ -1170,6 +1725,7 @@ def _submit_docket_form(
     case_office: Optional[str] = None,
     case_year: Optional[str] = None,
     case_type: Optional[str] = None,
+    preferred_output_format: Optional[str] = None,
 ) -> Optional[DocketFetchResult]:
     action, payload, form_html = _select_docket_form(html)
     if not action or not payload:
@@ -1213,7 +1769,10 @@ def _submit_docket_form(
     output_format = payload.get("output_format", "")
     if output_format:
         output_format = output_format.lower()
-    if output_format not in {"xml", "html", "pdf"}:
+    preferred_output = (preferred_output_format or "").strip().lower()
+    if preferred_output in {"xml", "html", "pdf"}:
+        output_format = preferred_output
+    elif output_format not in {"xml", "html", "pdf"}:
         output_format = "xml" if _form_supports_xml(form_html or html) else "html"
 
     def _submit_with_format(

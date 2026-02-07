@@ -46,6 +46,7 @@ Worker/cron mode environment variables:
 - `SERVICE_MODE=worker` runs continuous batch+docket+document workers.
 - `SERVICE_MODE=cron` runs one worker pass and exits.
 - `WORKER_LOOP_INTERVAL_SECONDS` controls worker polling delay (default `30`).
+- `PACER_DOCKET_OUTPUT` controls docket fetch format (`html` default; set `xml` if needed).
 - `BATCH_WORKER_MAX_SEGMENTS`, `DOCKET_WORKER_MAX_JOBS`, `DOCUMENT_WORKER_MAX_JOBS`, `DOCUMENT_WORKER_MAX_DOCS` tune per-pass limits.
 
 ## Configuration loading order (summary)

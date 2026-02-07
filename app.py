@@ -8266,7 +8266,7 @@ def create_app() -> Flask:
 
         include_docket_text = _parse_include_docket_text(request.form.get("include_docket_text"))
         job_id = _enqueue_docket_enrichment(case_id, include_docket_text)
-        docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "xml")
+        docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "html")
         docket_url_template = os.environ.get("PACER_DOCKET_URL_TEMPLATE")
         worker = DocketEnrichmentWorker(
             engine,
@@ -8482,6 +8482,9 @@ def create_app() -> Flask:
             "docket_fetched_at",
             "docket_payload_format",
             "docket_header_fields",
+            "docket_parties",
+            "docket_attorneys",
+            "docket_party_summary",
         ]
         with engine.begin() as conn:
             conn.execute(
@@ -8680,7 +8683,7 @@ def create_app() -> Flask:
             return redirect(url_for("admin_docket_enrichment_dashboard"))
 
         def _run_worker() -> None:
-            docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "xml")
+            docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "html")
             docket_url_template = os.environ.get("PACER_DOCKET_URL_TEMPLATE")
             worker = DocketEnrichmentWorker(
                 engine,
