@@ -40,83 +40,146 @@
 
   <section class="card cases-filter-card">
     <div class="cases-filter-card__header">
-      <h3>Filter cases</h3>
-      <p class="small">Use broad filters first, then narrow with field name/value search.</p>
+      <div>
+        <h3>Filter cases</h3>
+        <p class="small">Start broad, then narrow by date, metadata, and status.</p>
+      </div>
+      <div class="cases-filter-card__summary">
+        <span class="cases-filter-summary-pill">{{ active_filter_count }} active</span>
+        <span class="small">Showing {{ cases|length }} of {{ pagination.total }}</span>
+      </div>
     </div>
 
-    <form method="get" class="pcl-filter-form cases-filter-form" aria-label="Filter saved PACER cases">
-      <div class="grid three">
-        <div>
-          <label for="pcl-search">Search case</label>
-          <input id="pcl-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
-        </div>
-        <div>
-          <label for="pcl-court">Court</label>
-          <input class="small" type="search" placeholder="Type to filter courts" data-filter-input="pcl-court">
-          <select id="pcl-court" name="court_id">
-            <option value="">All courts</option>
-            {% for court in available_courts %}
-              <option value="{{ court }}" {% if filters.court_id == court %}selected{% endif %}>{{ court }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label for="pcl-case-type">Case type</label>
-          <input class="small" type="search" placeholder="Type to filter case types" data-filter-input="pcl-case-type">
-          <select id="pcl-case-type" name="case_type">
-            <option value="">All case types</option>
-            {% for case_type in available_case_types %}
-              <option value="{{ case_type }}" {% if filters.case_type == case_type %}selected{% endif %}>{{ case_type }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label for="pcl-date-from">Filed date (from)</label>
-          <input id="pcl-date-from" type="date" name="date_filed_from" value="{{ filters.date_filed_from.isoformat() if filters.date_filed_from else '' }}">
-        </div>
-        <div>
-          <label for="pcl-date-to">Filed date (to)</label>
-          <input id="pcl-date-to" type="date" name="date_filed_to" value="{{ filters.date_filed_to.isoformat() if filters.date_filed_to else '' }}">
-        </div>
-        <div>
-          <label for="pcl-judge">Judge last name</label>
-          <input id="pcl-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., Jackson">
-        </div>
-        <div>
-          <label for="pcl-field-name">Field name</label>
-          <input id="pcl-field-name" name="field_name" list="pcl-field-name-list" value="{{ filters.field_name }}" placeholder="e.g., caseId">
-          <datalist id="pcl-field-name-list">
-            {% for field_name in case_field_choices %}
-              <option value="{{ field_name }}"></option>
-            {% endfor %}
-          </datalist>
-        </div>
-        <div>
-          <label for="pcl-field-value">Field value contains</label>
-          <input id="pcl-field-value" name="field_value" value="{{ filters.field_value }}" placeholder="e.g., 2025 or vidc">
-          <p class="small">Matches text and JSON-captured field values.</p>
-        </div>
+    {% if active_filter_count > 0 %}
+      <div class="cases-active-filters" aria-label="Active filters">
+        {% if filters.search_text %}<span class="cases-filter-chip">Search: {{ filters.search_text }}</span>{% endif %}
+        {% if filters.court_id %}<span class="cases-filter-chip">Court: {{ filters.court_id }}</span>{% endif %}
+        {% if filters.case_type %}<span class="cases-filter-chip">Type: {{ filters.case_type }}</span>{% endif %}
+        {% if filters.date_filed_from %}<span class="cases-filter-chip">From: {{ filters.date_filed_from.isoformat() }}</span>{% endif %}
+        {% if filters.date_filed_to %}<span class="cases-filter-chip">To: {{ filters.date_filed_to.isoformat() }}</span>{% endif %}
+        {% if filters.judge_last_name %}<span class="cases-filter-chip">Judge: {{ filters.judge_last_name }}</span>{% endif %}
+        {% if filters.field_name %}<span class="cases-filter-chip">Field: {{ filters.field_name }}</span>{% endif %}
+        {% if filters.field_value %}<span class="cases-filter-chip">Value: {{ filters.field_value }}</span>{% endif %}
+        {% if filters.indexed_only %}<span class="cases-filter-chip">Saved only</span>{% endif %}
+        {% if filters.enriched_only %}<span class="cases-filter-chip">Enriched only</span>{% endif %}
+        {% if filters.sentencing_only %}<span class="cases-filter-chip">Sentencing only</span>{% endif %}
+        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Clear all</a>
       </div>
+    {% endif %}
 
-      <fieldset class="pcl-flag-fieldset cases-flag-fieldset">
-        <legend>Status filters</legend>
-        <label class="pcl-flag-option">
-          <input type="checkbox" name="indexed_only" value="1" {% if filters.indexed_only %}checked{% endif %}>
-          Saved to database
-        </label>
-        <label class="pcl-flag-option">
-          <input type="checkbox" name="enriched_only" value="1" {% if filters.enriched_only %}checked{% endif %}>
-          Expanded data
-        </label>
-        <label class="pcl-flag-option">
-          <input type="checkbox" name="sentencing_only" value="1" {% if filters.sentencing_only %}checked{% endif %}>
-          Sentencing facts present
-        </label>
-      </fieldset>
+    <form method="get" class="pcl-filter-form cases-filter-form" id="cases-filter-form" aria-label="Filter saved PACER cases">
+      <section class="cases-filter-block">
+        <header class="cases-filter-block__header">
+          <h4>Case basics</h4>
+          <p class="small">Use text, court, and case type to narrow quickly.</p>
+        </header>
+        <div class="grid three cases-filter-grid">
+          <div class="cases-filter-field cases-filter-field--wide">
+            <label for="pcl-search">Search case</label>
+            <input id="pcl-search" name="q" value="{{ filters.search_text }}" placeholder="Case number, title, or keyword">
+          </div>
+          <div class="cases-filter-field">
+            <label for="pcl-court">Court</label>
+            <input class="small" type="search" placeholder="Type to filter courts" data-filter-input="pcl-court">
+            <select id="pcl-court" name="court_id">
+              <option value="">All courts</option>
+              {% for court in available_courts %}
+                <option value="{{ court }}" {% if filters.court_id == court %}selected{% endif %}>{{ court }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="cases-filter-field">
+            <label for="pcl-case-type">Case type</label>
+            <input class="small" type="search" placeholder="Type to filter case types" data-filter-input="pcl-case-type">
+            <select id="pcl-case-type" name="case_type">
+              <option value="">All case types</option>
+              {% for case_type in available_case_types %}
+                <option value="{{ case_type }}" {% if filters.case_type == case_type %}selected{% endif %}>{{ case_type }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="cases-filter-field">
+            <label for="pcl-judge">Judge last name</label>
+            <input id="pcl-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., Jackson">
+          </div>
+        </div>
+      </section>
 
-      <div class="actions pcl-filter-actions">
+      <section class="cases-filter-block">
+        <header class="cases-filter-block__header">
+          <h4>Date window</h4>
+          <p class="small">Target filed-date ranges with one click shortcuts.</p>
+        </header>
+        <div class="grid three cases-filter-grid">
+          <div class="cases-filter-field">
+            <label for="pcl-date-from">Filed date (from)</label>
+            <input id="pcl-date-from" type="date" name="date_filed_from" value="{{ filters.date_filed_from.isoformat() if filters.date_filed_from else '' }}">
+          </div>
+          <div class="cases-filter-field">
+            <label for="pcl-date-to">Filed date (to)</label>
+            <input id="pcl-date-to" type="date" name="date_filed_to" value="{{ filters.date_filed_to.isoformat() if filters.date_filed_to else '' }}">
+          </div>
+          <div class="cases-filter-field">
+            <span class="small cases-date-shortcuts__label">Quick ranges</span>
+            <div class="cases-date-shortcuts">
+              <button class="pill" type="button" data-range-days="30">30 days</button>
+              <button class="pill" type="button" data-range-days="90">90 days</button>
+              <button class="pill" type="button" data-range-days="365">12 months</button>
+              <button class="pill" type="button" data-range="ytd">YTD</button>
+              <button class="pill" type="button" data-range="clear">Clear</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="cases-filter-block">
+        <header class="cases-filter-block__header">
+          <h4>Field contains</h4>
+          <p class="small">Search within any captured PACER field.</p>
+        </header>
+        <div class="grid two cases-filter-grid">
+          <div class="cases-filter-field">
+            <label for="pcl-field-name">Field name</label>
+            <input id="pcl-field-name" name="field_name" list="pcl-field-name-list" value="{{ filters.field_name }}" placeholder="e.g., caseId">
+            <datalist id="pcl-field-name-list">
+              {% for field_name in case_field_choices %}
+                <option value="{{ field_name }}"></option>
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="cases-filter-field">
+            <label for="pcl-field-value">Field value contains</label>
+            <input id="pcl-field-value" name="field_value" value="{{ filters.field_value }}" placeholder="e.g., 2025 or vidc">
+            <p class="small">Matches plain text and JSON field values.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="cases-filter-block">
+        <header class="cases-filter-block__header">
+          <h4>Status</h4>
+        </header>
+        <fieldset class="pcl-flag-fieldset cases-flag-fieldset">
+          <legend>Status filters</legend>
+          <label class="pcl-flag-option">
+            <input type="checkbox" name="indexed_only" value="1" {% if filters.indexed_only %}checked{% endif %}>
+            <span>Saved to database</span>
+          </label>
+          <label class="pcl-flag-option">
+            <input type="checkbox" name="enriched_only" value="1" {% if filters.enriched_only %}checked{% endif %}>
+            <span>Expanded data</span>
+          </label>
+          <label class="pcl-flag-option">
+            <input type="checkbox" name="sentencing_only" value="1" {% if filters.sentencing_only %}checked{% endif %}>
+            <span>Sentencing facts present</span>
+          </label>
+        </fieldset>
+      </section>
+
+      <div class="actions pcl-filter-actions cases-filter-actions">
         <button class="primary" type="submit">Apply filters</button>
-        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Reset</a>
+        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Reset all</a>
+        <span class="small">Shortcut: press <code>/</code> to focus case search.</span>
       </div>
     </form>
   </section>
@@ -307,25 +370,48 @@
   </nav>
   <script>
     (function () {
+      const filterForm = document.getElementById("cases-filter-form");
+      const searchInput = document.getElementById("pcl-search");
+      const dateFromInput = document.getElementById("pcl-date-from");
+      const dateToInput = document.getElementById("pcl-date-to");
+      const submitFilterForm = () => {
+        if (!filterForm) return;
+        if (typeof filterForm.requestSubmit === "function") {
+          filterForm.requestSubmit();
+        } else {
+          filterForm.submit();
+        }
+      };
+      const toDateString = (dateValue) => {
+        const year = dateValue.getFullYear();
+        const month = String(dateValue.getMonth() + 1).padStart(2, "0");
+        const day = String(dateValue.getDate()).padStart(2, "0");
+        return `${year}-${month}-${day}`;
+      };
+
       const filters = document.querySelectorAll("[data-filter-input]");
       filters.forEach((input) => {
         const targetId = input.getAttribute("data-filter-input");
         const select = document.getElementById(targetId);
         if (!select) return;
-        const options = Array.from(select.options).map((opt) => ({
-          value: opt.value,
+        const placeholder = select.options.length ? {
+          value: select.options[0].value,
+          label: select.options[0].textContent || "",
+        } : null;
+        const options = Array.from(select.options).slice(1).map((opt) => ({
+          value: String(opt.value),
           label: opt.textContent || "",
-          selected: opt.selected,
         }));
-        const placeholder = options.shift();
+
         input.addEventListener("input", () => {
           const query = input.value.trim().toLowerCase();
+          const selectedValue = String(select.value || "");
           select.innerHTML = "";
           if (placeholder) {
             const placeholderOpt = document.createElement("option");
             placeholderOpt.value = placeholder.value;
             placeholderOpt.textContent = placeholder.label;
-            placeholderOpt.selected = placeholder.selected;
+            placeholderOpt.selected = selectedValue === "";
             select.appendChild(placeholderOpt);
           }
           options.forEach((opt) => {
@@ -335,11 +421,55 @@
               const optionEl = document.createElement("option");
               optionEl.value = opt.value;
               optionEl.textContent = opt.label;
-              optionEl.selected = opt.selected;
+              optionEl.selected = String(opt.value) === selectedValue;
               select.appendChild(optionEl);
             }
           });
         });
+      });
+
+      const rangeButtons = document.querySelectorAll("[data-range-days], [data-range]");
+      rangeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          if (!filterForm || !dateFromInput || !dateToInput) return;
+          const rangeType = button.getAttribute("data-range");
+          const daysValue = button.getAttribute("data-range-days");
+          const today = new Date();
+          if (rangeType === "clear") {
+            dateFromInput.value = "";
+            dateToInput.value = "";
+            submitFilterForm();
+            return;
+          }
+          if (rangeType === "ytd") {
+            const firstOfYear = new Date(today.getFullYear(), 0, 1);
+            dateFromInput.value = toDateString(firstOfYear);
+            dateToInput.value = toDateString(today);
+            submitFilterForm();
+            return;
+          }
+          if (daysValue) {
+            const dayCount = Number.parseInt(daysValue, 10);
+            if (!Number.isNaN(dayCount) && dayCount > 0) {
+              const startDate = new Date(today);
+              startDate.setDate(startDate.getDate() - dayCount);
+              dateFromInput.value = toDateString(startDate);
+              dateToInput.value = toDateString(today);
+              submitFilterForm();
+            }
+          }
+        });
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+        const target = event.target;
+        const tagName = target && target.tagName ? target.tagName.toUpperCase() : "";
+        const isTypingField = tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+        if (isTypingField || !searchInput) return;
+        event.preventDefault();
+        searchInput.focus();
+        searchInput.select();
       });
     })();
   </script>
