@@ -926,6 +926,8 @@ def _extract_docket_header_fields_from_html(html_text: str) -> Dict[str, Any]:
         if any("date filed" in line.lower() for line in lines):
             header_fields.update(_parse_case_header_lines(lines))
             break
+    judge_fields = _extract_judge_fields_from_text(_strip_html(html_text))
+    header_fields.update(judge_fields)
     criteria = _extract_selection_criteria(tree)
     if criteria:
         header_fields["selection_criteria"] = criteria
@@ -965,6 +967,42 @@ def _parse_case_header_lines(lines: List[str]) -> Dict[str, Any]:
         if "presiding" in lowered or "assigned" in lowered or "judge" in lowered:
             header["judge_line"] = line
     return header
+
+
+def _extract_judge_fields_from_text(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    assigned: List[str] = []
+    referred: List[str] = []
+    presiding: List[str] = []
+    for line in lines:
+        match = re.search(r"Assigned to:\s*(.+)", line, re.IGNORECASE)
+        if match:
+            assigned.append(match.group(1).strip())
+            continue
+        match = re.search(r"Referred to:\s*(.+)", line, re.IGNORECASE)
+        if match:
+            referred.append(match.group(1).strip())
+            continue
+        match = re.search(r"Presiding Judge:\s*(.+)", line, re.IGNORECASE)
+        if match:
+            presiding.append(match.group(1).strip())
+            continue
+    judges = []
+    for value in assigned + referred + presiding:
+        if value and value not in judges:
+            judges.append(value)
+    output: Dict[str, Any] = {}
+    if assigned:
+        output["assigned_to"] = assigned
+    if referred:
+        output["referred_to"] = referred
+    if presiding:
+        output["presiding_judge"] = presiding
+    if judges:
+        output["judges"] = judges
+    return output
 
 
 def _extract_value_after_label(text: str, label: str) -> Optional[str]:
@@ -1007,6 +1045,13 @@ def _flatten_header_fields(header_fields: Dict[str, Any]) -> str:
     for key in ("case_number_header", "case_title", "judge_line", "date_filed", "date_last_filing"):
         value = header_fields.get(key)
         if value:
+            parts.append(str(value))
+    for key in ("assigned_to", "referred_to", "presiding_judge"):
+        value = header_fields.get(key)
+        if isinstance(value, list):
+            for item in value:
+                parts.append(str(item))
+        elif value:
             parts.append(str(value))
     selection = header_fields.get("selection_criteria")
     if isinstance(selection, dict):

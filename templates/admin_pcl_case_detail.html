@@ -153,6 +153,9 @@
     {% set docket_html_text = docket_html_raw or docket.html_preview %}
     {% set docket_is_html = docket_html_text %}
     {% set docket_is_login = docket_html_text and ('pacer.login.uscourts.gov' in docket_html_text or 'csologin' in docket_html_text) %}
+    {% set docket_entry_count = docket.entries|length if docket.entries else 0 %}
+    {% set assigned_judges = docket.header_fields.assigned_to if docket.header_fields and docket.header_fields.assigned_to else None %}
+    {% set referred_judges = docket.header_fields.referred_to if docket.header_fields and docket.header_fields.referred_to else None %}
     {% if docket.text or docket.preview or docket.entries or docket_is_html %}
       <article class="pcl-detail-card">
         <h3>Docket text</h3>
@@ -166,17 +169,41 @@
             Clear docket fields
           </button>
         </form>
+        {% if docket.entries or assigned_judges or referred_judges %}
+          <div class="docket-summary">
+            <div class="docket-summary__item">
+              <span class="docket-summary__label">Entries</span>
+              <span class="docket-summary__value">{{ docket_entry_count }}</span>
+            </div>
+            {% if assigned_judges %}
+              <div class="docket-summary__item docket-summary__item--wide">
+                <span class="docket-summary__label">Assigned judges</span>
+                <div class="docket-summary__value docket-summary__tags">
+                  {% for judge in assigned_judges %}
+                    <span class="docket-tag">{{ judge }}</span>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+            {% if referred_judges %}
+              <div class="docket-summary__item docket-summary__item--wide">
+                <span class="docket-summary__label">Referred judges</span>
+                <div class="docket-summary__value docket-summary__tags">
+                  {% for judge in referred_judges %}
+                    <span class="docket-tag">{{ judge }}</span>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
         {% if docket.header_fields %}
           <details class="pcl-detail-card" style="margin-top: 12px;">
             <summary class="pcl-detail-summary">Show docket header fields</summary>
             <pre class="code-block">{{ docket.header_fields | tojson(indent=2) }}</pre>
           </details>
         {% endif %}
-        {% if docket.text and docket.text.text %}
-          <pre class="code-block docket-text-block">{{ docket.text.text }}</pre>
-        {% elif docket.preview %}
-          <pre class="code-block docket-text-block">{{ docket.preview }}</pre>
-        {% elif docket_is_html and docket_is_login %}
+        {% if docket_is_html and docket_is_login %}
           <p class="small">PACER returned a login redirect. Docket text was not captured.</p>
         {% elif docket_is_html %}
           <p class="small">PACER returned a docket request form. Docket text was not captured.</p>
@@ -201,46 +228,54 @@
           <p class="small">Docket text stored without preview.</p>
         {% endif %}
         {% if docket.entries %}
-          <details class="pcl-detail-card" style="margin-top: 12px;">
-            <summary class="pcl-detail-summary">Show docket entries</summary>
-            <div class="table-wrap" style="margin-top: 12px;">
-              <table>
-                <thead>
+          <div class="table-wrapper docket-entries-table" style="margin-top: 12px;">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Date filed</th>
+                  <th>ECF #</th>
+                  <th>Description</th>
+                  <th>Links</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for entry in docket.entries %}
                   <tr>
-                    <th>Date filed</th>
-                    <th>ECF #</th>
-                    <th>Description</th>
-                    <th>Links</th>
+                    <td>{{ entry.dateFiled or "—" }}</td>
+                    <td>{{ entry.documentNumber or "—" }}</td>
+                    <td>{{ entry.description or "—" }}</td>
+                    <td>
+                      {% if entry.documentLinks %}
+                        {% for link in entry.documentLinks %}
+                          <div>
+                            <a href="{{ link.href }}" target="_blank" rel="noopener">
+                              {{ link.label or link.href }}
+                            </a>
+                          </div>
+                        {% endfor %}
+                      {% else %}
+                        —
+                      {% endif %}
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {% for entry in docket.entries %}
-                    <tr>
-                      <td>{{ entry.dateFiled or "—" }}</td>
-                      <td>{{ entry.documentNumber or "—" }}</td>
-                      <td>{{ entry.description or "—" }}</td>
-                      <td>
-                        {% if entry.documentLinks %}
-                          {% for link in entry.documentLinks %}
-                            <div>
-                              <a href="{{ link.href }}" target="_blank" rel="noopener">
-                                {{ link.label or link.href }}
-                              </a>
-                            </div>
-                          {% endfor %}
-                        {% else %}
-                          —
-                        {% endif %}
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-            <details class="pcl-detail-card" style="margin-top: 12px;">
-              <summary class="pcl-detail-summary">Show raw JSON</summary>
-              <pre class="code-block">{{ docket.entries | tojson(indent=2) }}</pre>
-            </details>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show raw JSON</summary>
+            <pre class="code-block">{{ docket.entries | tojson(indent=2) }}</pre>
+          </details>
+        {% endif %}
+        {% if docket.text and docket.text.text %}
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show raw docket text</summary>
+            <pre class="code-block docket-text-block">{{ docket.text.text }}</pre>
+          </details>
+        {% elif docket.preview %}
+          <details class="pcl-detail-card" style="margin-top: 12px;">
+            <summary class="pcl-detail-summary">Show raw docket text</summary>
+            <pre class="code-block docket-text-block">{{ docket.preview }}</pre>
           </details>
         {% endif %}
         {% if docket_is_html and docket_html_raw %}
