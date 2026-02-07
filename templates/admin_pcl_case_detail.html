@@ -265,6 +265,7 @@
                               {% if attorney.emails %}{% set _ = contact.append('Email: ' ~ (attorney.emails | join(', '))) %}{% endif %}
                               {% if attorney.phones %}{% set _ = contact.append('Phone: ' ~ (attorney.phones | join(', '))) %}{% endif %}
                               {% if attorney.faxes %}{% set _ = contact.append('Fax: ' ~ (attorney.faxes | join(', '))) %}{% endif %}
+                              {% if attorney.websites %}{% set _ = contact.append('Web: ' ~ (attorney.websites | join(', '))) %}{% endif %}
                               {{ contact | join(' | ') if contact else '—' }}
                             </td>
                             <td>

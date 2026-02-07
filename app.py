@@ -125,7 +125,13 @@ from pacer_explore_schemas import (
     validate_pcl_payload,
     validate_ui_inputs,
 )
-from pcl_queries import get_case_detail, list_case_cards, list_cases, parse_filters
+from pcl_queries import (
+    get_case_detail,
+    list_attorneys,
+    list_case_cards,
+    list_cases,
+    parse_filters,
+)
 from sentencing_queries import list_sentencing_events_by_judge, parse_sentencing_filters
 from federal_courts_sync import (
     FEDERAL_COURTS_SOURCE_URL,
@@ -8223,6 +8229,55 @@ def create_app() -> Flask:
             case_field_choices=_load_case_field_choices(),
             saved_searches=_load_pacer_saved_searches(limit=6),
             search_run_history=_load_pacer_search_runs(limit=6),
+        )
+
+    @app.get("/admin/pcl/attorneys")
+    @admin_required
+    def admin_pcl_attorneys():
+        params = request.args.to_dict(flat=True)
+        search_text = (params.get("q") or "").strip()
+        court_id = (params.get("court_id") or "").strip().lower()
+        case_type = (params.get("case_type") or "").strip().lower()
+        try:
+            page = max(1, int((params.get("page") or "1").strip()))
+        except ValueError:
+            page = 1
+        try:
+            page_size = min(100, max(1, int((params.get("page_size") or "25").strip())))
+        except ValueError:
+            page_size = 25
+
+        result = list_attorneys(
+            engine,
+            pcl_tables,
+            search_text=search_text,
+            court_id=court_id,
+            case_type=case_type,
+            page=page,
+            page_size=page_size,
+        )
+
+        def page_url(target_page: int) -> str:
+            next_params = dict(params)
+            next_params["page"] = target_page
+            return url_for("admin_pcl_attorneys", **next_params)
+
+        filters = {
+            "q": search_text,
+            "court_id": court_id,
+            "case_type": case_type,
+            "page_size": page_size,
+        }
+        return render_template(
+            "admin_pcl_attorneys.html",
+            active_page="federal_data_dashboard",
+            active_subnav="attorneys",
+            attorneys=result.rows,
+            pagination=result.pagination,
+            page_url=page_url,
+            filters=filters,
+            available_courts=result.available_courts,
+            available_case_types=result.available_case_types,
         )
 
     @app.post("/admin/pcl/cases/<int:case_id>/docket-enrichment/queue")

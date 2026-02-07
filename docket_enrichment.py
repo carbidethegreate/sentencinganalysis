@@ -1229,6 +1229,7 @@ def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
     emails: List[str] = []
     phones: List[str] = []
     faxes: List[str] = []
+    websites: List[str] = []
     designations: List[str] = []
     roles: List[str] = []
     for line in lines:
@@ -1237,15 +1238,34 @@ def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
             continue
         raw_lines.append(normalized)
         lowered = normalized.lower()
-        if lowered.startswith("email:"):
-            value = normalized.split(":", 1)[1].strip()
-            if value:
-                emails.append(value)
+        email_matches = re.findall(
+            r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if lowered.startswith(("email:", "e-mail:", "email ")) or email_matches:
+            values = email_matches
+            if not values and ":" in normalized:
+                candidate = normalized.split(":", 1)[1].strip()
+                if candidate:
+                    values = [candidate]
+            for value in values:
+                cleaned_email = value.strip(".,; ")
+                if cleaned_email:
+                    emails.append(cleaned_email)
             continue
-        if lowered.startswith("fax:"):
-            value = normalized.split(":", 1)[1].strip()
+        if lowered.startswith(("phone:", "telephone:", "tel:", "ph:")):
+            value = normalized.split(":", 1)[1].strip() if ":" in normalized else ""
+            if value:
+                phones.append(value)
+            continue
+        if lowered.startswith(("fax:", "facsimile:")):
+            value = normalized.split(":", 1)[1].strip() if ":" in normalized else ""
             if value:
                 faxes.append(value)
+            continue
+        if lowered.startswith(("http://", "https://", "www.")):
+            websites.append(normalized)
             continue
         if lowered.startswith("designation:"):
             value = normalized.split(":", 1)[1].strip()
@@ -1270,6 +1290,8 @@ def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
         attorney["phones"] = _unique_list(phones)
     if faxes:
         attorney["faxes"] = _unique_list(faxes)
+    if websites:
+        attorney["websites"] = _unique_list(websites)
     if designations:
         attorney["designations"] = _unique_list(designations)
     if roles:
@@ -1308,6 +1330,7 @@ def _merge_attorneys(
             "emails",
             "phones",
             "faxes",
+            "websites",
             "designations",
             "roles",
         ):
@@ -1611,7 +1634,15 @@ def _flatten_parties_for_search(parties: List[Dict[str, Any]]) -> str:
             attorney_name = attorney.get("name")
             if attorney_name:
                 parts.append(str(attorney_name))
-            for field_name in ("organization", "emails", "phones", "faxes", "designations", "roles"):
+            for field_name in (
+                "organization",
+                "emails",
+                "phones",
+                "faxes",
+                "websites",
+                "designations",
+                "roles",
+            ):
                 value = attorney.get(field_name)
                 if isinstance(value, list):
                     for item in value:

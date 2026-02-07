@@ -12,6 +12,7 @@
     <a href="{{ url_for('admin_pacer_explore') }}" class="{% if active_subnav == 'explore_pacer' %}active{% endif %}">Explore PACER</a>
     <a href="{{ url_for('admin_federal_data_dashboard_federal_courts') }}" class="{% if active_subnav == 'federal_courts' %}active{% endif %}">Federal Courts</a>
     <a href="{{ url_for('admin_pcl_cases') }}" class="{% if active_subnav == 'pcl_cases' %}active{% endif %}">Indexed Cases</a>
+    <a href="{{ url_for('admin_pcl_attorneys') }}" class="{% if active_subnav == 'attorneys' %}active{% endif %}">Attorneys</a>
     <a href="{{ url_for('admin_sentencing_events_report') }}" class="{% if active_subnav == 'sentencing_events' %}active{% endif %}">Sentencing Events</a>
     <a href="{{ url_for('admin_docket_enrichment_dashboard') }}" class="{% if active_subnav == 'docket_enrichment' %}active{% endif %}">Docket Enrichment</a>
     <a href="{{ url_for('admin_federal_data_dashboard_case_cards') }}" class="{% if active_subnav == 'case_cards' %}active{% endif %}">Case Cards</a>

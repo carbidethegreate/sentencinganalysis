@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -53,6 +54,14 @@ class PclCaseListResult:
 class PclCaseCardResult:
     rows: List[Dict[str, Any]]
     pagination: Pagination
+
+
+@dataclass(frozen=True)
+class PclAttorneyListResult:
+    rows: List[Dict[str, Any]]
+    pagination: Pagination
+    available_courts: Sequence[str]
+    available_case_types: Sequence[str]
 
 
 def parse_filters(args: Dict[str, str]) -> Tuple[PclCaseFilters, int, int]:
@@ -262,6 +271,91 @@ def list_case_cards(
 
     pagination = Pagination(page=page, page_size=page_size, total=total)
     return PclCaseCardResult(rows=[dict(row) for row in rows], pagination=pagination)
+
+
+def list_attorneys(
+    engine,
+    tables,
+    *,
+    search_text: str = "",
+    court_id: str = "",
+    case_type: str = "",
+    page: int = 1,
+    page_size: int = DEFAULT_PAGE_SIZE,
+) -> PclAttorneyListResult:
+    pcl_cases = tables["pcl_cases"]
+    pcl_case_fields = _maybe_table(engine, tables, "pcl_case_fields")
+    if pcl_case_fields is None:
+        return PclAttorneyListResult(
+            rows=[],
+            pagination=Pagination(page=1, page_size=page_size, total=0),
+            available_courts=[],
+            available_case_types=[],
+        )
+
+    normalized_search = (search_text or "").strip()
+    normalized_court = (court_id or "").strip().lower()
+    normalized_case_type = (case_type or "").strip().lower()
+    page = max(1, int(page or 1))
+    page_size = max(1, min(int(page_size or DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE))
+
+    where_clauses = [pcl_case_fields.c.field_name == "docket_attorneys"]
+    if normalized_court:
+        where_clauses.append(func.lower(pcl_cases.c.court_id) == normalized_court)
+    if normalized_case_type:
+        where_clauses.append(func.lower(func.coalesce(pcl_cases.c.case_type, "")) == normalized_case_type)
+    if normalized_search:
+        like_pattern = f"%{normalized_search.lower()}%"
+        where_clauses.append(
+            or_(
+                func.lower(func.coalesce(cast(pcl_case_fields.c.field_value_json, Text), "")).like(
+                    like_pattern
+                ),
+                func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(like_pattern),
+                func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(like_pattern),
+                func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(like_pattern),
+                func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(like_pattern),
+            )
+        )
+
+    stmt = (
+        select(
+            pcl_cases.c.id.label("case_id"),
+            pcl_cases.c.court_id,
+            pcl_cases.c.case_type,
+            pcl_cases.c.case_number,
+            pcl_cases.c.case_number_full,
+            pcl_cases.c.short_title,
+            pcl_cases.c.case_title,
+            pcl_cases.c.date_filed,
+            pcl_case_fields.c.field_value_json,
+            pcl_case_fields.c.updated_at,
+        )
+        .select_from(pcl_case_fields.join(pcl_cases, pcl_case_fields.c.case_id == pcl_cases.c.id))
+        .where(and_(*where_clauses))
+        .order_by(pcl_case_fields.c.updated_at.desc(), pcl_cases.c.id.desc())
+    )
+
+    with engine.begin() as conn:
+        source_rows = [dict(row) for row in conn.execute(stmt).mappings().all()]
+
+    available_courts = sorted(
+        {str(row.get("court_id")) for row in source_rows if row.get("court_id")}
+    )
+    available_case_types = sorted(
+        {str(row.get("case_type")) for row in source_rows if row.get("case_type")}
+    )
+    attorneys = _aggregate_attorneys(source_rows, search_text=normalized_search)
+    total = len(attorneys)
+    offset = (page - 1) * page_size
+    paged_rows = attorneys[offset : offset + page_size]
+
+    return PclAttorneyListResult(
+        rows=paged_rows,
+        pagination=Pagination(page=page, page_size=page_size, total=total),
+        available_courts=available_courts,
+        available_case_types=available_case_types,
+    )
 
 
 def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
@@ -603,6 +697,262 @@ def _estimate_docket_cost(conn, tables, detail: Dict[str, Any]) -> Dict[str, Any
 def _load_distinct(conn, column) -> List[str]:
     stmt = select(column).where(column.is_not(None)).group_by(column).order_by(column.asc())
     return [row[0] for row in conn.execute(stmt).all() if row[0]]
+
+
+def _aggregate_attorneys(
+    source_rows: List[Dict[str, Any]], *, search_text: str
+) -> List[Dict[str, Any]]:
+    attorneys: Dict[str, Dict[str, Any]] = {}
+    needle = (search_text or "").strip().lower()
+    for row in source_rows:
+        payload = _coerce_json_value(row.get("field_value_json"))
+        attorney_rows = _normalize_attorney_rows(payload)
+        if not attorney_rows:
+            continue
+        case_ref = {
+            "case_id": row.get("case_id"),
+            "court_id": row.get("court_id"),
+            "case_type": row.get("case_type"),
+            "case_number": row.get("case_number"),
+            "case_number_full": row.get("case_number_full"),
+            "short_title": row.get("short_title"),
+            "case_title": row.get("case_title"),
+            "date_filed": row.get("date_filed"),
+            "updated_at": row.get("updated_at"),
+        }
+        for attorney in attorney_rows:
+            if needle and needle not in _build_attorney_search_blob(attorney, case_ref):
+                continue
+            key = _attorney_identity_key(attorney)
+            bucket = attorneys.get(key)
+            if bucket is None:
+                bucket = _new_attorney_bucket(attorney, case_ref)
+                attorneys[key] = bucket
+            else:
+                _merge_attorney_bucket(bucket, attorney, case_ref)
+
+    rows: List[Dict[str, Any]] = []
+    for bucket in attorneys.values():
+        rows.append(_finalize_attorney_bucket(bucket))
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("case_count") or 0),
+            str(item.get("name") or "").lower(),
+        )
+    )
+    return rows
+
+
+def _coerce_json_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _normalize_attorney_rows(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        maybe_rows = payload.get("attorneys")
+        if isinstance(maybe_rows, list):
+            payload = maybe_rows
+        else:
+            payload = []
+    if not isinstance(payload, list):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        name = _clean_str(entry.get("name"))
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "party_name": _clean_str(entry.get("party_name")),
+                "party_type": _clean_str(entry.get("party_type")),
+                "organization": _clean_str(entry.get("organization")),
+                "emails": _normalize_string_list(entry.get("emails")),
+                "phones": _normalize_string_list(entry.get("phones")),
+                "faxes": _normalize_string_list(entry.get("faxes")),
+                "websites": _normalize_string_list(entry.get("websites")),
+                "designations": _normalize_string_list(entry.get("designations")),
+                "roles": _normalize_string_list(entry.get("roles")),
+                "details": _normalize_string_list(entry.get("details")),
+                "raw_lines": _normalize_string_list(entry.get("raw_lines")),
+            }
+        )
+    return rows
+
+
+def _build_attorney_search_blob(attorney: Dict[str, Any], case_ref: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for key in (
+        "name",
+        "party_name",
+        "party_type",
+        "organization",
+        "case_number",
+        "case_number_full",
+        "short_title",
+        "case_title",
+        "court_id",
+        "case_type",
+    ):
+        value = attorney.get(key) if key in attorney else case_ref.get(key)
+        if value:
+            parts.append(str(value))
+    for key in (
+        "emails",
+        "phones",
+        "faxes",
+        "websites",
+        "designations",
+        "roles",
+        "details",
+        "raw_lines",
+    ):
+        for item in attorney.get(key) or []:
+            parts.append(str(item))
+    return " | ".join(parts).lower()
+
+
+def _attorney_identity_key(attorney: Dict[str, Any]) -> str:
+    name = str(attorney.get("name") or "").strip().lower()
+    email_key = ",".join(sorted(str(item).strip().lower() for item in attorney.get("emails") or []))
+    phone_key = ",".join(
+        sorted(
+            "".join(ch for ch in str(item) if ch.isdigit())
+            for item in attorney.get("phones") or []
+        )
+    )
+    if email_key:
+        return f"{name}|{email_key}"
+    if phone_key:
+        return f"{name}|{phone_key}"
+    return name
+
+
+def _new_attorney_bucket(attorney: Dict[str, Any], case_ref: Dict[str, Any]) -> Dict[str, Any]:
+    bucket = {
+        "name": attorney.get("name"),
+        "organization_set": set(attorney.get("organization") and [attorney["organization"]] or []),
+        "email_set": set(attorney.get("emails") or []),
+        "phone_set": set(attorney.get("phones") or []),
+        "fax_set": set(attorney.get("faxes") or []),
+        "website_set": set(attorney.get("websites") or []),
+        "designation_set": set(attorney.get("designations") or []),
+        "role_set": set(attorney.get("roles") or []),
+        "detail_set": set(attorney.get("details") or []),
+        "raw_line_set": set(attorney.get("raw_lines") or []),
+        "case_rows": [],
+        "case_keys": set(),
+        "last_seen_at": case_ref.get("updated_at"),
+    }
+    _merge_attorney_bucket(bucket, attorney, case_ref)
+    return bucket
+
+
+def _merge_attorney_bucket(
+    bucket: Dict[str, Any], attorney: Dict[str, Any], case_ref: Dict[str, Any]
+) -> None:
+    if attorney.get("organization"):
+        bucket["organization_set"].add(attorney["organization"])
+    for key, set_name in (
+        ("emails", "email_set"),
+        ("phones", "phone_set"),
+        ("faxes", "fax_set"),
+        ("websites", "website_set"),
+        ("designations", "designation_set"),
+        ("roles", "role_set"),
+        ("details", "detail_set"),
+        ("raw_lines", "raw_line_set"),
+    ):
+        for item in attorney.get(key) or []:
+            bucket[set_name].add(item)
+    case_id = case_ref.get("case_id")
+    case_key = (
+        case_id,
+        attorney.get("party_name") or "",
+        attorney.get("party_type") or "",
+    )
+    if case_key not in bucket["case_keys"]:
+        bucket["case_keys"].add(case_key)
+        bucket["case_rows"].append(
+            {
+                "case_id": case_id,
+                "court_id": case_ref.get("court_id"),
+                "case_type": case_ref.get("case_type"),
+                "case_number": case_ref.get("case_number"),
+                "case_number_full": case_ref.get("case_number_full"),
+                "short_title": case_ref.get("short_title"),
+                "case_title": case_ref.get("case_title"),
+                "date_filed": case_ref.get("date_filed"),
+                "party_name": attorney.get("party_name"),
+                "party_type": attorney.get("party_type"),
+            }
+        )
+    seen_at = case_ref.get("updated_at")
+    if seen_at and (bucket.get("last_seen_at") is None or seen_at > bucket["last_seen_at"]):
+        bucket["last_seen_at"] = seen_at
+
+
+def _finalize_attorney_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
+    case_rows = list(bucket.get("case_rows") or [])
+    case_rows.sort(
+        key=lambda row: (
+            str(row.get("date_filed") or ""),
+            str(row.get("case_number_full") or row.get("case_number") or ""),
+        ),
+        reverse=True,
+    )
+    return {
+        "name": bucket.get("name"),
+        "organizations": sorted(bucket.get("organization_set") or []),
+        "emails": sorted(bucket.get("email_set") or []),
+        "phones": sorted(bucket.get("phone_set") or []),
+        "faxes": sorted(bucket.get("fax_set") or []),
+        "websites": sorted(bucket.get("website_set") or []),
+        "designations": sorted(bucket.get("designation_set") or []),
+        "roles": sorted(bucket.get("role_set") or []),
+        "details": sorted(bucket.get("detail_set") or []),
+        "raw_lines": sorted(bucket.get("raw_line_set") or []),
+        "case_count": len(case_rows),
+        "related_cases": case_rows,
+        "last_seen_at": bucket.get("last_seen_at"),
+    }
+
+
+def _normalize_string_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        cleaned = _clean_str(value)
+        return [cleaned] if cleaned else []
+    if not isinstance(value, list):
+        return []
+    output: List[str] = []
+    for item in value:
+        cleaned = _clean_str(item)
+        if cleaned and cleaned not in output:
+            output.append(cleaned)
+    return output
+
+
+def _clean_str(value: Any) -> str:
+    if value is None:
+        return ""
+    cleaned = " ".join(str(value).split()).strip()
+    return cleaned
 
 
 def _parse_date(value: Optional[str]) -> Optional[date]:
