@@ -13,4 +13,4 @@ COPY . /app
 EXPOSE 5000
 
 # Service mode is controlled with SERVICE_MODE=web|worker|cron.
-CMD ["python", "scripts/run_service.py"]
+CMD ["python", "-m", "scripts.run_service"]

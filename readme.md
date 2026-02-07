@@ -39,7 +39,7 @@ The app will try these, in order:
 All runtime entrypoints call the same Flask app factory (`create_app()`), which ensures a consistent configuration path.
 
 - Local development: `python app.py` (invokes `create_app()` in `__main__`).
-- Docker (`Dockerfile`): `python scripts/run_service.py` with `SERVICE_MODE=web|worker|cron`.
+- Docker (`Dockerfile`): `python -m scripts.run_service` with `SERVICE_MODE=web|worker|cron`.
 - Render (`render.yaml`): Python web uses gunicorn; Docker services use `SERVICE_MODE` via `scripts/run_service.py`.
 
 Worker/cron mode environment variables:
