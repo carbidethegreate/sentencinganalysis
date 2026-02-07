@@ -1205,12 +1205,17 @@ def _extract_attorneys_from_cell(cell: Any) -> List[Dict[str, Any]]:
             continue
         lines = _split_nonempty_lines(_strip_html(body_html))
         attorneys.append(_build_attorney_record(name, lines))
+    line_attorneys = _extract_attorneys_from_lines(
+        _split_nonempty_lines(_strip_html(raw_html))
+    )
+    if attorneys and line_attorneys:
+        _merge_attorneys(attorneys, line_attorneys)
+        return attorneys
     if attorneys:
         return attorneys
-    fallback_lines = _split_nonempty_lines(_strip_html(raw_html))
-    if not fallback_lines:
-        return []
-    return [_build_attorney_record(fallback_lines[0], fallback_lines[1:])]
+    if line_attorneys:
+        return line_attorneys
+    return []
 
 
 def _split_nonempty_lines(text: str) -> List[str]:
@@ -1220,6 +1225,107 @@ def _split_nonempty_lines(text: str) -> List[str]:
         if cleaned:
             lines.append(cleaned)
     return lines
+
+
+def _extract_attorneys_from_lines(lines: List[str]) -> List[Dict[str, Any]]:
+    if not lines:
+        return []
+    records: List[Dict[str, Any]] = []
+    current_name: Optional[str] = None
+    current_lines: List[str] = []
+    for line in lines:
+        if _looks_like_attorney_name_line(line):
+            if current_name:
+                records.append(_build_attorney_record(current_name, current_lines))
+            current_name = line
+            current_lines = []
+            continue
+        if current_name:
+            current_lines.append(line)
+    if current_name:
+        records.append(_build_attorney_record(current_name, current_lines))
+    return records
+
+
+_ATTORNEY_NON_NAME_TOKENS = {
+    "law",
+    "firm",
+    "office",
+    "offices",
+    "group",
+    "department",
+    "division",
+    "justice",
+    "court",
+    "suite",
+    "street",
+    "st",
+    "avenue",
+    "ave",
+    "road",
+    "rd",
+    "drive",
+    "dr",
+    "blvd",
+    "boulevard",
+    "room",
+    "floor",
+    "box",
+    "u.s",
+    "us",
+    "federal",
+    "attorney",
+    "attorneys",
+}
+
+
+def _looks_like_attorney_name_line(value: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (value or "")).strip()
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if lowered.startswith(
+        (
+            "designation:",
+            "email:",
+            "e-mail:",
+            "phone:",
+            "telephone:",
+            "tel:",
+            "ph:",
+            "fax:",
+            "facsimile:",
+            "bar status:",
+            "terminated:",
+            "website:",
+            "web:",
+        )
+    ):
+        return False
+    if "@" in normalized:
+        return False
+    if re.search(r"(?i)\b(?:https?://|www\.)", normalized):
+        return False
+    candidate = re.sub(r"(?i)\bterminated\b.*$", "", normalized).strip(" ,;:-")
+    if not candidate:
+        return False
+    if any(char.isdigit() for char in candidate):
+        return False
+    tokens = [token for token in re.split(r"\s+", candidate) if token]
+    if len(tokens) < 2 or len(tokens) > 6:
+        return False
+    clean_tokens: List[str] = []
+    for token in tokens:
+        cleaned = re.sub(r"[^A-Za-z'.-]", "", token)
+        if not cleaned:
+            return False
+        clean_tokens.append(cleaned)
+    if not all(token[0].isalpha() and token[0].isupper() for token in clean_tokens):
+        return False
+    lowered_tokens = {token.lower().strip(".") for token in clean_tokens}
+    if lowered_tokens & _ATTORNEY_NON_NAME_TOKENS:
+        return False
+    return True
 
 
 def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
@@ -1238,6 +1344,10 @@ def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
             continue
         raw_lines.append(normalized)
         lowered = normalized.lower()
+        for match in re.findall(r"(?i)(https?://[^\s,;]+|www\.[^\s,;]+)", normalized):
+            cleaned_url = match.rstrip(".,;)")
+            if cleaned_url:
+                websites.append(cleaned_url)
         email_matches = re.findall(
             r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",
             normalized,
@@ -1254,18 +1364,32 @@ def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
                 if cleaned_email:
                     emails.append(cleaned_email)
             continue
-        if lowered.startswith(("phone:", "telephone:", "tel:", "ph:")):
-            value = normalized.split(":", 1)[1].strip() if ":" in normalized else ""
+        phone_match = re.match(
+            r"(?i)^(?:phone|telephone|tel|ph)\b[:\s.-]*(.+)$", normalized
+        )
+        if phone_match:
+            value = phone_match.group(1).strip()
             if value:
-                phones.append(value)
+                phones.extend(_extract_phone_candidates(value) or [value])
             continue
-        if lowered.startswith(("fax:", "facsimile:")):
-            value = normalized.split(":", 1)[1].strip() if ":" in normalized else ""
+        fax_match = re.match(r"(?i)^(?:fax|facsimile)\b[:\s.-]*(.+)$", normalized)
+        if fax_match:
+            value = fax_match.group(1).strip()
             if value:
-                faxes.append(value)
+                faxes.extend(_extract_phone_candidates(value) or [value])
             continue
         if lowered.startswith(("http://", "https://", "www.")):
             websites.append(normalized)
+            continue
+        if lowered.startswith(("website:", "web:")):
+            value = normalized.split(":", 1)[1].strip() if ":" in normalized else ""
+            if value:
+                matches = re.findall(r"(?i)(https?://[^\s,;]+|www\.[^\s,;]+)", value)
+                if matches:
+                    for match in matches:
+                        websites.append(match.rstrip(".,;)"))
+                else:
+                    websites.append(value)
             continue
         if lowered.startswith("designation:"):
             value = normalized.split(":", 1)[1].strip()
@@ -1276,14 +1400,14 @@ def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
             roles.append(normalized)
             continue
         if _looks_like_phone_line(normalized):
-            phones.append(normalized)
+            phones.extend(_extract_phone_candidates(normalized) or [normalized])
             continue
         details.append(normalized)
     if raw_lines:
         attorney["raw_lines"] = _unique_list(raw_lines)
     if details:
         attorney["details"] = _unique_list(details)
-        attorney["organization"] = details[0]
+        attorney["organization"] = _pick_organization_line(attorney["details"])
     if emails:
         attorney["emails"] = _unique_list(emails)
     if phones:
@@ -1299,11 +1423,52 @@ def _build_attorney_record(name: str, lines: List[str]) -> Dict[str, Any]:
     return attorney
 
 
+def _extract_phone_candidates(value: str) -> List[str]:
+    if not value:
+        return []
+    matches = re.findall(
+        r"(?:\+?1[\s.-]*)?(?:\(\d{3}\)|\d{3})[\s.-]*\d{3}[\s.-]*\d{4}(?:\s*(?:x|ext\.?)\s*\d+)?|\d{3}[\s.-]\d{4}",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return _unique_list(matches)
+
+
+def _pick_organization_line(details: List[str]) -> str:
+    if not details:
+        return ""
+    for line in details:
+        lowered = line.lower()
+        if any(char.isdigit() for char in line):
+            continue
+        if lowered.startswith(
+            (
+                "designation:",
+                "email:",
+                "phone:",
+                "telephone:",
+                "tel:",
+                "ph:",
+                "fax:",
+                "facsimile:",
+                "website:",
+                "web:",
+            )
+        ):
+            continue
+        if _looks_like_attorney_name_line(line):
+            continue
+        return line
+    return details[0]
+
+
 def _looks_like_phone_line(value: str) -> bool:
     if not value:
         return False
     if "@" in value:
         return False
+    if _extract_phone_candidates(value):
+        return True
     if re.search(r"\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}", value):
         return True
     if re.fullmatch(r"\d{3}[-.\s]\d{4}", value):

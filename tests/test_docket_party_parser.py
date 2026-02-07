@@ -170,6 +170,51 @@ class DocketPartyParserTests(unittest.TestCase):
             ["Alexandre Mikhail Dempsey", "Michael Conley"],
         )
 
+    def test_extracts_non_bold_attorney_blocks_and_labeled_contacts(self):
+        html = """
+        <html>
+          <body>
+            <table>
+              <tr><td><b><u>Defendant</u></b></td></tr>
+              <tr>
+                <td><b>John Doe</b></td>
+                <td>represented&nbsp;by</td>
+                <td>
+                  <b>Jane Smith</b><br>
+                  Law Offices of Jane Smith<br>
+                  Phone 212-555-1111<br>
+                  Fax 212-555-9999<br>
+                  Email jane.smith@example.com<br>
+                  Website: https://janesmith.example.com<br><br>
+                  Alex Prosecutor<br>
+                  U.S. Attorney's Office<br>
+                  (340) 555-3333<br>
+                  alex.prosecutor@usdoj.gov
+                </td>
+              </tr>
+              <tr>
+                <td>Date Filed</td><th>#</th><td>Docket Text</td>
+              </tr>
+            </table>
+          </body>
+        </html>
+        """
+        fields = _extract_docket_header_fields_from_html(html)
+        parties = fields.get("parties") or []
+        self.assertEqual(len(parties), 1)
+        represented_by = parties[0].get("represented_by") or []
+        self.assertEqual([item.get("name") for item in represented_by], ["Jane Smith", "Alex Prosecutor"])
+
+        jane = represented_by[0]
+        self.assertIn("jane.smith@example.com", jane.get("emails") or [])
+        self.assertIn("212-555-1111", jane.get("phones") or [])
+        self.assertIn("212-555-9999", jane.get("faxes") or [])
+        self.assertIn("https://janesmith.example.com", jane.get("websites") or [])
+
+        alex = represented_by[1]
+        self.assertIn("alex.prosecutor@usdoj.gov", alex.get("emails") or [])
+        self.assertIn("(340) 555-3333", alex.get("phones") or [])
+
 
 if __name__ == "__main__":
     unittest.main()
