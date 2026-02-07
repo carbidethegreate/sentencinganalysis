@@ -171,7 +171,7 @@
         {% if docket.updated_at %}
           <p class="small">Updated {{ docket.updated_at.isoformat() }}</p>
         {% endif %}
-        <form method="post" action="{{ url_for('admin_pcl_case_docket_clear', case_id=case_detail.id) }}" style="margin: 8px 0 12px;">
+        <form method="post" action="{{ url_for('admin_pcl_case_docket_clear', case_id=case_detail.id) }}" class="mt-8 mb-12">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button class="secondary" type="submit" onclick="return confirm('Clear docket fields for this case?')">
             Clear docket fields
@@ -218,11 +218,11 @@
           </div>
         {% endif %}
         {% if docket.parties %}
-          <details class="pcl-detail-card" style="margin-top: 12px;">
+          <details class="pcl-detail-card mt-12">
             <summary class="pcl-detail-summary">Show parties, counsel, and count/disposition details</summary>
             {% for party in docket.parties %}
-              <div class="pcl-detail-card" style="margin-top: 12px;">
-                <h4 style="margin: 0 0 8px;">{{ party.party_heading or party.party_type or 'Party' }}</h4>
+              <div class="pcl-detail-card mt-12">
+                <h4 class="mb-8">{{ party.party_heading or party.party_type or 'Party' }}</h4>
                 <dl class="pcl-detail-list">
                   <div><dt>Name</dt><dd>{{ party.name or "—" }}</dd></div>
                   {% if party.aliases %}
@@ -236,7 +236,7 @@
                   {% endif %}
                 </dl>
                 {% if party.represented_by %}
-                  <h5 style="margin: 10px 0 6px;">Represented by</h5>
+                  <h5 class="mt-10 mb-6">Represented by</h5>
                   <div class="table-wrapper">
                     <table class="table">
                       <thead>
@@ -281,7 +281,7 @@
                   </div>
                 {% endif %}
                 {% if party.pending_counts %}
-                  <h5 style="margin: 10px 0 6px;">Pending counts</h5>
+                  <h5 class="mt-10 mb-6">Pending counts</h5>
                   <div class="table-wrapper">
                     <table class="table">
                       <thead>
@@ -296,7 +296,7 @@
                   </div>
                 {% endif %}
                 {% if party.terminated_counts %}
-                  <h5 style="margin: 10px 0 6px;">Terminated counts</h5>
+                  <h5 class="mt-10 mb-6">Terminated counts</h5>
                   <div class="table-wrapper">
                     <table class="table">
                       <thead>
@@ -311,7 +311,7 @@
                   </div>
                 {% endif %}
                 {% if party.complaints %}
-                  <h5 style="margin: 10px 0 6px;">Complaints</h5>
+                  <h5 class="mt-10 mb-6">Complaints</h5>
                   <div class="table-wrapper">
                     <table class="table">
                       <thead>
@@ -330,7 +330,7 @@
           </details>
         {% endif %}
         {% if docket.header_fields %}
-          <details class="pcl-detail-card" style="margin-top: 12px;">
+          <details class="pcl-detail-card mt-12">
             <summary class="pcl-detail-summary">Show docket header fields</summary>
             <pre class="code-block">{{ docket.header_fields | tojson(indent=2) }}</pre>
           </details>
@@ -340,7 +340,7 @@
         {% elif docket_is_html %}
           <p class="small">PACER returned a docket request form. Docket text was not captured.</p>
           {% if docket.form_action or docket.form_payload %}
-            <details class="pcl-detail-card" style="margin-top: 12px;">
+            <details class="pcl-detail-card mt-12">
               <summary class="pcl-detail-summary">Show docket form details</summary>
               {% if docket.form_action %}
                 <pre class="code-block">form_action: {{ docket.form_action }}</pre>
@@ -351,7 +351,7 @@
             </details>
           {% endif %}
           {% if docket.request_debug %}
-            <details class="pcl-detail-card" style="margin-top: 12px;">
+            <details class="pcl-detail-card mt-12">
               <summary class="pcl-detail-summary">Show docket request debug</summary>
               <pre class="code-block">{{ docket.request_debug | tojson(indent=2) }}</pre>
             </details>
@@ -360,7 +360,7 @@
           <p class="small">Docket text stored without preview.</p>
         {% endif %}
         {% if docket.entries %}
-          <div class="table-wrapper docket-entries-table" style="margin-top: 12px;">
+          <div class="table-wrapper docket-entries-table mt-12">
             <table class="table">
               <thead>
                 <tr>
@@ -394,29 +394,29 @@
               </tbody>
             </table>
           </div>
-          <details class="pcl-detail-card" style="margin-top: 12px;">
+          <details class="pcl-detail-card mt-12">
             <summary class="pcl-detail-summary">Show raw JSON</summary>
             <pre class="code-block">{{ docket.entries | tojson(indent=2) }}</pre>
           </details>
         {% endif %}
         {% if docket.text and docket.text.text %}
-          <details class="pcl-detail-card" style="margin-top: 12px;">
+          <details class="pcl-detail-card mt-12">
             <summary class="pcl-detail-summary">Show raw docket text</summary>
             <pre class="code-block docket-text-block">{{ docket.text.text }}</pre>
           </details>
         {% elif docket.preview %}
-          <details class="pcl-detail-card" style="margin-top: 12px;">
+          <details class="pcl-detail-card mt-12">
             <summary class="pcl-detail-summary">Show raw docket text</summary>
             <pre class="code-block docket-text-block">{{ docket.preview }}</pre>
           </details>
         {% endif %}
         {% if docket_is_html and docket_html_raw %}
-          <details class="pcl-detail-card" style="margin-top: 12px;">
+          <details class="pcl-detail-card mt-12">
             <summary class="pcl-detail-summary">Show raw PACER response (full)</summary>
             <pre class="code-block">{{ docket_html_raw }}</pre>
           </details>
         {% elif docket_is_html %}
-          <details class="pcl-detail-card" style="margin-top: 12px;">
+          <details class="pcl-detail-card mt-12">
             <summary class="pcl-detail-summary">Show raw PACER response</summary>
             <pre class="code-block">{{ docket_html_text }}</pre>
           </details>
@@ -424,16 +424,16 @@
       </article>
     {% endif %}
 
-    <article id="docket-documents" class="pcl-detail-card" style="margin-top: 20px;">
+    <article id="docket-documents" class="pcl-detail-card mt-20">
       <h3>Docket documents</h3>
       <p class="small">Queue document downloads from the docket entries. Downloads incur PACER fees.</p>
-      <form method="post" action="{{ url_for('admin_pcl_case_queue_documents', case_id=case_detail.id) }}" style="display:inline-block; margin-right: 8px;">
+      <form method="post" action="{{ url_for('admin_pcl_case_queue_documents', case_id=case_detail.id) }}" class="inline-block mr-8">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label for="document-numbers-queue">ECF numbers (optional)</label>
         <input id="document-numbers-queue" name="document_numbers" type="text" placeholder="e.g., 5, 8-10, 12">
         <button class="secondary" type="submit">Queue document downloads</button>
       </form>
-      <form method="post" action="{{ url_for('admin_pcl_case_download_documents_now', case_id=case_detail.id) }}" style="display:inline-block;">
+      <form method="post" action="{{ url_for('admin_pcl_case_download_documents_now', case_id=case_detail.id) }}" class="inline-block">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label for="document-numbers-download">ECF numbers (optional)</label>
         <input id="document-numbers-download" name="document_numbers" type="text" placeholder="e.g., 5, 8-10, 12">
@@ -442,7 +442,7 @@
         </button>
       </form>
       {% if case_detail.document_jobs %}
-        <div class="table-wrap" style="margin-top: 16px;">
+        <div class="table-wrap mt-16">
           <table>
             <thead>
               <tr>
@@ -474,7 +474,7 @@
                     <td colspan="6">
                       <details>
                         <summary>Show documents ({{ job.items | length }})</summary>
-                        <div class="table-wrap" style="margin-top: 12px;">
+                        <div class="table-wrap mt-12">
                           <table>
                             <thead>
                               <tr>
@@ -509,7 +509,7 @@
       {% endif %}
     </article>
 
-    <article id="ai-notes" class="pcl-detail-card" style="margin-top: 20px;">
+    <article id="ai-notes" class="pcl-detail-card mt-20">
       <h3>AI case notes & prompts</h3>
       <p class="small">Store case-specific AI review text and prompts for later analysis.</p>
       <form method="post" action="{{ url_for('admin_pcl_case_ai_notes', case_id=case_detail.id) }}">
@@ -661,13 +661,13 @@
               <div><dt>Variance</dt><dd>{{ event.variance_type or '—' }}</dd></div>
               <div><dt>Notes</dt><dd>{{ event.notes or '—' }}</dd></div>
             </dl>
-            <div class="stack" style="margin-top: 12px;">
+            <div class="stack mt-12">
               <strong>Evidence</strong>
               {% if event.evidence %}
                 <ul class="pcl-list">
                   {% for evidence in event.evidence %}
                     <li>
-                      <span class="pill small" style="margin-right: 6px;">{{ evidence.source_type.replace('_', ' ')|title }}</span>
+                      <span class="pill small mr-6">{{ evidence.source_type.replace('_', ' ')|title }}</span>
                       {% if evidence.source_id %}<span class="small">#{{ evidence.source_id }}</span>{% endif %}
                       <div>{{ evidence.reference_text }}</div>
                     </li>

@@ -4,12 +4,12 @@
 
 {% block federal_content %}
   <section class="card">
-    <div class="page-header" style="margin: 0 0 12px 0;">
+    <div class="page-header page-header--tight">
       <h2>Docket enrichment queue</h2>
       <p class="small">Queue docket text pulls for saved cases. Use filters to target the exact set of cases.</p>
     </div>
 
-    <div class="grid two" style="margin-bottom: 16px;">
+    <div class="grid two mb-16">
       <article class="pcl-detail-card">
         <h3>Status counts</h3>
         <dl class="pcl-detail-list">
@@ -111,7 +111,7 @@
         </div>
       </form>
 
-      <form method="post" action="{{ url_for('admin_docket_enrichment_queue_batch') }}" class="actions" style="margin-top: 12px;">
+      <form method="post" action="{{ url_for('admin_docket_enrichment_queue_batch') }}" class="actions mt-12">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="court_id" value="{{ docket_filters.court_id }}">
         <input type="hidden" name="case_type" value="{{ docket_filters.case_type }}">
@@ -133,7 +133,7 @@
       </form>
 
       {% if case_candidates %}
-        <div class="table-wrap" style="margin-top: 16px;">
+        <div class="table-wrap mt-16">
           <table class="admin-table">
             <thead>
               <tr>
@@ -186,7 +186,7 @@
       {% endif %}
     </article>
 
-    <article class="card" style="margin-top: 16px;">
+    <article class="card mt-16">
       <h3>Recent docket jobs</h3>
       {% if jobs %}
         <div class="table-wrap">

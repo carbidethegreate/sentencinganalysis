@@ -339,7 +339,7 @@
             <div class="stack">
               {% for saved in saved_searches %}
                 <div class="card">
-                  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+                  <div class="row row--spread row--top">
                     <div>
                       <p class="small"><strong>{{ saved.label }}</strong></p>
                       <p class="small">
@@ -399,7 +399,7 @@
             <div class="stack">
               {% for run in search_run_history %}
                 <div class="card">
-                  <div class="row" style="justify-content: space-between; align-items: flex-start;">
+                  <div class="row row--spread row--top">
                     <div>
                       <p class="small"><strong>{{ run.search_type|capitalize }}</strong> · {{ run.search_mode|capitalize }} · {{ run.created_at_display }}</p>
                       <p class="small">
@@ -427,7 +427,7 @@
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <input type="hidden" name="run_id" value="{{ run.id }}">
                         <input type="hidden" name="next" value="{{ url_for('admin_federal_data_dashboard_get_pacer_data') }}">
-                        <input name="label" placeholder="Saved search name" style="margin-bottom: 8px;">
+                        <input class="mb-8" name="label" placeholder="Saved search name">
                         <select name="schedule">
                           <option value="">Manual</option>
                           <option value="daily">Daily</option>

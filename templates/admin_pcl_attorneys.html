@@ -51,9 +51,9 @@
     {% if attorneys %}
       {% for attorney in attorneys %}
         <article class="card pcl-detail-card">
-          <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 16px;">
+          <div class="row row--spread row--top">
             <div>
-              <h3 style="margin-bottom: 6px;">{{ attorney.name }}</h3>
+              <h3 class="mb-6">{{ attorney.name }}</h3>
               <p class="small">
                 Related cases: {{ attorney.case_count }}
                 {% if attorney.last_seen_at %} · Last seen {{ attorney.last_seen_at.isoformat() }}{% endif %}
@@ -61,7 +61,7 @@
             </div>
           </div>
 
-          <div class="grid two" style="margin-top: 10px;">
+          <div class="grid two mt-10">
             <div>
               <p class="small"><strong>Email</strong></p>
               <p class="small">{{ attorney.emails | join(', ') if attorney.emails else '—' }}</p>
@@ -83,15 +83,15 @@
           </div>
 
           {% if attorney.details %}
-            <details style="margin-top: 12px;">
+            <details class="mt-12">
               <summary class="pcl-detail-summary">Show detail lines</summary>
               <pre class="code-block">{{ attorney.details | join('\n') }}</pre>
             </details>
           {% endif %}
 
-          <details style="margin-top: 12px;" open>
+          <details class="mt-12" open>
             <summary class="pcl-detail-summary">Related cases ({{ attorney.case_count }})</summary>
-            <div class="table-wrap" style="margin-top: 8px;">
+            <div class="table-wrap mt-8">
               <table class="admin-table">
                 <thead>
                   <tr>

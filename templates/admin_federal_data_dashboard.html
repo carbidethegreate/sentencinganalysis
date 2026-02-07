@@ -1,9 +1,37 @@
 {% extends "admin_federal_data_base.html" %}
 
 {% block federal_content %}
-  <div class="card">
+  <section class="card stack">
+    <p class="pacer-eyebrow">Control center</p>
+    <h2>Federal data operations</h2>
     <p class="small">
-      Select a section above to get started with PACER data ingestion and federal dashboard tools.
+      Start from the area you need. Each section below links to the same tools in the top navigation.
     </p>
-  </div>
+    <div class="federal-overview-grid">
+      <a class="federal-overview-card" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data') }}">
+        <span class="federal-overview-card__title">Get PACER Data</span>
+        <span class="federal-overview-card__desc">Authenticate, run searches, and manage saved PACER runs.</span>
+      </a>
+      <a class="federal-overview-card" href="{{ url_for('admin_pacer_explore') }}">
+        <span class="federal-overview-card__title">Explore PACER</span>
+        <span class="federal-overview-card__desc">Immediate search workflows, save-to-db actions, and run diagnostics.</span>
+      </a>
+      <a class="federal-overview-card" href="{{ url_for('admin_pcl_cases') }}">
+        <span class="federal-overview-card__title">Indexed Cases</span>
+        <span class="federal-overview-card__desc">Filter saved cases and open full case detail records.</span>
+      </a>
+      <a class="federal-overview-card" href="{{ url_for('admin_pcl_attorneys') }}">
+        <span class="federal-overview-card__title">Attorneys</span>
+        <span class="federal-overview-card__desc">Search attorney contact info and related cases across dockets.</span>
+      </a>
+      <a class="federal-overview-card" href="{{ url_for('admin_docket_enrichment_dashboard') }}">
+        <span class="federal-overview-card__title">Docket Enrichment</span>
+        <span class="federal-overview-card__desc">Queue docket pulls, run workers, and inspect recent enrichment jobs.</span>
+      </a>
+      <a class="federal-overview-card" href="{{ url_for('admin_federal_data_dashboard_logs') }}">
+        <span class="federal-overview-card__title">Logs</span>
+        <span class="federal-overview-card__desc">Review operational history for jobs, receipts, and pipeline activity.</span>
+      </a>
+    </div>
+  </section>
 {% endblock %}

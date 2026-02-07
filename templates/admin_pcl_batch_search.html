@@ -1,7 +1,7 @@
 {% extends "admin_federal_data_base.html" %}
 
 {% block federal_content %}
-  <div class="card" style="margin-bottom: 24px;">
+  <div class="card mb-16">
     <h2>PCL Batch Search</h2>
     <p class="small">Create and run batch searches for criminal cases. Results are downloaded and the remote report is deleted after ingestion.</p>
     <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_batch_search_create') }}">
@@ -15,11 +15,11 @@
               <option value="{{ court.court_id }}">{{ court.label }}</option>
             {% endfor %}
           </datalist>
-          <p class="small" style="margin-top: 6px;">Start typing a court ID or name to search. Suggestions show “court_id, name”.</p>
+          <p class="small mt-8">Start typing a court ID or name to search. Suggestions show “court_id, name”.</p>
         </div>
         <div>
           <label for="case-types">Case types</label>
-          <div id="case-types" class="small" style="display:flex; gap:12px; margin-top:4px;">
+          <div id="case-types" class="small row mt-8">
             {% for case_type in supported_case_types %}
               <label>
                 <input
@@ -34,7 +34,7 @@
           </div>
         </div>
       </div>
-      <div class="grid two" style="margin-top: 12px;">
+      <div class="grid two mt-12">
         <div>
           <label for="date-from">Date filed from</label>
           <input id="date-from" name="date_filed_from" type="date" required>
@@ -44,36 +44,36 @@
           <input id="date-to" name="date_filed_to" type="date" required>
         </div>
       </div>
-      <div class="actions" style="margin-top: 16px;">
+      <div class="actions mt-16">
         <button class="primary" type="submit">Create batch</button>
       </div>
     </form>
   </div>
 
-  <div class="card" style="margin-bottom: 24px;">
+  <div class="card mb-16">
     <h3>Run worker</h3>
     <p class="small">Starts a single worker cycle. Use a cron or worker service for continuous runs.</p>
     <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_batch_search_run') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="max-segments">Segments to process</label>
       <input id="max-segments" name="max_segments" type="number" min="1" value="1">
-      <div class="actions" style="margin-top: 12px;">
+      <div class="actions mt-12">
         <button class="secondary" type="submit">Start run</button>
       </div>
     </form>
-    <p class="small" style="margin-top: 12px;">PCL API base URL: {{ pcl_base_url }}</p>
+    <p class="small mt-12">PCL API base URL: {{ pcl_base_url }}</p>
   </div>
 
   <div class="card">
     <h3>Status timeline</h3>
     {% if batch_requests %}
       {% for batch in batch_requests %}
-        <div style="border-top: 1px solid #e5e7eb; padding-top: 12px; margin-top: 12px;">
+        <div class="timeline-item">
           <p><strong>Batch {{ batch.id }}</strong> — {{ batch.court_id }} ({{ batch.date_filed_from }} → {{ batch.date_filed_to }})</p>
           <p class="small">Status: {{ batch.status }} · Case types: {{ batch.case_types }}</p>
           {% set segments = segments_by_batch.get(batch.id, []) %}
           {% if segments %}
-            <table style="width:100%; margin-top: 8px;">
+            <table class="admin-table mt-8">
               <thead>
                 <tr>
                   <th align="left">Segment</th>

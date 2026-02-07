@@ -266,7 +266,7 @@
           <div>
             <label for="party-first-name">First name (optional)</label>
             <input id="party-first-name" name="first_name" type="text" value="{{ party_values.first_name if party_values else '' }}">
-            <label for="party-ssn" class="small" style="margin-top: 8px; display: block;">SSN (optional)</label>
+            <label for="party-ssn" class="small mt-8">SSN (optional)</label>
             <input id="party-ssn" name="ssn" type="text" value="{{ party_values.ssn if party_values else '' }}" placeholder="123-45-6789">
           </div>
         </div>
@@ -418,7 +418,7 @@
       {% if run_result.search_mode == 'batch' and run_result.report_request %}
         {% set report_info = run_result.report_request.info or {} %}
         <section class="card stack" id="batch-report-status">
-          <div class="row" style="justify-content: space-between; align-items: center;">
+          <div class="row row--spread">
             <div>
               <p class="pacer-eyebrow">Batch report</p>
               <h3>Report status</h3>
@@ -429,7 +429,7 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="request_id" value="{{ run_result.report_request.request_id }}">
                 <button class="secondary" type="submit">Refresh status</button>
-                <label class="small" style="margin-left: 12px;">
+                <label class="small ml-12">
                   <input type="checkbox" data-auto-poll-toggle>
                   Auto-refresh
                 </label>
@@ -461,7 +461,7 @@
       {% endif %}
 
       <section class="card stack">
-        <div class="row" style="justify-content: space-between; align-items: center;">
+        <div class="row row--spread">
           <div>
             <p class="pacer-eyebrow">Debug bundle</p>
             <h3>Copyable run bundle</h3>
@@ -1046,7 +1046,7 @@
       <div class="stack">
         {% for run in search_run_history %}
           <div class="card">
-            <div class="row" style="justify-content: space-between; align-items: center;">
+            <div class="row row--spread">
               <div>
                 <p class="small"><strong>{{ run.search_type|capitalize }}</strong> · {{ run.search_mode|capitalize }} · {{ run.created_at_display }}</p>
                 <p class="small">
@@ -1082,7 +1082,7 @@
       <div class="stack">
         {% for run in run_history %}
           <div class="card">
-            <div class="row" style="justify-content: space-between; align-items: center;">
+            <div class="row row--spread">
               <div>
                 <p class="small"><strong>{{ run.mode|capitalize }}</strong> · {{ run.created_at_display }}</p>
                 <p class="small">
