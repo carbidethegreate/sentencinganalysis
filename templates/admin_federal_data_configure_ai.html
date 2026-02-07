@@ -1,0 +1,39 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block federal_content %}
+  <section class="card stack">
+    <h2>Configure Ask LouLou</h2>
+    <p class="small">Configuration status for AI-powered admin tools and prompts.</p>
+
+    <div class="grid two">
+      <article class="pcl-detail-card">
+        <h3>OpenAI API</h3>
+        <dl class="pcl-detail-list">
+          <div>
+            <dt>API key</dt>
+            <dd>{{ "Configured" if openai_key_configured else "Missing" }}</dd>
+          </div>
+          <div>
+            <dt>Model</dt>
+            <dd>{{ openai_model }}</dd>
+          </div>
+        </dl>
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Required Environment Variables</h3>
+        <pre class="code-block">OPENAI_API_KEY=...
+OPENAI_MODEL={{ openai_model }}</pre>
+        <p class="small">Set these in your Render environment group. Do not store secrets in source control.</p>
+      </article>
+    </div>
+
+    <article class="pcl-detail-card">
+      <h3>Where this is used</h3>
+      <ul class="pcl-list">
+        <li>`/admin/case-data-one/error-prompt` uses the configured model for fix-prompt generation.</li>
+        <li>Case-level AI notes are managed in each case detail page.</li>
+      </ul>
+    </article>
+  </section>
+{% endblock %}

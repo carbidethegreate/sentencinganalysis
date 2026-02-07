@@ -34,6 +34,9 @@ projects:
       - key: DB_BOOTSTRAP
         value: "true"
         sync: false
+      - key: SERVICE_MODE
+        value: worker
+        sync: false
       dockerContext: .
       dockerfilePath: ./Dockerfile
       autoDeployTrigger: commit
@@ -206,6 +209,9 @@ projects:
       - fromGroup: sentencinganalysis-env
       - key: DB_BOOTSTRAP
         value: "false"
+        sync: false
+      - key: SERVICE_MODE
+        value: cron
         sync: false
       schedule: '*/5 * * * *'
       dockerContext: .

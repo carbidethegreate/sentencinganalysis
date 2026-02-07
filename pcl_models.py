@@ -486,6 +486,8 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         Column("document_number", Text, nullable=True),
         Column("description", Text, nullable=True),
         Column("source_url", Text, nullable=False),
+        Column("request_method", Text, nullable=False, server_default="GET"),
+        Column("request_payload_json", Text, nullable=True),
         Column("status", Text, nullable=False, default="queued"),
         Column("file_path", Text, nullable=True),
         Column("content_type", Text, nullable=True),

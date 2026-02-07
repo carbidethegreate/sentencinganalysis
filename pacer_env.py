@@ -43,6 +43,14 @@ def _extract_host(base_url: str) -> str:
     return host.lower()
 
 
+def _host_matches(host: str, expected: str) -> bool:
+    host = (host or "").strip().lower()
+    expected = (expected or "").strip().lower()
+    if not host or not expected:
+        return False
+    return host == expected or host.startswith(f"{expected}:")
+
+
 def infer_pacer_env(base_url: str) -> str:
     host = _extract_host(base_url)
     if "qa-" in host:
@@ -113,9 +121,13 @@ def validate_pacer_environment_config(
     config = build_pacer_environment_config(pacer_auth_base_url, pcl_base_url)
     auth_host = _extract_host(pacer_auth_base_url)
     pcl_host = _extract_host(pcl_base_url)
-    if "qa-pcl.uscourts.gov" in pcl_host and "qa-login.uscourts.gov" not in auth_host:
+    if _host_matches(pcl_host, "qa-pcl.uscourts.gov") and not _host_matches(
+        auth_host, "qa-login.uscourts.gov"
+    ):
         raise ValueError(_mismatch_reason(ENV_PROD, ENV_QA) or "")
-    if "pcl.uscourts.gov" in pcl_host and "pacer.login.uscourts.gov" not in auth_host:
+    if _host_matches(pcl_host, "pcl.uscourts.gov") and not _host_matches(
+        auth_host, "pacer.login.uscourts.gov"
+    ):
         raise ValueError(_mismatch_reason(ENV_QA, ENV_PROD) or "")
     if config.mismatch and config.mismatch_reason:
         raise ValueError(config.mismatch_reason)

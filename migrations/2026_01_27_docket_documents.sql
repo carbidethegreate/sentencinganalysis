@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS docket_document_items (
   document_number TEXT,
   description TEXT,
   source_url TEXT NOT NULL,
+  request_method TEXT NOT NULL DEFAULT 'GET',
+  request_payload_json TEXT,
   status TEXT NOT NULL DEFAULT 'queued',
   file_path TEXT,
   content_type TEXT,

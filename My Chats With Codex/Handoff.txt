@@ -1,0 +1,393 @@
+Handoff - CourtDataPro / PACER docket work (full project inventory + chat context)
+Date: 2026-02-07
+
+Primary sources (full context)
+- Full prior transcript: /Users/david/Desktop/Render/sentencinganalysis/My Chats With Codex/Chat 1.txt
+  - Includes all chat turns, tool outputs, code edits, diffs, and decisions.
+- Earlier saved output: /Users/david/Desktop/Render/Our Talks/Codex Terminal Saved Output1.txt
+  - Contains original Render API export work + initial PACER/docket discussions.
+- Prior pass-on summary (shorter): /Users/david/Desktop/Render/passon_note.md
+
+User goals (verbatim intent, summarized)
+- PACER index (single + batch) -> full docket text + header info (judges, attorneys, parties, crimes, etc).
+- Store in DB in a searchable way (clean text + structured entries + raw HTML).
+- Use AI to analyze docket text for sentencing signals (guidelines, criminal history, pleas, 5k1.1, etc).
+- Build attorney UX: login, connect PACER account, add clients by case lookup, store PACER files, write pleadings, request reports.
+- Downloads cost money, so allow manual/on-demand only (with batching).
+- Docket UX should be attorney-friendly and easy to read.
+
+User-provided samples / expectations
+- PACER docket HTML samples (bankruptcy and criminal CM/ECF) show:
+  - Header with court name, case title, assigned judges, attorneys, etc.
+  - Docket table with Filing Date, ECF #, Docket Text, document links (doc1 URLs)
+- User expects:
+  - Docket table in UI with date, ECF #, full text, and links
+  - Assigned judges shown; sometimes multiple
+  - Full docket text visible/accessible (not truncated/garbled)
+
+Project folder inventory (complete)
+Root files
+- app.py
+  - Main Flask app. Admin routes, case detail, PACER/PCL workflows, AI notes, docket clear, document download queue, etc.
+- docket_enrichment.py
+  - Docket fetch, HTML/XML parsing, entry extraction, header/judge extraction, form submission handling, and storage into pcl_case_fields.
+- docket_documents.py
+  - Document download worker (job/item tracking, file storage, optional S3).
+- pacer_http.py
+  - HTTP client with cookie jar and request helpers.
+- pacer_env.py
+  - PACER environment configuration / checks.
+- pacer_tokens.py
+  - PACER token handling.
+- pacer_logging.py
+  - PACER-specific logging helpers.
+- pacer_explore_schemas.py
+  - Schema helpers for PACER explore feature.
+- pcl_client.py
+  - PACER Case Locator API client.
+- pcl_batch.py
+  - Batch PCL worker.
+- pcl_models.py
+  - SQLAlchemy table definitions (includes new docket_document_jobs/items).
+- pcl_queries.py
+  - Case detail queries and supporting lookups.
+- pcl_courts_seed.py
+  - Seed helper for PCL courts.
+- federal_courts_sync.py
+  - Federal courts sync logic.
+- sentencing_models.py
+  - Sentencing event models.
+- sentencing_queries.py
+  - Sentencing event queries/reporting.
+- readme.md
+  - App overview, env vars, runtime entrypoints, PACER/PCL notes.
+- render.yaml
+  - Render services config.
+- Dockerfile
+  - Container build for Gunicorn + app.
+- runtime.txt
+  - Runtime (Python version) for Render.
+- requirements.txt
+  - Dependencies (includes boto3 for S3 downloads).
+- pytest.ini
+  - Pytest config.
+- index.html
+  - Static landing content (root fallback).
+- PACER_Authentication_API-2025_v2_0.md
+  - PACER auth API reference.
+- PCL-API-Document_4.md
+  - PCL API reference doc.
+- codex_prompting_guide.md
+  - Internal prompting guide.
+- case_filed_rpt.sqlite
+  - Local SQLite DB (dev fallback).
+
+Data directory
+- data/pcl_courts.json
+- data/search_regions.sql
+
+Docs directory
+- docs/explore_pacer.md
+- docs/pacer_api_reference_notes.md
+- docs/pacer_pcl_pipeline_plan.md
+- docs/pacer_pdf_parser_notes.md
+- docs/pacer_ux_plan.md
+- docs/pcl_case_indexing.md
+
+Migrations directory
+- migrations/2025_03_14_pcl_case_indexing.sql
+- migrations/2025_03_18_pacer_explore_runs.sql
+- migrations/2025_03_25_pacer_tokens_environment.sql
+- migrations/2025_04_01_pcl_courts.sql
+- migrations/2025_04_02_pcl_cases_unique_key.sql
+- migrations/2025_04_10_pacer_response_codes.sql
+- migrations/2025_04_15_pacer_case_types.sql
+- migrations/2025_04_16_pacer_courts.sql
+- migrations/2025_04_17_pacer_sortable_case_fields.sql
+- migrations/2025_04_19_pacer_search_requests.sql
+- migrations/2025_04_22_pacer_search_runs_parties.sql
+- migrations/2026_01_25_pacer_search_runs_counts.sql
+- migrations/2026_01_26_pacer_case_provenance.sql
+- migrations/2026_01_26_pacer_reference_tables.sql
+- migrations/2026_01_26_pacer_saved_searches.sql
+- migrations/2026_01_26_pacer_search_runs_postgres.sql
+- migrations/2026_01_26_pcl_case_fields.sql
+- migrations/2026_01_26_pcl_cases_drop_case_type_check.sql
+- migrations/2026_01_26_pcl_cases_unique_case_number_full.sql
+- migrations/2026_01_27_docket_documents.sql
+
+Scripts directory
+- scripts/seed_pcl_courts.py
+- scripts/verify_admin_case_stage1_perf.py
+- scripts/verify_case_stage1_datatables.py
+- scripts/verify_newsletter.py
+
+Static directory
+- static/styles.css
+- static/ask-loulou-icon.svg
+
+Templates directory
+- templates/base.html
+- templates/home.html
+- templates/about.html
+- templates/news.html
+- templates/pricing.html
+- templates/contact.html
+- templates/login.html
+- templates/signup.html
+- templates/dashboard.html
+- templates/profile.html
+- templates/admin_login.html
+- templates/admin_home.html
+- templates/admin_users.html
+- templates/admin_database_dashboard.html
+- templates/admin_db_export.html
+- templates/admin_newsletter.html
+- templates/admin_case_data_one_upload.html
+- templates/admin_case_data_one_list.html
+- templates/admin_case_stage1_upload.html
+- templates/admin_case_stage1_list.html
+- templates/admin_federal_data_dashboard.html
+- templates/admin_federal_data_base.html
+- templates/admin_federal_data_get_pacer_data.html
+- templates/admin_federal_data_placeholder.html
+- templates/admin_federal_data_case_cards.html
+- templates/admin_federal_data_logs.html
+- templates/admin_federal_courts.html
+- templates/admin_pacer_explore.html
+- templates/admin_pcl_batch_search.html
+- templates/admin_pcl_cases.html
+- templates/admin_pcl_case_detail.html
+- templates/admin_docket_enrichment.html
+- templates/admin_sentencing_events_report.html
+- templates/admin_sentencing_event_form.html
+
+Tests directory
+- tests/test_admin_pacer_explore.py
+- tests/test_admin_pcl_batch_search.py
+- tests/test_admin_pcl_cases.py
+- tests/test_federal_courts_sync.py
+- tests/test_pacer_auth.py
+- tests/test_pacer_env.py
+- tests/test_pacer_http.py
+- tests/test_pacer_logging.py
+- tests/test_pcl_batch_worker.py
+- tests/test_pcl_client.py
+- tests/test_sentencing_admin.py
+
+Misc
+- My Chats With Codex/Chat 1.txt (full transcript)
+- My Chats With Codex/Handoff.txt (this file)
+- __pycache__/docket_enrichment.cpython-313.pyc (generated)
+
+Main changes implemented in this work session
+
+1) Docket parsing and storage (docket_enrichment.py)
+- Clean HTML with lxml; drop script/style/noscript/head; preserve line breaks.
+- Detect CM/ECF query pages and docket request forms (store as docket_html, not docket_text).
+- Detect login redirect and store as HTML only (no docket_text).
+- Truncate field_value_text to 2000 chars to avoid DB index errors.
+- Parse docket entries into JSON with dateFiled, documentNumber, description, documentLinks.
+- Resolve relative links with urljoin; parse goDLS params when present.
+- Extract header fields from HTML (case number/title/filing dates/judge line).
+- Extract judges from text (assigned_to, referred_to, presiding_judge, judges list).
+- Store header fields in docket_header_fields (json + flattened text).
+
+2) Form submission hardening
+- Multipart form submission when enctype says multipart/form-data.
+- Resolve form actions via urljoin (handles ../).
+- Cookie jar support; seed case number cookies (RECENT_CASES, case_num, case_number, CASE_NUM).
+- Direct fallback POST to DktRpt.pl?1-L_1_0-1 with all_case_ids + case_num.
+- Store docket_form_action and docket_form_payload on failure.
+- Include form_action/form_keys in last_error.
+- Optional request debug when PACER_DOCKET_DEBUG=1 (stores request_debug).
+
+3) UI updates (admin_pcl_case_detail.html + styles.css)
+- Docket summary block with entry count and assigned/referred judges.
+- Docket entries table always visible (date/ECF/description/links).
+- Raw docket text hidden behind details.
+- Show raw PACER response (full or preview) under details.
+- Show form details + request debug for form failures.
+- Added Clear docket fields button.
+- Added AI notes section (case/system prompts + review).
+- Added docket documents queue/download section and job table.
+
+4) Document download pipeline
+- New tables: docket_document_jobs, docket_document_items.
+- Migration: 2026_01_27_docket_documents.sql.
+- Worker: docket_documents.py (downloads to local disk; optional S3).
+- Routes:
+  - /admin/pcl/cases/<id>/docket-documents/queue
+  - /admin/pcl/cases/<id>/docket-documents/download-now
+  - /admin/docket-documents/run/<job_id>
+- ECF filter parsing (comma + ranges).
+
+5) AI notes storage
+- New case fields: case_ai_review, case_ai_prompt, system_ai_prompt.
+- POST route to save AI notes.
+
+6) Internal error fix
+- SQLAlchemy table boolean check fixed (no TypeError).
+
+Known errors / environment issues
+- PACER environment mismatch:
+  - Production PCL + QA auth causes rejection.
+  - Fix by aligning:
+    - PACER_AUTH_BASE_URL=https://pacer.login.uscourts.gov
+    - PCL_BASE_URL=https://pcl.uscourts.gov/pcl-public-api/rest
+- Cron job timeout once reported.
+- Render API export still 401 (needs valid API key + workspace access).
+
+Current status (most recent user feedback)
+- Docket entries now appear for at least one criminal case.
+- Docket section still needs UX redesign; attorney-friendly readability requested.
+- Docket text sometimes appears incomplete or hard to read.
+- Assigned judges not visible yet on some cases (needs re-pull after new parsing).
+- Some cases still return docket request form (form submit still failing for some courts).
+
+Immediate next actions when resuming
+1) Fix PACER env mismatch (align PACER_AUTH_BASE_URL + PCL_BASE_URL).
+2) Clear docket fields for a test case and re-pull.
+3) Verify judges + entries appear in UI.
+4) If docket form persists, inspect docket_form_action/payload + PACER_DOCKET_DEBUG output.
+5) Redesign docket UX for readability (requested by user).
+6) Validate document downloads (goDLS POST if required).
+
+
+PACER process details (auth -> PCL -> docket -> documents)
+
+1) PACER Authentication (NextGen CSO)
+- API endpoint (per PACER_Authentication_API-2025_v2_0.md):
+  - POST https://{authenticationurl}/services/cso-auth
+  - QA auth base: https://qa-login.uscourts.gov
+  - Prod auth base: https://pacer.login.uscourts.gov
+- Request headers:
+  - Content-Type: application/json (or application/xml)
+  - Accept: application/json (or application/xml)
+- Request body fields (used by app.py):
+  - loginId (PACER username)
+  - password
+  - otpCode (optional; required if MFA enabled)
+  - clientCode (optional but required for search if PACER requires it)
+  - redactFlag="1" if filer (redaction acknowledgment required)
+- Response fields:
+  - loginResult
+  - nextGenCSO (128-char token on success)
+  - errorDescription
+- Token handling notes:
+  - nextGenCSO remains valid for an extended period, but can be re-issued.
+  - PACER docs: token should be set as a cookie for court systems; clientCode should set PacerClientCode cookie.
+  - PCL API uses X-NEXT-GEN-CSO header instead of cookie (see app behavior).
+- Logout endpoint:
+  - POST https://{authenticationurl}/services/cso-logout with nextGenCSO
+
+2) Token storage in this app
+- pacer_tokens.py defines PacerTokenStore with either:
+  - InMemoryTokenBackend (default), or
+  - DatabaseTokenBackend (if PACER_TOKEN_STORE=database)
+- Tokens are session-keyed via pacer_session_key (stored in session).
+- app.py uses a service session key for background worker token refresh.
+- pacer_http.py auto-refreshes token on 401 if token refresher is configured.
+
+3) Environment alignment (critical)
+- QA and Production are separate; must align auth and PCL base URLs.
+- pacer_env.py validates mismatch and raises ValueError if:
+  - auth is QA and PCL is Prod, or vice-versa.
+- If mismatch occurs, app logs "PACER environment mismatch" and blocks PCL calls.
+
+4) PCL API usage (Case Locator)
+- Two modes (per docs/pacer_api_reference_notes.md):
+  - Immediate search (page-by-page):
+    - POST /pcl-public-api/rest/cases/find?page={page}
+    - POST /pcl-public-api/rest/parties/find?page={page}
+    - Page size fixed at 54; cap on pages (default 5 for Explore).
+  - Batch search:
+    - POST /pcl-public-api/rest/cases/batch
+    - GET /pcl-public-api/rest/cases/batch/status
+    - GET /pcl-public-api/rest/cases/batch/download/{reportId}
+    - DELETE /pcl-public-api/rest/cases/batch/{reportId}
+    - Cap: up to 2,000 pages / 108,000 records (app enforces PCL_BATCH_CAP=108000).
+- Receipts:
+  - PCL responses include receipt objects (reportId, billablePages, fees, transactionDate, etc).
+  - app stores receipts for audit + cost tracking.
+
+5) PCL search criteria (summary)
+- Common case fields:
+  - jurisdictionType (ap, bk, cr, cv, mdl)
+  - caseId, caseNumberFull, caseNumber, caseYear, caseOffice, caseType (list)
+  - courtId (list)
+  - dateFiledFrom/dateFiledTo, dateClosedFrom/dateClosedTo
+  - bankruptcy: federalBankruptcyChapter, dateDismissed/Discharged ranges
+  - civil/appellate: natureOfSuit
+- Case number formats accepted by PCL:
+  - yy-nnnnn, yy-tp-nnnnn, yy tp nnnnn, yytpnnnnn
+  - office-prefixed variants: o:yy-nnnnn, o:yy-tp-nnnnn, o:yy tp nnnnn, o:yytpnnnnn
+- Party search requires lastName or SSN (bankruptcy debtors) or date ranges; supports name fields + role.
+
+6) Explore PACER (admin UI)
+- Route: /admin/pacer/explore
+- Runs immediate PCL searches (cases/find, parties/find).
+- Enforces allowlisted payload keys (pacer_explore_schemas.py) to prevent invalid PCL payloads.
+- Stores recent runs with receipts, response samples, and debug bundle (no secrets).
+- Blocks runs if:
+  - PACER env mismatch, or
+  - PACER authenticated but search disabled (client code required).
+- Error handling:
+  - 401: token expired; re-authorize
+  - 406: PCL rejected parameters
+  - local payload validation error if UI fields do not map to allowlist
+
+7) PCL batch indexing (internal schema)
+- Normalized schema in migrations and pcl_case_indexing.md:
+  - pcl_batch_searches, pcl_batch_segments, pcl_remote_jobs
+  - pcl_case_result_raw (raw JSON payloads)
+  - pcl_cases (normalized case index)
+  - pcl_receipts (billing metadata)
+- Flow:
+  - submit batch request -> create segments -> poll remote jobs -> download report -> ingest cases -> delete report
+- Docket enrichment is optional after indexing.
+
+8) Docket enrichment (CM/ECF)
+- Input: PCL case link (caseLink) and caseId.
+- Build docket report URL:
+  - DktRpt.pl?case_id={case_id}&output=xml (preferred)
+  - Fallback HTML if XML parse fails.
+- If PACER returns a docket form instead of report:
+  - Extract form action + payload from HTML and auto-submit.
+  - Submit as multipart/form-data (PACER forms use enctype multipart/form-data).
+  - Cookie seeding for case number (RECENT_CASES, case_num, case_number, CASE_NUM).
+  - Direct fallback POST to DktRpt.pl?1-L_1_0-1 with all_case_ids + case_num.
+- Shell detection:
+  - Login redirects or docket request forms stored as docket_html, not docket_text.
+  - Stored fields: docket_form_action, docket_form_payload, docket_request_debug.
+
+9) Docket parsing rules (HTML)
+- Parse docket table rows into:
+  - dateFiled, documentNumber (ECF #), description
+  - documentLinks (href + label)
+- Resolve relative links with urljoin base_url.
+- Parse goDLS() parameters when present (stored alongside links).
+- Extract header fields:
+  - case number, case title, date filed, date last filing, judge line
+  - assigned_to / referred_to / presiding_judge from text
+- Store into pcl_case_fields:
+  - docket_text, docket_text_preview
+  - docket_entries (json)
+  - docket_header_fields (json)
+  - docket_html + docket_html_preview for shell pages
+
+10) Document download process
+- Document links may be:
+  - doc1 URLs (direct PDF or attachment landing depending on 4th digit)
+  - goDLS() links that require POST to generate PDF
+- Worker (docket_documents.py) downloads via PacerHttpClient (X-NEXT-GEN-CSO header + cookies).
+- On-demand only; admin UI provides queue + download-now buttons.
+
+11) Additional PACER endpoints and quirks (reference notes)
+- possible_case_numbers.pl (case lookup suggestions)
+- mobile_query.pl (docket entry count without fee)
+- document_link.pl (converts encoded document IDs to doc1 URLs)
+- show_case_doc (returns doc1 URL for caseid + document number)
+- doc1 URL structure (per Juriscraper notes):
+  - court prefix + numeric string; 4th digit indicates attachments (0 = attachments list, 1 = direct doc).
+

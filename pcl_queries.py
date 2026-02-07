@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from sqlalchemy import and_, desc, exists, func, inspect, literal, or_, select
+from sqlalchemy import Text, and_, cast, desc, exists, func, inspect, literal, or_, select
 
 from sentencing_queries import has_sentencing_event_clause
 
@@ -360,22 +360,42 @@ def _build_where_clauses(
         if filters.field_value:
             field_like = f"%{filters.field_value.lower()}%"
             field_clauses.append(
-                func.lower(case_fields.c.field_value_text).like(field_like)
+                or_(
+                    func.lower(func.coalesce(case_fields.c.field_value_text, "")).like(
+                        field_like
+                    ),
+                    func.lower(
+                        func.coalesce(cast(case_fields.c.field_value_json, Text), "")
+                    ).like(field_like),
+                )
             )
         clauses.append(exists(select(1).where(and_(*field_clauses))))
     if filters.indexed_only:
         clauses.append(pcl_cases.c.record_hash.is_not(None))
-    if filters.enriched_only and "docket_enrichment_jobs" in pcl_cases.metadata.tables:
-        docket_enrichment_jobs = pcl_cases.metadata.tables["docket_enrichment_jobs"]
-        clauses.append(
-            exists(
-                select(1).where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+    if filters.enriched_only:
+        if case_fields is not None:
+            clauses.append(
+                exists(
+                    select(1).where(
+                        and_(
+                            case_fields.c.case_id == pcl_cases.c.id,
+                            case_fields.c.field_name.in_(
+                                ["docket_entries", "docket_text", "docket_html"]
+                            ),
+                        )
+                    )
+                )
             )
-        )
+        elif "docket_enrichment_jobs" in pcl_cases.metadata.tables:
+            docket_enrichment_jobs = pcl_cases.metadata.tables["docket_enrichment_jobs"]
+            clauses.append(
+                exists(
+                    select(1).where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+                )
+            )
     if filters.sentencing_only and "sentencing_events" in pcl_cases.metadata.tables:
         sentencing_events = pcl_cases.metadata.tables["sentencing_events"]
         clauses.append(exists(has_sentencing_event_clause(pcl_cases, sentencing_events)))
-    # Enrichment flags are not yet modeled; keep filters as no-ops.
     return clauses
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import html
 import json
@@ -32,6 +32,7 @@ class DocketFetchResult:
     status_code: int
     content_type: str
     body: bytes
+    headers: Dict[str, Any] = field(default_factory=dict)
     form_action: Optional[str] = None
     form_payload: Optional[Dict[str, str]] = None
     request_debug: Optional[Dict[str, Any]] = None
@@ -420,6 +421,7 @@ class DocketEnrichmentWorker:
             status_code=response.status_code,
             content_type=content_type,
             body=response.body,
+            headers=response.headers or {},
         )
 
     def _store_docket_payload(
@@ -586,6 +588,18 @@ class DocketEnrichmentWorker:
                     "include_docket_text": bool(job.get("include_docket_text")),
                     "fetched_at": now.isoformat(),
                 }
+                billable_pages = _extract_int_header(
+                    fetch_result.headers,
+                    [
+                        "X-PACER-Billable-Pages",
+                        "X-Billable-Pages",
+                        "Billable-Pages",
+                    ],
+                )
+                fee = _extract_int_header(
+                    fetch_result.headers,
+                    ["X-PACER-Search-Fee", "X-Search-Fee", "Search-Fee"],
+                )
                 if fetch_result.form_action:
                     receipt_payload["form_action"] = fetch_result.form_action
                 if fetch_result.form_payload:
@@ -598,8 +612,8 @@ class DocketEnrichmentWorker:
                     receipt_table.insert().values(
                         job_id=job["id"],
                         receipt_json=json.dumps(receipt_payload),
-                        billable_pages=None,
-                        fee=None,
+                        billable_pages=billable_pages,
+                        fee=fee,
                         description="PACER docket report",
                         client_code=None,
                     )
@@ -867,6 +881,10 @@ def _extract_links_from_cell(cell: Any, *, base_url: Optional[str]) -> List[Dict
         go_dls = None
         if onclick and "goDLS" in onclick:
             go_dls = _reverse_go_dls_function(onclick)
+            if go_dls and base_url and go_dls.get("form_post_url"):
+                go_dls["form_post_url"] = _resolve_link(
+                    base_url, go_dls.get("form_post_url") or ""
+                )
         if not href and go_dls and go_dls.get("form_post_url"):
             href = go_dls.get("form_post_url") or ""
         if href and base_url:
@@ -1811,6 +1829,27 @@ def _truncate_map(values: Dict[str, str], max_len: int) -> Dict[str, str]:
         string_value = str(value)
         trimmed[key] = _truncate_text(string_value, max_len)
     return trimmed
+
+
+def _extract_int_header(headers: Dict[str, Any], names: List[str]) -> Optional[int]:
+    if not headers:
+        return None
+    lowered = {str(key).lower(): value for key, value in headers.items()}
+    for name in names:
+        raw = lowered.get(name.lower())
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        match = re.search(r"-?\d+", text.replace(",", ""))
+        if not match:
+            continue
+        try:
+            return int(match.group(0))
+        except ValueError:
+            continue
+    return None
 
 
 def _build_request_debug(

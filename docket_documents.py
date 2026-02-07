@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 import os
 import re
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 from sqlalchemy import Table, select, update, func
 
@@ -113,14 +115,26 @@ class DocketDocumentWorker:
         url = item.get("source_url")
         if not url:
             raise ValueError("Missing source URL for document.")
+        request_method = str(item.get("request_method") or "GET").strip().upper()
+        if request_method not in {"GET", "POST"}:
+            request_method = "GET"
         retries, backoff = _download_retry_config()
         last_error = None
         for attempt in range(retries + 1):
             try:
+                headers = {"Accept": "application/pdf, text/html"}
+                request_data = None
+                if request_method == "POST":
+                    payload = _decode_request_payload(item.get("request_payload_json"))
+                    if not payload:
+                        raise ValueError("Missing POST payload for goDLS document request.")
+                    headers["Content-Type"] = "application/x-www-form-urlencoded"
+                    request_data = urlencode(payload).encode("utf-8")
                 response = self._http_client.request(
-                    "GET",
+                    request_method,
                     url,
-                    headers={"Accept": "application/pdf"},
+                    headers=headers,
+                    data=request_data,
                     include_cookie=True,
                 )
                 if response.status_code != 200:
@@ -249,6 +263,39 @@ def _download_retry_config() -> tuple[int, float]:
     return retries, backoff
 
 
+def _decode_request_payload(raw_payload: Optional[str]) -> Dict[str, str]:
+    if not raw_payload:
+        return {}
+    try:
+        parsed = json.loads(raw_payload)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    allowed_keys = [
+        "caseid",
+        "de_seq_num",
+        "got_receipt",
+        "pdf_header",
+        "pdf_toggle_possible",
+        "magic_num",
+        "claim_id",
+        "claim_num",
+        "claim_doc_seq",
+        "hdr",
+    ]
+    payload: Dict[str, str] = {}
+    for key in allowed_keys:
+        value = parsed.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        payload[key] = text
+    return payload
+
+
 def _s3_key(prefix: str, case_id: int, filename: str) -> str:
     base = f"case_{case_id}/{filename}"
     if not prefix:
@@ -276,4 +323,3 @@ def _write_s3(bucket: str, prefix: str, case_id: int, filename: str, data: bytes
     key = _s3_key(prefix, case_id, filename)
     client.put_object(Bucket=bucket, Key=key, Body=data)
     return f"s3://{bucket}/{key}"
-

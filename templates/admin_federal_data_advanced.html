@@ -1,0 +1,15 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block federal_content %}
+  <section class="card stack">
+    <h2>Advanced Tools</h2>
+    <p class="small">Operational shortcuts for diagnostics and data workflows.</p>
+
+    <div class="actions">
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_logs') }}">Open logs</a>
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_logs_export') }}">Export logs</a>
+      <a class="pill" href="{{ url_for('admin_docket_enrichment_dashboard') }}">Open docket enrichment</a>
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_case_cards') }}">Open case cards</a>
+    </div>
+  </section>
+{% endblock %}

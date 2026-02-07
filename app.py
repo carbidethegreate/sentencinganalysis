@@ -941,6 +941,14 @@ def create_app() -> Flask:
         },
         label="pcl_batch_segments",
     )
+    _ensure_table_columns(
+        "docket_document_items",
+        {
+            "request_method": "TEXT DEFAULT 'GET' NOT NULL",
+            "request_payload_json": "TEXT",
+        },
+        label="docket_document_items",
+    )
 
     def _ensure_indexes(
         statements: Dict[str, str], *, label: str, required_tables: Optional[Set[str]] = None
@@ -2269,14 +2277,26 @@ def create_app() -> Flask:
             links = entry.get("documentLinks") or []
             for link in links:
                 href = (link.get("href") or "").strip()
-                if not href or href in seen:
+                go_dls = link.get("goDLS") if isinstance(link.get("goDLS"), dict) else None
+                source_url = href
+                request_method = "GET"
+                request_payload_json = None
+                if go_dls:
+                    form_post_url = (go_dls.get("form_post_url") or "").strip()
+                    if form_post_url:
+                        source_url = form_post_url
+                    request_method = "POST"
+                    request_payload_json = json.dumps(go_dls, sort_keys=True, default=str)
+                if not source_url or source_url in seen:
                     continue
-                seen.add(href)
+                seen.add(source_url)
                 items.append(
                     {
                         "document_number": doc_number,
                         "description": entry.get("description"),
-                        "source_url": href,
+                        "source_url": source_url,
+                        "request_method": request_method,
+                        "request_payload_json": request_payload_json,
                     }
                 )
         return items
@@ -2342,6 +2362,8 @@ def create_app() -> Flask:
                         "document_number": item.get("document_number"),
                         "description": item.get("description"),
                         "source_url": item.get("source_url"),
+                        "request_method": item.get("request_method") or "GET",
+                        "request_payload_json": item.get("request_payload_json"),
                         "status": "queued",
                         "created_at": now,
                         "updated_at": now,
@@ -7793,12 +7815,52 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard/health-checks")
     @admin_required
     def admin_federal_data_dashboard_health_checks():
-        return _render_federal_data_placeholder("Health Checks", "health_checks")
+        db_ok = False
+        db_error = None
+        try:
+            with engine.connect() as conn:
+                conn.execute(sa_text("SELECT 1"))
+            db_ok = True
+        except Exception as exc:
+            db_error = str(exc)
+
+        env_config = app.config.get("PACER_ENV_CONFIG") or {}
+        pacer_env_ok = not bool(app.config.get("PACER_ENV_MISMATCH"))
+        pacer_env_reason = app.config.get("PACER_ENV_MISMATCH_REASON")
+        service_record = pacer_service_token_store.get_token(
+            expected_environment=pacer_env_config.pcl_env
+        )
+        service_token_status = {
+            "connected": bool(service_record),
+            "fingerprint": token_fingerprint(service_record.token if service_record else None),
+            "environment_label": pacer_env_label(
+                (service_record.environment if service_record else None) or "unknown"
+            ),
+        }
+        return render_template(
+            "admin_federal_data_health_checks.html",
+            active_page="federal_data_dashboard",
+            active_subnav="health_checks",
+            db_ok=db_ok,
+            db_error=db_error,
+            pacer_env_ok=pacer_env_ok,
+            pacer_env_reason=pacer_env_reason,
+            pacer_env_config=env_config,
+            service_token_status=service_token_status,
+        )
 
     @app.get("/admin/federal-data-dashboard/configure-ask-loulou")
     @admin_required
     def admin_federal_data_dashboard_configure_ask_loulou():
-        return _render_federal_data_placeholder("Configure Ask LouLou", "configure_ask_loulou")
+        openai_model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
+        openai_key_configured = bool(_first_env_or_secret_file("OPENAI_API_KEY"))
+        return render_template(
+            "admin_federal_data_configure_ai.html",
+            active_page="federal_data_dashboard",
+            active_subnav="configure_ask_loulou",
+            openai_model=openai_model,
+            openai_key_configured=openai_key_configured,
+        )
 
     @app.get("/admin/federal-data-dashboard/pcl-batch-search")
     @admin_required
@@ -8669,12 +8731,20 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard/expand-existing")
     @admin_required
     def admin_federal_data_dashboard_expand_existing():
-        return _render_federal_data_placeholder("Expand Existing PCL Data")
+        flash(
+            "Use Docket Enrichment to expand existing saved cases with docket details.",
+            "success",
+        )
+        return redirect(url_for("admin_docket_enrichment_dashboard"))
 
     @app.get("/admin/federal-data-dashboard/advanced")
     @admin_required
     def admin_federal_data_dashboard_advanced():
-        return _render_federal_data_placeholder("Advanced")
+        return render_template(
+            "admin_federal_data_advanced.html",
+            active_page="federal_data_dashboard",
+            active_subnav=None,
+        )
 
     @app.get("/admin/users")
     @admin_required
@@ -9029,6 +9099,7 @@ def create_app() -> Flask:
         return jsonify({"status": "ok"})
 
     @app.route("/api/tables")
+    @admin_required
     def list_tables():
         metadata.reflect(bind=engine)
         # Do not reveal protected tables.
@@ -9041,6 +9112,7 @@ def create_app() -> Flask:
         return jsonify(sorted(tables))
 
     @app.route("/api/<table_name>", methods=["GET", "POST"])
+    @admin_required
     def table_records(table_name: str):
         if table_name.lower() in {"users", "newsletter_subscriptions", "case_stage1", "case_data_one"}:
             return jsonify({"error": "Forbidden"}), 403
@@ -9051,6 +9123,7 @@ def create_app() -> Flask:
             return jsonify({"error": str(exc)}), 404
 
         if request.method == "POST":
+            require_csrf()
             payload = request.get_json(silent=True)
             if not isinstance(payload, dict):
                 return jsonify({"error": "JSON object payload required"}), 400

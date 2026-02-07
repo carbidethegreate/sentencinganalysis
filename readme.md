@@ -39,8 +39,14 @@ The app will try these, in order:
 All runtime entrypoints call the same Flask app factory (`create_app()`), which ensures a consistent configuration path.
 
 - Local development: `python app.py` (invokes `create_app()` in `__main__`).
-- Docker (`Dockerfile`): `gunicorn --bind 0.0.0.0:${PORT:-5000} --timeout ${GUNICORN_TIMEOUT:-180} "app:create_app()"`.
-- Render (`render.yaml`): same gunicorn `app:create_app()` target as Docker.
+- Docker (`Dockerfile`): `python scripts/run_service.py` with `SERVICE_MODE=web|worker|cron`.
+- Render (`render.yaml`): Python web uses gunicorn; Docker services use `SERVICE_MODE` via `scripts/run_service.py`.
+
+Worker/cron mode environment variables:
+- `SERVICE_MODE=worker` runs continuous batch+docket+document workers.
+- `SERVICE_MODE=cron` runs one worker pass and exits.
+- `WORKER_LOOP_INTERVAL_SECONDS` controls worker polling delay (default `30`).
+- `BATCH_WORKER_MAX_SEGMENTS`, `DOCKET_WORKER_MAX_JOBS`, `DOCUMENT_WORKER_MAX_JOBS`, `DOCUMENT_WORKER_MAX_DOCS` tune per-pass limits.
 
 ## Configuration loading order (summary)
 
