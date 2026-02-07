@@ -845,6 +845,13 @@ button.danger {
   word-break: break-all;
 }
 
+.docket-text-block {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
 .database-header {
   display: flex;
   align-items: flex-end;

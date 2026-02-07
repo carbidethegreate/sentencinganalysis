@@ -172,10 +172,10 @@
             <pre class="code-block">{{ docket.header_fields | tojson(indent=2) }}</pre>
           </details>
         {% endif %}
-        {% if docket.preview %}
-          <pre class="code-block">{{ docket.preview }}</pre>
-        {% elif docket.text and docket.text.text %}
-          <pre class="code-block">{{ docket.text.text }}</pre>
+        {% if docket.text and docket.text.text %}
+          <pre class="code-block docket-text-block">{{ docket.text.text }}</pre>
+        {% elif docket.preview %}
+          <pre class="code-block docket-text-block">{{ docket.preview }}</pre>
         {% elif docket_is_html and docket_is_login %}
           <p class="small">PACER returned a login redirect. Docket text was not captured.</p>
         {% elif docket_is_html %}
