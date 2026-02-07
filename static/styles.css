@@ -1926,6 +1926,14 @@ input[type="submit"].danger:disabled {
   .coming-soon-card {
     padding: 40px 24px;
   }
+
+  .cases-hero__stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cases-case-meta {
+    grid-template-columns: 1fr;
+  }
 }
 
 .pcl-cases-shell {
@@ -2111,6 +2119,199 @@ input[type="submit"].danger:disabled {
 
 .attorney-details {
   margin-top: 2px;
+}
+
+.cases-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  background: linear-gradient(140deg, rgba(217, 203, 186, 0.22), rgba(255, 255, 255, 0.8));
+}
+
+.cases-hero__text h2 {
+  margin: 0 0 6px;
+  color: var(--primary-dark);
+}
+
+.cases-hero__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cases-kpi {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(140, 132, 128, 0.28);
+  background: rgba(255, 255, 255, 0.8);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cases-kpi__label {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.cases-kpi__value {
+  font-size: 1.28rem;
+  color: var(--primary-dark);
+  line-height: 1.1;
+}
+
+.cases-filter-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cases-filter-card__header h3 {
+  margin: 0 0 4px;
+}
+
+.cases-filter-form {
+  background: rgba(217, 203, 186, 0.2);
+}
+
+.cases-flag-fieldset {
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.cases-support-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.cases-support-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.cases-support-card__header h3 {
+  margin: 0;
+}
+
+.cases-support-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cases-support-item {
+  border: 1px solid rgba(140, 132, 128, 0.22);
+  border-radius: 14px;
+  background: rgba(249, 246, 242, 0.85);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cases-support-item .actions {
+  justify-content: flex-start;
+}
+
+.cases-results {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cases-results__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cases-results__header h3 {
+  margin: 0 0 4px;
+}
+
+.cases-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.cases-case-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(249, 246, 242, 0.96), rgba(249, 246, 242, 0.72));
+}
+
+.cases-case-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cases-case-card__number {
+  margin: 0 0 6px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary-dark);
+}
+
+.cases-case-card__title {
+  margin: 0;
+  color: var(--text);
+}
+
+.cases-case-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.cases-case-meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cases-case-meta dt {
+  margin: 0;
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.cases-case-meta dd {
+  margin: 3px 0 0;
+  font-weight: 600;
+  color: var(--primary-dark);
+}
+
+.cases-case-context {
+  border-top: 1px dashed rgba(140, 132, 128, 0.35);
+  padding-top: 10px;
+}
+
+.cases-case-actions {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
 }
 
 .pcl-flag-fieldset {
@@ -3076,6 +3277,34 @@ input[type="submit"].danger:disabled {
 
   .pcl-case-card__header {
     flex-direction: column;
+  }
+
+  .cases-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .cases-hero__stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .cases-support-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cases-results__header {
+    flex-direction: column;
+  }
+
+  .cases-case-card__header {
+    flex-direction: column;
+  }
+
+  .cases-case-card__badges {
+    justify-content: flex-start;
+  }
+
+  .cases-case-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .attorney-grid {

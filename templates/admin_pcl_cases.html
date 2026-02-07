@@ -3,110 +3,53 @@
 {% block title %}Admin | Indexed PCL Cases{% endblock %}
 
 {% block federal_content %}
-  <section class="card stack">
-    <p class="pacer-eyebrow">Saved searches</p>
-    <h3>Reusable PACER search presets</h3>
-    <p class="small">Run a saved search to refresh or expand your saved cases.</p>
-    {% if saved_searches %}
-      <div class="stack">
-        {% for saved in saved_searches %}
-          <div class="card">
-            <div class="row row--spread row--top">
-              <div>
-                <p class="small"><strong>{{ saved.label }}</strong></p>
-                <p class="small">
-                  {{ saved.search_type|capitalize }} · {{ saved.search_mode|capitalize }}
-                  · Schedule: {{ saved.schedule_label|capitalize }}
-                </p>
-                <p class="small">
-                  Court/Region: <code>{{ saved.summary.court_id or saved.summary.region_code or 'All' }}</code>
-                  {% if saved.summary.court_id and saved.summary.region_code %}
-                    · Region: <code>{{ saved.summary.region_code }}</code>
-                  {% endif %}
-                  {% if saved.summary.date_from or saved.summary.date_to %}
-                    · Date range: {{ saved.summary.date_from or '—' }} → {{ saved.summary.date_to or '—' }}
-                  {% endif %}
-                </p>
-                {% if saved.summary.case_types %}
-                  <p class="small">Case types: {{ saved.summary.case_types | join(', ') }}</p>
-                {% endif %}
-                {% if saved.last_run_display %}
-                  <p class="small">Last run: {{ saved.last_run_display }}</p>
-                {% endif %}
-                {% if saved.summary.sort_field %}
-                  <p class="small">Sort: {{ saved.summary.sort_field }} · {{ (saved.summary.sort_order or 'asc') | upper }}</p>
-                {% endif %}
-              </div>
-              <div class="actions">
-                <form method="post" action="{{ url_for('admin_pacer_explore_run') }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  {% for field in saved.run_fields %}
-                    <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
-                  {% endfor %}
-                  <button class="primary" type="submit">Run now</button>
-                </form>
-                <form method="post" action="{{ url_for('admin_pacer_saved_search_delete', search_id=saved.id) }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                  <input type="hidden" name="next" value="{{ url_for('admin_pcl_cases') }}">
-                  <button class="secondary" type="submit">Remove</button>
-                </form>
-              </div>
-            </div>
-          </div>
-        {% endfor %}
-      </div>
-    {% else %}
-      <p class="small">No saved searches yet. Save a run on the Get PACER Data page.</p>
-    {% endif %}
-  </section>
+  {% set active_filter_count = 0 %}
+  {% if filters.court_id %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.case_type %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.date_filed_from %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.date_filed_to %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.judge_last_name %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.search_text %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.field_name %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.field_value %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.indexed_only %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.enriched_only %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% if filters.sentencing_only %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
 
-  <section class="card stack">
-    <p class="pacer-eyebrow">Run history</p>
-    <h3>Recent PACER runs</h3>
-    <p class="small">Quick context on what was saved or updated.</p>
-    {% if search_run_history %}
-      <div class="stack">
-        {% for run in search_run_history %}
-          <div class="card">
-            <p class="small"><strong>{{ run.search_type|capitalize }}</strong> · {{ run.search_mode|capitalize }} · {{ run.created_at_display }}</p>
-            <p class="small">
-              Court/Region: <code>{{ run.court_id or run.region_code or 'All' }}</code>
-              {% if run.court_id and run.region_code %}
-                · Region: <code>{{ run.region_code }}</code>
-              {% endif %}
-              {% if run.date_from or run.date_to %}
-                · Date range: {{ run.date_from or '—' }} → {{ run.date_to or '—' }}
-              {% endif %}
-            </p>
-            {% if run.sort_field %}
-              <p class="small">Sort: {{ run.sort_field }} · {{ (run.sort_order or 'asc') | upper }}</p>
-            {% endif %}
-            <p class="small">
-              New cases: {{ run.cases_inserted or 0 }} · Updated cases: {{ run.cases_updated or 0 }}
-              · New parties: {{ run.parties_inserted or 0 }} · Updated parties: {{ run.parties_updated or 0 }}
-            </p>
-          </div>
-        {% endfor %}
+  <section class="card cases-hero">
+    <div class="cases-hero__text">
+      <p class="pacer-eyebrow">Case Operations</p>
+      <h2>Indexed PACER Cases</h2>
+      <p class="small">Find cases fast, triage enrichment work, and jump straight into detail records.</p>
+    </div>
+    <div class="cases-hero__stats">
+      <div class="cases-kpi">
+        <span class="cases-kpi__label">Total matches</span>
+        <strong class="cases-kpi__value">{{ pagination.total }}</strong>
       </div>
-    {% else %}
-      <p class="small">No stored runs yet.</p>
-    {% endif %}
-  </section>
-
-  <section class="card pcl-cases-shell">
-    <div class="pcl-cases-header">
-      <div>
-        <h2>Saved PACER cases</h2>
-        <p class="small">Search and filter the cases you pulled from PACER.</p>
+      <div class="cases-kpi">
+        <span class="cases-kpi__label">Shown on page</span>
+        <strong class="cases-kpi__value">{{ cases|length }}</strong>
       </div>
-      <div class="pcl-cases-summary">
-        <strong>{{ pagination.total }}</strong>
-        <span class="small">total saved cases</span>
+      <div class="cases-kpi">
+        <span class="cases-kpi__label">Active filters</span>
+        <strong class="cases-kpi__value">{{ active_filter_count }}</strong>
       </div>
     </div>
+  </section>
 
-    <form method="get" class="pcl-filter-form" aria-label="Filter saved PACER cases">
-      <div class="grid two">
+  <section class="card cases-filter-card">
+    <div class="cases-filter-card__header">
+      <h3>Filter cases</h3>
+      <p class="small">Use broad filters first, then narrow with field name/value search.</p>
+    </div>
+
+    <form method="get" class="pcl-filter-form cases-filter-form" aria-label="Filter saved PACER cases">
+      <div class="grid three">
+        <div>
+          <label for="pcl-search">Search case</label>
+          <input id="pcl-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
+        </div>
         <div>
           <label for="pcl-court">Court</label>
           <input class="small" type="search" placeholder="Type to filter courts" data-filter-input="pcl-court">
@@ -140,10 +83,6 @@
           <input id="pcl-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., Jackson">
         </div>
         <div>
-          <label for="pcl-search">Search case</label>
-          <input id="pcl-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
-        </div>
-        <div>
           <label for="pcl-field-name">Field name</label>
           <input id="pcl-field-name" name="field_name" list="pcl-field-name-list" value="{{ filters.field_name }}" placeholder="e.g., caseId">
           <datalist id="pcl-field-name-list">
@@ -151,15 +90,15 @@
               <option value="{{ field_name }}"></option>
             {% endfor %}
           </datalist>
-          <p class="small">Search any PACER field captured for the case.</p>
         </div>
         <div>
           <label for="pcl-field-value">Field value contains</label>
           <input id="pcl-field-value" name="field_value" value="{{ filters.field_value }}" placeholder="e.g., 2025 or vidc">
+          <p class="small">Matches text and JSON-captured field values.</p>
         </div>
       </div>
 
-      <fieldset class="pcl-flag-fieldset">
+      <fieldset class="pcl-flag-fieldset cases-flag-fieldset">
         <legend>Status filters</legend>
         <label class="pcl-flag-option">
           <input type="checkbox" name="indexed_only" value="1" {% if filters.indexed_only %}checked{% endif %}>
@@ -182,74 +121,177 @@
     </form>
   </section>
 
-  <section class="pcl-card-grid" aria-live="polite">
+  <section class="cases-support-grid">
+    <article class="card cases-support-card">
+      <div class="cases-support-card__header">
+        <p class="pacer-eyebrow">Saved Searches</p>
+        <h3>Reusable PACER presets</h3>
+      </div>
+      <p class="small">Run a saved search to refresh or expand your case dataset.</p>
+      {% if saved_searches %}
+        <div class="cases-support-list">
+          {% for saved in saved_searches %}
+            <div class="cases-support-item">
+              <div>
+                <p class="small"><strong>{{ saved.label }}</strong></p>
+                <p class="small">
+                  {{ saved.search_type|capitalize }} · {{ saved.search_mode|capitalize }} · {{ saved.schedule_label|capitalize }}
+                </p>
+                <p class="small">
+                  {{ saved.summary.court_id or saved.summary.region_code or 'All' }}
+                  {% if saved.summary.date_from or saved.summary.date_to %}
+                    · {{ saved.summary.date_from or '—' }} → {{ saved.summary.date_to or '—' }}
+                  {% endif %}
+                </p>
+                {% if saved.last_run_display %}
+                  <p class="small">Last run: {{ saved.last_run_display }}</p>
+                {% endif %}
+              </div>
+              <div class="actions">
+                <form method="post" action="{{ url_for('admin_pacer_explore_run') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  {% for field in saved.run_fields %}
+                    <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
+                  {% endfor %}
+                  <button class="secondary" type="submit">Run</button>
+                </form>
+                <form method="post" action="{{ url_for('admin_pacer_saved_search_delete', search_id=saved.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="next" value="{{ url_for('admin_pcl_cases') }}">
+                  <button class="secondary" type="submit">Remove</button>
+                </form>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="small">No saved searches yet. Save one from Get PACER Data.</p>
+      {% endif %}
+    </article>
+
+    <article class="card cases-support-card">
+      <div class="cases-support-card__header">
+        <p class="pacer-eyebrow">Run History</p>
+        <h3>Recent PACER runs</h3>
+      </div>
+      <p class="small">Quick context on what was newly inserted or updated.</p>
+      {% if search_run_history %}
+        <div class="cases-support-list">
+          {% for run in search_run_history %}
+            <div class="cases-support-item">
+              <div>
+                <p class="small"><strong>{{ run.search_type|capitalize }}</strong> · {{ run.search_mode|capitalize }} · {{ run.created_at_display }}</p>
+                <p class="small">
+                  {{ run.court_id or run.region_code or 'All' }}
+                  {% if run.date_from or run.date_to %}
+                    · {{ run.date_from or '—' }} → {{ run.date_to or '—' }}
+                  {% endif %}
+                </p>
+                <p class="small">
+                  New {{ run.cases_inserted or 0 }} / Updated {{ run.cases_updated or 0 }} cases
+                  · New {{ run.parties_inserted or 0 }} / Updated {{ run.parties_updated or 0 }} parties
+                </p>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="small">No stored runs yet.</p>
+      {% endif %}
+    </article>
+  </section>
+
+  <section class="cases-results" aria-live="polite">
+    <div class="cases-results__header">
+      <div>
+        <h3>Case results</h3>
+        <p class="small">Sorted by your active filters and pagination settings.</p>
+      </div>
+      <div class="pcl-cases-summary">
+        <strong>{{ pagination.total }}</strong>
+        <span class="small">matching cases</span>
+      </div>
+    </div>
+
     {% if cases %}
-      {% for case in cases %}
-        <article class="card pcl-case-card">
-          <header class="pcl-case-card__header">
-            <div>
-              <p class="pcl-case-card__number">{{ case.case_number_full or case.case_number }}</p>
-              <h3 class="pcl-case-card__title">{{ case.short_title or case.case_title or "Untitled case" }}</h3>
-            </div>
-            <div class="pcl-case-card__badges">
-              <span class="pcl-badge" data-variant="indexed">Saved</span>
-              <span class="pcl-badge" data-variant="stub">
-                Expanded data: {{ case.enrichment_status or "none" }}
-              </span>
-              <span class="pcl-badge" data-variant="{{ 'indexed' if case.has_sentencing else 'stub' }}">
-                Sentencing: {{ "yes" if case.has_sentencing else "no" }}
-              </span>
-            </div>
-          </header>
+      <div class="cases-grid">
+        {% for case in cases %}
+          <article class="card cases-case-card">
+            <header class="cases-case-card__header">
+              <div>
+                <p class="cases-case-card__number">{{ case.case_number_full or case.case_number }}</p>
+                <h4 class="cases-case-card__title">{{ case.short_title or case.case_title or "Untitled case" }}</h4>
+              </div>
+              <div class="cases-case-card__badges">
+                <span class="pcl-badge" data-variant="indexed">Saved</span>
+                <span class="pcl-badge" data-variant="{{ 'indexed' if case.enrichment_status and case.enrichment_status != 'none' else 'stub' }}">
+                  Enrichment: {{ case.enrichment_status or "none" }}
+                </span>
+                <span class="pcl-badge" data-variant="{{ 'indexed' if case.has_sentencing else 'stub' }}">
+                  Sentencing: {{ "yes" if case.has_sentencing else "no" }}
+                </span>
+              </div>
+            </header>
 
-          <dl class="pcl-case-meta">
-            <div>
-              <dt>Date filed</dt>
-              <dd>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</dd>
-            </div>
-            <div>
-              <dt>Date closed</dt>
-              <dd>
-                {% set closed_date = case.effective_date_closed or case.date_closed %}
-                {{ closed_date.isoformat() if closed_date else "—" }}
-              </dd>
-            </div>
-            <div>
-              <dt>Court</dt>
-              <dd>{{ case.court_id }}</dd>
-            </div>
-            <div>
-              <dt>Judge</dt>
-              <dd>{{ case.judge_last_name or "—" }}</dd>
-            </div>
-          </dl>
+            <dl class="cases-case-meta">
+              <div>
+                <dt>Date filed</dt>
+                <dd>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</dd>
+              </div>
+              <div>
+                <dt>Date closed</dt>
+                <dd>
+                  {% set closed_date = case.effective_date_closed or case.date_closed %}
+                  {{ closed_date.isoformat() if closed_date else "—" }}
+                </dd>
+              </div>
+              <div>
+                <dt>Court</dt>
+                <dd>{{ case.court_id }}</dd>
+              </div>
+              <div>
+                <dt>Case type</dt>
+                <dd>{{ case.case_type or "—" }}</dd>
+              </div>
+              <div>
+                <dt>Judge</dt>
+                <dd>{{ case.judge_last_name or "—" }}</dd>
+              </div>
+              <div>
+                <dt>Segment status</dt>
+                <dd>{{ case.segment_status or "unknown" }}</dd>
+              </div>
+            </dl>
 
-          <footer class="pcl-case-card__footer">
-            <span class="small">Batch status: {{ case.segment_status or "unknown" }}</span>
-            <span class="small">
-              Last PACER run:
-              {% if case.last_search_run_id %}
-                Run #{{ case.last_search_run_id }}
-              {% endif %}
-              {% if case.last_search_run_at %}
-                · {{ case.last_search_run_at.isoformat() }}
-              {% else %}
-                · —
-              {% endif %}
-            </span>
-            <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.id) }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="include_docket_text" value="1">
-              <button class="secondary" type="submit">Pull docket text</button>
-            </form>
-            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View details</a>
-          </footer>
-        </article>
-      {% endfor %}
+            <div class="cases-case-context">
+              <span class="small">
+                Last PACER run:
+                {% if case.last_search_run_id %}
+                  #{{ case.last_search_run_id }}
+                {% else %}
+                  —
+                {% endif %}
+                {% if case.last_search_run_at %}
+                  · {{ case.last_search_run_at.isoformat() }}
+                {% endif %}
+              </span>
+            </div>
+
+            <footer class="cases-case-actions">
+              <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="include_docket_text" value="1">
+                <button class="secondary" type="submit">Pull docket</button>
+              </form>
+              <a class="primary" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View case</a>
+            </footer>
+          </article>
+        {% endfor %}
+      </div>
     {% else %}
       <div class="card pcl-empty-state">
         <h3>No cases match those filters</h3>
-        <p class="small">Try widening the date range or clearing a filter.</p>
+        <p class="small">Try widening the date range or clearing one or more filters.</p>
       </div>
     {% endif %}
   </section>
