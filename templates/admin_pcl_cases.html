@@ -15,6 +15,13 @@
   {% if filters.indexed_only %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
   {% if filters.enriched_only %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
   {% if filters.sentencing_only %}{% set active_filter_count = active_filter_count + 1 %}{% endif %}
+  {% set total_pages = pagination.total_pages %}
+  {% set current_page = pagination.page %}
+  {% set has_results = pagination.total > 0 %}
+  {% set start_index = ((current_page - 1) * pagination.page_size) + 1 if has_results else 0 %}
+  {% set end_index = (start_index + (cases|length) - 1) if has_results else 0 %}
+  {% set window_start = (current_page - 2) if (current_page - 2) > 1 else 1 %}
+  {% set window_end = (current_page + 2) if (current_page + 2) < total_pages else total_pages %}
 
   <section class="card cases-hero">
     <div class="cases-hero__text">
@@ -63,11 +70,12 @@
         {% if filters.indexed_only %}<span class="cases-filter-chip">Saved only</span>{% endif %}
         {% if filters.enriched_only %}<span class="cases-filter-chip">Enriched only</span>{% endif %}
         {% if filters.sentencing_only %}<span class="cases-filter-chip">Sentencing only</span>{% endif %}
-        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Clear all</a>
+        <a class="pill" href="{{ url_for('admin_pcl_cases', page_size=pagination.page_size) }}">Clear all</a>
       </div>
     {% endif %}
 
     <form method="get" class="pcl-filter-form cases-filter-form" id="cases-filter-form" aria-label="Filter saved PACER cases">
+      <input type="hidden" name="page_size" value="{{ pagination.page_size }}">
       <section class="cases-filter-block">
         <header class="cases-filter-block__header">
           <h4>Case basics</h4>
@@ -178,7 +186,7 @@
 
       <div class="actions pcl-filter-actions cases-filter-actions">
         <button class="primary" type="submit">Apply filters</button>
-        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Reset all</a>
+        <a class="pill" href="{{ url_for('admin_pcl_cases', page_size=pagination.page_size) }}">Reset all</a>
         <span class="small">Shortcut: press <code>/</code> to focus case search.</span>
       </div>
     </form>
@@ -276,7 +284,47 @@
       </div>
     </div>
 
+    <div class="cases-results__tools">
+      <form method="get" class="cases-page-size-form" id="cases-page-size-form">
+        <input type="hidden" name="page" value="1">
+        {% if filters.search_text %}<input type="hidden" name="q" value="{{ filters.search_text }}">{% endif %}
+        {% if filters.court_id %}<input type="hidden" name="court_id" value="{{ filters.court_id }}">{% endif %}
+        {% if filters.case_type %}<input type="hidden" name="case_type" value="{{ filters.case_type }}">{% endif %}
+        {% if filters.date_filed_from %}<input type="hidden" name="date_filed_from" value="{{ filters.date_filed_from.isoformat() }}">{% endif %}
+        {% if filters.date_filed_to %}<input type="hidden" name="date_filed_to" value="{{ filters.date_filed_to.isoformat() }}">{% endif %}
+        {% if filters.judge_last_name %}<input type="hidden" name="judge_last_name" value="{{ filters.judge_last_name }}">{% endif %}
+        {% if filters.field_name %}<input type="hidden" name="field_name" value="{{ filters.field_name }}">{% endif %}
+        {% if filters.field_value %}<input type="hidden" name="field_value" value="{{ filters.field_value }}">{% endif %}
+        {% if filters.indexed_only %}<input type="hidden" name="indexed_only" value="1">{% endif %}
+        {% if filters.enriched_only %}<input type="hidden" name="enriched_only" value="1">{% endif %}
+        {% if filters.sentencing_only %}<input type="hidden" name="sentencing_only" value="1">{% endif %}
+
+        <label for="cases-page-size">Rows per page</label>
+        <select id="cases-page-size" name="page_size">
+          {% for size in [10, 25, 50, 100] %}
+            <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
+          {% endfor %}
+        </select>
+      </form>
+
+      <p class="small">Showing {{ start_index }}-{{ end_index }} of {{ pagination.total }}</p>
+
+      {% if cases %}
+        <label class="cases-select-toggle">
+          <input type="checkbox" id="cases-select-all">
+          Select all on this page
+        </label>
+      {% endif %}
+    </div>
+
     {% if cases %}
+      <div class="cases-bulk-bar" id="cases-bulk-bar" hidden>
+        <span class="cases-bulk-bar__count" id="cases-selected-count">0 selected</span>
+        <button class="secondary" type="button" id="cases-bulk-queue">Queue docket for selected</button>
+        <button class="pill" type="button" id="cases-bulk-clear">Clear selection</button>
+        <span class="small" id="cases-bulk-status" aria-live="polite"></span>
+      </div>
+
       <div class="cases-grid">
         {% for case in cases %}
           <article class="card cases-case-card">
@@ -285,14 +333,25 @@
                 <p class="cases-case-card__number">{{ case.case_number_full or case.case_number }}</p>
                 <h4 class="cases-case-card__title">{{ case.short_title or case.case_title or "Untitled case" }}</h4>
               </div>
-              <div class="cases-case-card__badges">
-                <span class="pcl-badge" data-variant="indexed">Saved</span>
-                <span class="pcl-badge" data-variant="{{ 'indexed' if case.enrichment_status and case.enrichment_status != 'none' else 'stub' }}">
-                  Enrichment: {{ case.enrichment_status or "none" }}
-                </span>
-                <span class="pcl-badge" data-variant="{{ 'indexed' if case.has_sentencing else 'stub' }}">
-                  Sentencing: {{ "yes" if case.has_sentencing else "no" }}
-                </span>
+              <div class="cases-case-card__right">
+                <label class="cases-case-select">
+                  <input
+                    type="checkbox"
+                    class="cases-select-item"
+                    value="{{ case.id }}"
+                    data-case-number="{{ case.case_number_full or case.case_number }}"
+                  >
+                  <span>Select</span>
+                </label>
+                <div class="cases-case-card__badges">
+                  <span class="pcl-badge" data-variant="indexed">Saved</span>
+                  <span class="pcl-badge" data-variant="{{ 'indexed' if case.enrichment_status and case.enrichment_status != 'none' else 'stub' }}">
+                    Enrichment: {{ case.enrichment_status or "none" }}
+                  </span>
+                  <span class="pcl-badge" data-variant="{{ 'indexed' if case.has_sentencing else 'stub' }}">
+                    Sentencing: {{ "yes" if case.has_sentencing else "no" }}
+                  </span>
+                </div>
               </div>
             </header>
 
@@ -346,6 +405,7 @@
                 <input type="hidden" name="include_docket_text" value="1">
                 <button class="secondary" type="submit">Pull docket</button>
               </form>
+              <button class="pill cases-copy-number" type="button" data-case-number="{{ case.case_number_full or case.case_number }}">Copy number</button>
               <a class="primary" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">View case</a>
             </footer>
           </article>
@@ -360,20 +420,38 @@
   </section>
 
   <nav class="pcl-pagination" aria-label="Indexed case pagination">
-    {% set total_pages = pagination.total_pages %}
-    {% set current_page = pagination.page %}
     <span class="small">Page {{ current_page }} of {{ total_pages }}</span>
     <div class="pcl-pagination__actions">
+      <a class="pill {% if current_page <= 1 %}disabled{% endif %}" href="{{ page_url(1) if current_page > 1 else '#' }}" aria-disabled="{{ 'true' if current_page <= 1 else 'false' }}">First</a>
       <a class="pill {% if current_page <= 1 %}disabled{% endif %}" href="{{ page_url(current_page - 1) if current_page > 1 else '#' }}" aria-disabled="{{ 'true' if current_page <= 1 else 'false' }}">Previous</a>
+      {% for page_number in range(window_start, window_end + 1) %}
+        {% if page_number == current_page %}
+          <span class="pill is-current" aria-current="page">{{ page_number }}</span>
+        {% else %}
+          <a class="pill" href="{{ page_url(page_number) }}">{{ page_number }}</a>
+        {% endif %}
+      {% endfor %}
       <a class="pill {% if current_page >= total_pages %}disabled{% endif %}" href="{{ page_url(current_page + 1) if current_page < total_pages else '#' }}" aria-disabled="{{ 'true' if current_page >= total_pages else 'false' }}">Next</a>
+      <a class="pill {% if current_page >= total_pages %}disabled{% endif %}" href="{{ page_url(total_pages) if current_page < total_pages else '#' }}" aria-disabled="{{ 'true' if current_page >= total_pages else 'false' }}">Last</a>
     </div>
   </nav>
   <script>
     (function () {
       const filterForm = document.getElementById("cases-filter-form");
+      const pageSizeForm = document.getElementById("cases-page-size-form");
+      const pageSizeSelect = document.getElementById("cases-page-size");
       const searchInput = document.getElementById("pcl-search");
       const dateFromInput = document.getElementById("pcl-date-from");
       const dateToInput = document.getElementById("pcl-date-to");
+      const selectAllCheckbox = document.getElementById("cases-select-all");
+      const caseSelectionInputs = Array.from(document.querySelectorAll(".cases-select-item"));
+      const bulkBar = document.getElementById("cases-bulk-bar");
+      const bulkCount = document.getElementById("cases-selected-count");
+      const bulkStatus = document.getElementById("cases-bulk-status");
+      const bulkQueueButton = document.getElementById("cases-bulk-queue");
+      const bulkClearButton = document.getElementById("cases-bulk-clear");
+      const copyButtons = document.querySelectorAll(".cases-copy-number");
+      const csrfToken = {{ csrf_token|tojson }};
       const submitFilterForm = () => {
         if (!filterForm) return;
         if (typeof filterForm.requestSubmit === "function") {
@@ -382,11 +460,61 @@
           filterForm.submit();
         }
       };
+      const submitForm = (form) => {
+        if (!form) return;
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit();
+        } else {
+          form.submit();
+        }
+      };
       const toDateString = (dateValue) => {
         const year = dateValue.getFullYear();
         const month = String(dateValue.getMonth() + 1).padStart(2, "0");
         const day = String(dateValue.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
+      };
+      const selectedCases = () => caseSelectionInputs.filter((input) => input.checked);
+      const updateSelectionState = () => {
+        const selectedCount = selectedCases().length;
+        if (bulkBar) {
+          bulkBar.hidden = selectedCount === 0;
+        }
+        if (bulkCount) {
+          bulkCount.textContent = `${selectedCount} selected`;
+        }
+        if (selectAllCheckbox) {
+          if (selectedCount === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+          } else if (selectedCount === caseSelectionInputs.length) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+          } else {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+          }
+        }
+      };
+      const setBulkStatus = (message, variant = "") => {
+        if (!bulkStatus) return;
+        bulkStatus.textContent = message;
+        if (variant) {
+          bulkStatus.setAttribute("data-variant", variant);
+        } else {
+          bulkStatus.removeAttribute("data-variant");
+        }
+      };
+      const fallbackCopy = (text) => {
+        const helper = document.createElement("textarea");
+        helper.value = text;
+        helper.setAttribute("readonly", "");
+        helper.style.position = "absolute";
+        helper.style.left = "-9999px";
+        document.body.appendChild(helper);
+        helper.select();
+        document.execCommand("copy");
+        document.body.removeChild(helper);
       };
 
       const filters = document.querySelectorAll("[data-filter-input]");
@@ -428,6 +556,10 @@
         });
       });
 
+      if (pageSizeSelect && pageSizeForm) {
+        pageSizeSelect.addEventListener("change", () => submitForm(pageSizeForm));
+      }
+
       const rangeButtons = document.querySelectorAll("[data-range-days], [data-range]");
       rangeButtons.forEach((button) => {
         button.addEventListener("click", () => {
@@ -461,6 +593,107 @@
         });
       });
 
+      copyButtons.forEach((button) => {
+        const defaultLabel = button.textContent;
+        button.addEventListener("click", async () => {
+          const value = button.getAttribute("data-case-number") || "";
+          if (!value) return;
+          try {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+              await navigator.clipboard.writeText(value);
+            } else {
+              fallbackCopy(value);
+            }
+            button.textContent = "Copied";
+            window.setTimeout(() => {
+              button.textContent = defaultLabel;
+            }, 1200);
+          } catch (error) {
+            button.textContent = "Copy failed";
+            window.setTimeout(() => {
+              button.textContent = defaultLabel;
+            }, 1200);
+          }
+        });
+      });
+
+      if (selectAllCheckbox && caseSelectionInputs.length) {
+        selectAllCheckbox.addEventListener("change", () => {
+          const checked = selectAllCheckbox.checked;
+          caseSelectionInputs.forEach((input) => {
+            input.checked = checked;
+          });
+          updateSelectionState();
+        });
+      }
+
+      caseSelectionInputs.forEach((input) => {
+        input.addEventListener("change", updateSelectionState);
+      });
+
+      if (bulkClearButton) {
+        bulkClearButton.addEventListener("click", () => {
+          caseSelectionInputs.forEach((input) => {
+            input.checked = false;
+          });
+          setBulkStatus("");
+          updateSelectionState();
+        });
+      }
+
+      if (bulkQueueButton) {
+        bulkQueueButton.addEventListener("click", async () => {
+          const selected = selectedCases();
+          if (!selected.length) return;
+          const isConfirmed = window.confirm(
+            `Queue docket enrichment for ${selected.length} selected case${selected.length === 1 ? "" : "s"}?`
+          );
+          if (!isConfirmed) return;
+          bulkQueueButton.disabled = true;
+          if (bulkClearButton) {
+            bulkClearButton.disabled = true;
+          }
+          setBulkStatus(`Queueing ${selected.length} case${selected.length === 1 ? "" : "s"}...`, "pending");
+          let queuedCount = 0;
+          let failedCount = 0;
+          for (const input of selected) {
+            const caseId = input.value;
+            try {
+              const response = await fetch(`/admin/pcl/cases/${encodeURIComponent(caseId)}/docket-enrichment/queue`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                  "X-Requested-With": "XMLHttpRequest",
+                },
+                body: new URLSearchParams({
+                  csrf_token: csrfToken,
+                  include_docket_text: "1",
+                }).toString(),
+                credentials: "same-origin",
+              });
+              if (response.ok) {
+                queuedCount += 1;
+                input.checked = false;
+              } else {
+                failedCount += 1;
+              }
+            } catch (error) {
+              failedCount += 1;
+            }
+          }
+          updateSelectionState();
+          if (failedCount > 0) {
+            setBulkStatus(`Queued ${queuedCount}. Failed ${failedCount}.`, "error");
+          } else {
+            setBulkStatus(`Queued ${queuedCount} case${queuedCount === 1 ? "" : "s"}.`, "success");
+          }
+          bulkQueueButton.disabled = false;
+          if (bulkClearButton) {
+            bulkClearButton.disabled = false;
+          }
+        });
+      }
+
       document.addEventListener("keydown", (event) => {
         if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
         const target = event.target;
@@ -471,6 +704,8 @@
         searchInput.focus();
         searchInput.select();
       });
+
+      updateSelectionState();
     })();
   </script>
 {% endblock %}

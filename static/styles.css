@@ -1922,30 +1922,6 @@ input[type="submit"].danger:disabled {
   overflow-x: auto;
 }
 
-@media (max-width: 640px) {
-  .coming-soon-card {
-    padding: 40px 24px;
-  }
-
-  .cases-hero__stats {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .cases-case-meta {
-    grid-template-columns: 1fr;
-  }
-
-  .cases-date-shortcuts .pill {
-    padding: 6px 9px;
-    font-size: 0.75rem;
-  }
-
-  .cases-filter-actions {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-}
-
 .pcl-cases-shell {
   display: flex;
   flex-direction: column;
@@ -2384,6 +2360,91 @@ input[type="submit"].danger:disabled {
   margin: 0 0 4px;
 }
 
+.cases-results__tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(140, 132, 128, 0.24);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.cases-results__tools .small {
+  margin: 0;
+}
+
+.cases-page-size-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cases-page-size-form label {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.cases-page-size-form select {
+  width: auto;
+  min-width: 92px;
+}
+
+.cases-select-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(140, 132, 128, 0.3);
+  background: rgba(255, 255, 255, 0.84);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.cases-select-toggle input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.cases-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(13, 148, 136, 0.32);
+  background: rgba(13, 148, 136, 0.08);
+}
+
+.cases-bulk-bar__count {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--primary-dark);
+}
+
+.cases-bulk-bar button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+#cases-bulk-status[data-variant="pending"] {
+  color: #0f766e;
+}
+
+#cases-bulk-status[data-variant="success"] {
+  color: #166534;
+}
+
+#cases-bulk-status[data-variant="error"] {
+  color: #b91c1c;
+}
+
 .cases-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -2406,6 +2467,13 @@ input[type="submit"].danger:disabled {
   gap: 12px;
 }
 
+.cases-case-card__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .cases-case-card__number {
   margin: 0 0 6px;
   font-weight: 700;
@@ -2417,6 +2485,27 @@ input[type="submit"].danger:disabled {
 .cases-case-card__title {
   margin: 0;
   color: var(--text);
+}
+
+.cases-case-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(140, 132, 128, 0.32);
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.cases-case-select input[type="checkbox"] {
+  width: auto;
+  margin: 0;
 }
 
 .cases-case-card__badges {
@@ -2458,6 +2547,10 @@ input[type="submit"].danger:disabled {
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+}
+
+.cases-copy-number {
+  cursor: pointer;
 }
 
 .pcl-flag-fieldset {
@@ -2805,7 +2898,15 @@ input[type="submit"].danger:disabled {
 
 .pcl-pagination__actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.pill.is-current {
+  background: rgba(217, 203, 186, 0.55);
+  border-color: rgba(140, 132, 128, 0.4);
+  color: var(--primary-dark);
+  font-weight: 700;
 }
 
 .pill.disabled,
@@ -3450,8 +3551,18 @@ input[type="submit"].danger:disabled {
     flex-direction: column;
   }
 
+  .cases-results__tools {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .cases-case-card__header {
     flex-direction: column;
+  }
+
+  .cases-case-card__right {
+    width: 100%;
+    align-items: flex-start;
   }
 
   .cases-case-card__badges {
@@ -3469,6 +3580,48 @@ input[type="submit"].danger:disabled {
   .attorney-case-item {
     flex-direction: column;
     gap: 4px;
+  }
+}
+
+@media (max-width: 640px) {
+  .coming-soon-card {
+    padding: 40px 24px;
+  }
+
+  .cases-hero__stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .cases-case-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .cases-results__tools {
+    align-items: flex-start;
+  }
+
+  .cases-page-size-form {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .cases-page-size-form select {
+    min-width: 110px;
+  }
+
+  .cases-date-shortcuts .pill {
+    padding: 6px 9px;
+    font-size: 0.75rem;
+  }
+
+  .cases-filter-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .cases-bulk-bar {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 
