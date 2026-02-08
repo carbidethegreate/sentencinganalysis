@@ -307,12 +307,30 @@
         </select>
       </form>
 
-      <p class="small">Showing {{ start_index }}-{{ end_index }} of {{ pagination.total }}</p>
+      {% if cases %}
+        <div class="cases-results__view-tools">
+          <label for="cases-quick-filter">Quick filter</label>
+          <input id="cases-quick-filter" type="search" placeholder="Filter cards on this page">
+          <label for="cases-client-sort">Sort visible</label>
+          <select id="cases-client-sort">
+            <option value="default">Default</option>
+            <option value="date_filed_desc">Filed date (newest)</option>
+            <option value="date_filed_asc">Filed date (oldest)</option>
+            <option value="court_asc">Court (A-Z)</option>
+            <option value="case_number_asc">Case number (A-Z)</option>
+          </select>
+          <button class="pill" type="button" id="cases-view-reset">Reset view</button>
+        </div>
+      {% endif %}
+
+      <p class="small" id="cases-visible-range" data-start="{{ start_index }}" data-end="{{ end_index }}" data-page-count="{{ cases|length }}" data-total="{{ pagination.total }}">
+        Showing {{ start_index }}-{{ end_index }} of {{ pagination.total }}
+      </p>
 
       {% if cases %}
         <label class="cases-select-toggle">
           <input type="checkbox" id="cases-select-all">
-          Select all on this page
+          Select visible
         </label>
       {% endif %}
     </div>
@@ -325,9 +343,20 @@
         <span class="small" id="cases-bulk-status" aria-live="polite"></span>
       </div>
 
-      <div class="cases-grid">
+      <div class="cases-grid" id="cases-grid">
         {% for case in cases %}
-          <article class="card cases-case-card">
+          <article
+            class="card cases-case-card"
+            data-order="{{ loop.index0 }}"
+            data-case-number="{{ case.case_number_full or case.case_number or '' }}"
+            data-case-title="{{ case.short_title or case.case_title or '' }}"
+            data-court-id="{{ case.court_id or '' }}"
+            data-case-type="{{ case.case_type or '' }}"
+            data-date-filed="{{ case.date_filed.isoformat() if case.date_filed else '' }}"
+            data-judge="{{ case.judge_last_name or '' }}"
+            data-enrichment-status="{{ case.enrichment_status or 'none' }}"
+            data-has-sentencing="{{ '1' if case.has_sentencing else '0' }}"
+          >
             <header class="cases-case-card__header">
               <div>
                 <p class="cases-case-card__number">{{ case.case_number_full or case.case_number }}</p>
@@ -411,6 +440,10 @@
           </article>
         {% endfor %}
       </div>
+      <div class="card pcl-empty-state cases-client-empty" id="cases-client-empty" hidden>
+        <h3>No visible cases in this page view</h3>
+        <p class="small">Adjust quick filter text or reset the page view controls.</p>
+      </div>
     {% else %}
       <div class="card pcl-empty-state">
         <h3>No cases match those filters</h3>
@@ -440,6 +473,13 @@
       const filterForm = document.getElementById("cases-filter-form");
       const pageSizeForm = document.getElementById("cases-page-size-form");
       const pageSizeSelect = document.getElementById("cases-page-size");
+      const quickFilterInput = document.getElementById("cases-quick-filter");
+      const clientSortSelect = document.getElementById("cases-client-sort");
+      const viewResetButton = document.getElementById("cases-view-reset");
+      const visibleRange = document.getElementById("cases-visible-range");
+      const casesGrid = document.getElementById("cases-grid");
+      const caseCards = Array.from(document.querySelectorAll(".cases-case-card"));
+      const clientEmptyState = document.getElementById("cases-client-empty");
       const searchInput = document.getElementById("pcl-search");
       const dateFromInput = document.getElementById("pcl-date-from");
       const dateToInput = document.getElementById("pcl-date-to");
@@ -474,9 +514,81 @@
         const day = String(dateValue.getDate()).padStart(2, "0");
         return `${year}-${month}-${day}`;
       };
+      const textSort = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
       const selectedCases = () => caseSelectionInputs.filter((input) => input.checked);
+      const visibleSelectionInputs = () =>
+        caseSelectionInputs.filter((input) => {
+          const card = input.closest(".cases-case-card");
+          return Boolean(card) && !card.hidden;
+        });
+      const parseDateValue = (card) => {
+        const raw = card.dataset.dateFiled || "";
+        const timestamp = Date.parse(raw);
+        if (Number.isNaN(timestamp)) return 0;
+        return timestamp;
+      };
+      const updateVisibleRange = (visibleCount) => {
+        if (!visibleRange) return;
+        const pageCount = Number.parseInt(visibleRange.dataset.pageCount || "0", 10) || 0;
+        const total = Number.parseInt(visibleRange.dataset.total || "0", 10) || 0;
+        if (visibleCount === pageCount) {
+          const start = visibleRange.dataset.start || "0";
+          const end = visibleRange.dataset.end || "0";
+          visibleRange.textContent = `Showing ${start}-${end} of ${total}`;
+        } else {
+          visibleRange.textContent = `Showing ${visibleCount} visible on this page of ${total}`;
+        }
+      };
+      const applyClientView = () => {
+        if (!caseCards.length) return;
+        const quickText = (quickFilterInput && quickFilterInput.value ? quickFilterInput.value : "")
+          .trim()
+          .toLowerCase();
+        const sortKey = clientSortSelect ? clientSortSelect.value : "default";
+        caseCards.forEach((card) => {
+          const searchableText = [
+            card.dataset.caseNumber || "",
+            card.dataset.caseTitle || "",
+            card.dataset.courtId || "",
+            card.dataset.caseType || "",
+            card.dataset.judge || "",
+            card.dataset.enrichmentStatus || "",
+            card.dataset.hasSentencing === "1" ? "sentencing yes" : "sentencing no",
+          ]
+            .join(" ")
+            .toLowerCase();
+          card.hidden = Boolean(quickText) && !searchableText.includes(quickText);
+        });
+
+        const visibleCards = caseCards.filter((card) => !card.hidden);
+        const sortedCards = [...visibleCards].sort((leftCard, rightCard) => {
+          if (sortKey === "date_filed_desc") return parseDateValue(rightCard) - parseDateValue(leftCard);
+          if (sortKey === "date_filed_asc") return parseDateValue(leftCard) - parseDateValue(rightCard);
+          if (sortKey === "court_asc") {
+            return textSort.compare(leftCard.dataset.courtId || "", rightCard.dataset.courtId || "");
+          }
+          if (sortKey === "case_number_asc") {
+            return textSort.compare(leftCard.dataset.caseNumber || "", rightCard.dataset.caseNumber || "");
+          }
+          const leftOrder = Number.parseInt(leftCard.dataset.order || "0", 10);
+          const rightOrder = Number.parseInt(rightCard.dataset.order || "0", 10);
+          return leftOrder - rightOrder;
+        });
+
+        if (casesGrid) {
+          sortedCards.forEach((card) => {
+            casesGrid.appendChild(card);
+          });
+        }
+        if (clientEmptyState) {
+          clientEmptyState.hidden = visibleCards.length > 0;
+        }
+        updateVisibleRange(visibleCards.length);
+      };
       const updateSelectionState = () => {
         const selectedCount = selectedCases().length;
+        const visibleInputs = visibleSelectionInputs();
+        const visibleSelectedCount = visibleInputs.filter((input) => input.checked).length;
         if (bulkBar) {
           bulkBar.hidden = selectedCount === 0;
         }
@@ -484,15 +596,18 @@
           bulkCount.textContent = `${selectedCount} selected`;
         }
         if (selectAllCheckbox) {
-          if (selectedCount === 0) {
+          if (!visibleInputs.length) {
+            selectAllCheckbox.disabled = true;
             selectAllCheckbox.checked = false;
             selectAllCheckbox.indeterminate = false;
-          } else if (selectedCount === caseSelectionInputs.length) {
+          } else if (visibleSelectedCount === visibleInputs.length) {
+            selectAllCheckbox.disabled = false;
             selectAllCheckbox.checked = true;
             selectAllCheckbox.indeterminate = false;
           } else {
+            selectAllCheckbox.disabled = false;
             selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = true;
+            selectAllCheckbox.indeterminate = visibleSelectedCount > 0;
           }
         }
       };
@@ -560,6 +675,29 @@
         pageSizeSelect.addEventListener("change", () => submitForm(pageSizeForm));
       }
 
+      if (quickFilterInput) {
+        quickFilterInput.addEventListener("input", () => {
+          applyClientView();
+          updateSelectionState();
+        });
+      }
+
+      if (clientSortSelect) {
+        clientSortSelect.addEventListener("change", () => {
+          applyClientView();
+          updateSelectionState();
+        });
+      }
+
+      if (viewResetButton) {
+        viewResetButton.addEventListener("click", () => {
+          if (quickFilterInput) quickFilterInput.value = "";
+          if (clientSortSelect) clientSortSelect.value = "default";
+          applyClientView();
+          updateSelectionState();
+        });
+      }
+
       const rangeButtons = document.querySelectorAll("[data-range-days], [data-range]");
       rangeButtons.forEach((button) => {
         button.addEventListener("click", () => {
@@ -620,7 +758,7 @@
       if (selectAllCheckbox && caseSelectionInputs.length) {
         selectAllCheckbox.addEventListener("change", () => {
           const checked = selectAllCheckbox.checked;
-          caseSelectionInputs.forEach((input) => {
+          visibleSelectionInputs().forEach((input) => {
             input.checked = checked;
           });
           updateSelectionState();
@@ -705,6 +843,7 @@
         searchInput.select();
       });
 
+      applyClientView();
       updateSelectionState();
     })();
   </script>
