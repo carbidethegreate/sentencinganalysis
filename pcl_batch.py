@@ -250,12 +250,21 @@ class PclBatchWorker:
 
         # Poll due segments before submitting new queued segments.
         status_priority = case((segment_table.c.status == "queued", 1), else_=0)
-        order_by_columns = [
-            status_priority.asc(),
-            segment_table.c.next_poll_at.asc().nullsfirst(),
-            segment_table.c.date_filed_to.desc().nullslast(),
-            segment_table.c.id.asc(),
-        ]
+        order_by_columns: List[Any] = []
+        if batch_request_id is not None:
+            # Prefer segments from the requested batch first so the UI-driven runner
+            # makes visible progress, while still polling in-flight jobs globally.
+            order_by_columns.append(
+                case((segment_table.c.batch_request_id == batch_request_id, 0), else_=1).asc()
+            )
+        order_by_columns.extend(
+            [
+                status_priority.asc(),
+                segment_table.c.next_poll_at.asc().nullsfirst(),
+                segment_table.c.date_filed_to.desc().nullslast(),
+                segment_table.c.id.asc(),
+            ]
+        )
 
         with self._engine.begin() as conn:
             if conn.dialect.name == "postgresql":

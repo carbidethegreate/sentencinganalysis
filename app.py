@@ -8426,6 +8426,64 @@ def create_app() -> Flask:
             value = conn.execute(stmt).scalar_one_or_none()
         return value if isinstance(value, datetime) else None
 
+    def _load_global_pcl_remote_slot_status(*, limit: int = 5) -> Dict[str, Any]:
+        """UI helper for explaining why a judge search might be waiting.
+
+        PCL batch downloads have a global concurrency cap (we enforce locally too).
+        When that cap is hit, a scoped judge-search runner can't submit new segments
+        until in-flight jobs finish.
+        """
+
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        in_flight_statuses = ["submitted", "running", "processing"]
+
+        with engine.begin() as conn:
+            in_flight_count = int(
+                conn.execute(
+                    select(func.count())
+                    .select_from(batch_segments)
+                    .where(batch_segments.c.status.in_(in_flight_statuses))
+                    .where(batch_segments.c.report_id.isnot(None))
+                ).scalar_one()
+                or 0
+            )
+
+            next_poll_at = conn.execute(
+                select(func.min(batch_segments.c.next_poll_at))
+                .where(batch_segments.c.status.in_(["submitted", "running"]))
+                .where(batch_segments.c.next_poll_at.isnot(None))
+            ).scalar_one_or_none()
+
+            sample_rows = (
+                conn.execute(
+                    select(
+                        batch_segments.c.batch_request_id,
+                        batch_segments.c.court_id,
+                        batch_segments.c.status,
+                        batch_segments.c.report_id,
+                        batch_segments.c.next_poll_at,
+                        batch_segments.c.updated_at,
+                        batch_segments.c.date_filed_from,
+                        batch_segments.c.date_filed_to,
+                    )
+                    .where(batch_segments.c.status.in_(in_flight_statuses))
+                    .where(batch_segments.c.report_id.isnot(None))
+                    .order_by(
+                        batch_segments.c.next_poll_at.asc().nullsfirst(),
+                        batch_segments.c.updated_at.desc(),
+                    )
+                    .limit(max(1, int(limit)))
+                )
+                .mappings()
+                .all()
+            )
+
+        return {
+            "in_flight_count": in_flight_count,
+            "next_poll_at": next_poll_at if isinstance(next_poll_at, datetime) else None,
+            "segments": [dict(row) for row in sample_rows],
+        }
+
     def _load_batch_segment_failure_reasons(
         batch_request_id: int, *, limit: int = 5
     ) -> List[Dict[str, Any]]:
@@ -10163,6 +10221,9 @@ def create_app() -> Flask:
             abort(404)
 
         tick = (request.args.get("tick") or "").strip().lower() in {"1", "true", "yes"}
+        tick_processed: Optional[int] = None
+        tick_error: Optional[str] = None
+        tick_worker: Optional[PclBatchWorker] = None
         if tick:
             try:
                 worker = PclBatchWorker(
@@ -10173,8 +10234,12 @@ def create_app() -> Flask:
                     sleep_fn=(lambda _: None),
                 )
                 # Keep request latency bounded: run a single small worker tick.
-                worker.run_once(max_segments=3, batch_request_id=batch_request_id)
-            except Exception:
+                tick_worker = worker
+                tick_processed = worker.run_once(
+                    max_segments=3, batch_request_id=batch_request_id
+                )
+            except Exception as exc:
+                tick_error = f"{type(exc).__name__}: {exc}"
                 app.logger.exception(
                     "Judge search tick failed: batch_request_id=%s",
                     batch_request_id,
@@ -10187,6 +10252,10 @@ def create_app() -> Flask:
 
         segment_statuses = _load_batch_segment_status_summary(batch_request_id)
         next_poll_at = _load_batch_next_poll_at(batch_request_id)
+        global_slot_status = _load_global_pcl_remote_slot_status(limit=5)
+        remote_slot_limit = (
+            int(getattr(tick_worker, "_max_concurrent_remote_jobs", 2)) if tick_worker else 2
+        )
         failure_reasons: List[Dict[str, Any]] = []
         if segment_statuses.get("failed", 0) > 0:
             failure_reasons = _load_batch_segment_failure_reasons(batch_request_id, limit=6)
@@ -10237,6 +10306,10 @@ def create_app() -> Flask:
             max_cases=max_cases,
             case_scope=case_scope,
             is_complete=is_complete,
+            tick_processed=tick_processed,
+            tick_error=tick_error,
+            global_slot_status=global_slot_status,
+            remote_slot_limit=remote_slot_limit,
             csrf_token=get_csrf_token(),
         )
 
