@@ -8376,6 +8376,7 @@ def create_app() -> Flask:
         run_docket_worker: bool,
         max_batch_iterations: int,
         max_docket_jobs: int,
+        max_case_limit: Optional[int],
     ) -> Dict[str, int]:
         filters = _build_kearney_docket_filters()
         planner = PclBatchPlanner(engine, pcl_tables)
@@ -8403,6 +8404,8 @@ def create_app() -> Flask:
                 break
 
         case_ids = _load_kearney_case_ids(filters)
+        if max_case_limit and max_case_limit > 0:
+            case_ids = case_ids[:max_case_limit]
         dedupe_case_ids: Set[int] = set()
         queue_stats = _queue_kearney_docket_jobs_for_case_ids(
             case_ids,
@@ -8454,6 +8457,7 @@ def create_app() -> Flask:
         run_docket_worker: bool,
         max_batch_iterations: int,
         max_docket_jobs: int,
+        max_case_limit: Optional[int],
     ) -> None:
         try:
             stats = _estimate_and_run_kearney_backfill(
@@ -8463,6 +8467,7 @@ def create_app() -> Flask:
                 run_docket_worker=run_docket_worker,
                 max_batch_iterations=max_batch_iterations,
                 max_docket_jobs=max_docket_jobs,
+                max_case_limit=max_case_limit,
             )
             app.logger.info(
                 "Completed Kearney backfill: batch_request_id=%s, discovered=%s, docket_jobs_queued=%s, document_jobs_queued=%s, segments=%s",
@@ -9389,6 +9394,13 @@ def create_app() -> Flask:
         if not max_docket_jobs:
             max_docket_jobs = 50
         max_docket_jobs = max(1, min(200, max_docket_jobs))
+        max_case_limit = _parse_optional_int(request.form.get("max_cases") or None)
+        if max_case_limit is None:
+            max_case_limit = 5
+        elif max_case_limit <= 0:
+            max_case_limit = None
+        else:
+            max_case_limit = min(5000, max_case_limit)
 
         discovery_thread = threading.Thread(
             target=_run_kearney_discovery_in_background,
@@ -9399,15 +9411,30 @@ def create_app() -> Flask:
                 "run_docket_worker": run_docket_worker,
                 "max_batch_iterations": max_batch_iterations,
                 "max_docket_jobs": max_docket_jobs,
+                "max_case_limit": max_case_limit,
             },
             daemon=True,
         )
         discovery_thread.start()
 
-        flash(
-            "Started full Mark A. Kearney discovery and queueing run in the background.",
-            "success",
-        )
+        if max_case_limit is None:
+            flash(
+                "Started full Mark A. Kearney discovery and queueing run in the background.",
+                "success",
+            )
+            flash(
+                "Discovery run is using full cap from configured date range.",
+                "info",
+            )
+        else:
+            flash(
+                f"Started Mark A. Kearney test discovery for up to {max_case_limit} case(s) in the background.",
+                "success",
+            )
+            flash(
+                f"Test run is capped at {max_case_limit} case(s).",
+                "info",
+            )
         if queue_documents and run_docket_worker:
             flash(
                 "Document downloads will be queued after docket histories are pulled.",

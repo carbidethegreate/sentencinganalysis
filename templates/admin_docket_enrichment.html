@@ -45,6 +45,7 @@
         {% set k_discovery = kearney_discovery_estimate %}
         <h3>Mark A. Kearney backfill</h3>
         <p class="small">Queue all EDPA criminal cases for Judge Kearney (2010-01-01 to today).</p>
+        <p class="small">What these page params mean: the long URL values are just current filters for this dashboard (court, sort, search, etc). They are not the action trigger.</p>
         <p class="small">
           Discovery estimate:
           {% if k_discovery and k_discovery.estimated_discovery_cases is not none %}
@@ -98,6 +99,12 @@
           <button class="primary" type="submit">Queue saved Mark A. Kearney cases</button>
         </form>
 
+        <p class="small">Recommended steps:
+          1) Set <strong>Max cases</strong> to 5 and submit for a safe test run.
+          2) Review queued jobs in the tables below.
+          3) Set <strong>Max cases</strong> to 0 to run the full pass.
+        </p>
+
         <form method="post" action="{{ url_for('admin_docket_enrichment_discover_kearney') }}" class="stack mt-12">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <p class="small">One-click discovery from 2010 onward, with optional docket document extraction.</p>
@@ -111,6 +118,11 @@
             Queue docket document jobs for matches
           </label>
           <label>
+            Max cases
+            <input type="number" name="max_cases" min="0" max="5000" value="5">
+            <small>(0 = full run)</small>
+          </label>
+          <label>
             Document keywords (optional)
             <input type="text" name="document_keywords" placeholder="5K1.1, cooperation, downward departure">
           </label>
@@ -122,7 +134,7 @@
             Max docket jobs per pass
             <input type="number" name="max_docket_jobs" min="1" max="200" value="50">
           </label>
-          <button class="primary" type="submit">Discover + queue all Mark A. Kearney cases</button>
+          <button class="primary" type="submit">Run discover + queue</button>
         </form>
       </article>
     </div>
