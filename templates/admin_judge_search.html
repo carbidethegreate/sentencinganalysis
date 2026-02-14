@@ -5,151 +5,498 @@
 {% block federal_content %}
   <section class="card stack">
     <div class="page-header page-header--tight">
-      <h2>Search PACER for a specific judge</h2>
-      <p class="small">Search by judge and date range first, then review matched case rows and queue docket jobs.</p>
+      <h2>Judge search (guided)</h2>
+      <p class="small">
+        This wizard searches PACER Case Locator for cases filed in a district court within a date range, then lets you queue docket pulls.
+      </p>
+      <p class="small">
+        Judge: <strong>{{ (judge.label if judge and judge.label else "Mark A. Kearney (MAK)") }}</strong>
+      </p>
     </div>
 
-    <form
-      method="post"
-      action="{{ url_for('admin_federal_data_dashboard_judge_search_start') }}"
-      class="stack"
-    >
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-      {% if court_choices %}
-        <label for="court-filter">Find district court</label>
-        <input
-          id="court-filter"
-          type="search"
-          placeholder="Type to filter courts (e.g., Pennsylvania Eastern)"
-          autocomplete="off"
-        >
-        <div class="small" id="court-filter-status" aria-live="polite"></div>
-
-        <label for="court-id">District court</label>
-        <select id="court-id" name="court_id" required>
-          {% for court in court_choices %}
-            <option value="{{ court.id }}" {% if court.id == selected_court_id %}selected{% endif %}>
-              {{ court.label }}
-            </option>
-          {% endfor %}
-        </select>
-        <script>
-          (function () {
-            const filterInput = document.getElementById("court-filter");
-            const selectEl = document.getElementById("court-id");
-            const statusEl = document.getElementById("court-filter-status");
-            if (!filterInput || !selectEl) {
-              return;
-            }
-            const options = Array.from(selectEl.options || []);
-            const update = () => {
-              const q = (filterInput.value || "").trim().toLowerCase();
-              const selectedValue = (selectEl.value || "").toLowerCase();
-              let visible = 0;
-              for (const opt of options) {
-                const text = (opt.text || "").toLowerCase();
-                const value = (opt.value || "").toLowerCase();
-                const match = !q || text.includes(q) || value.includes(q);
-                opt.hidden = !match;
-                if (match) {
-                  visible += 1;
-                }
-              }
-
-              // Keep the currently selected option visible so the user
-              // always knows what will be submitted.
-              if (selectedValue) {
-                const selectedOpt = options.find((opt) => (opt.value || "").toLowerCase() === selectedValue);
-                if (selectedOpt) {
-                  selectedOpt.hidden = false;
-                }
-              }
-
-              if (statusEl) {
-                statusEl.textContent = q
-                  ? `Showing ${visible} of ${options.length} courts`
-                  : `Showing all ${options.length} courts`;
-              }
-            };
-            filterInput.addEventListener("input", update);
-            update();
-          })();
-        </script>
-      {% else %}
-        <label for="court-id">District court</label>
-        <input id="court-id" name="court_id" value="{{ selected_court_id }}" required>
-      {% endif %}
-
-      <label for="judge-id">Judge</label>
-      <select id="judge-id" name="judge_id">
-        {% for judge in judges %}
-          <option value="{{ judge.id }}" {% if judge.id == selected_judge_id %}selected{% endif %}>
-            {{ judge.label }}
-          </option>
-        {% endfor %}
-      </select>
-
-      <div class="grid two">
-        <div>
-          <label for="date-from">Date filed from</label>
-          <input id="date-from" type="date" name="date_filed_from" value="{{ date_from }}" required>
+    <div class="wizard" data-wizard>
+      <div class="wizard-progress" aria-label="Judge search steps">
+        <div class="wizard-progress__step" data-wizard-progress="1">
+          <span class="wizard-progress__num">1</span>
+          <span class="wizard-progress__label">Court</span>
         </div>
-        <div>
-          <label for="date-to">Date filed to</label>
-          <input id="date-to" type="date" name="date_filed_to" value="{{ date_to }}" required>
+        <div class="wizard-progress__step" data-wizard-progress="2">
+          <span class="wizard-progress__num">2</span>
+          <span class="wizard-progress__label">Dates</span>
+        </div>
+        <div class="wizard-progress__step" data-wizard-progress="3">
+          <span class="wizard-progress__num">3</span>
+          <span class="wizard-progress__label">Case cap</span>
+        </div>
+        <div class="wizard-progress__step" data-wizard-progress="4">
+          <span class="wizard-progress__num">4</span>
+          <span class="wizard-progress__label">Start</span>
         </div>
       </div>
 
-    <fieldset class="stack">
-      <legend class="small">How many cases to pull now?</legend>
-      <label>
-        <input type="radio" name="search_scope" value="limited" checked>
-        Limit for a test run (recommended first)
-      </label>
-        <label>
-          <input
-            type="number"
-            name="max_cases"
-            min="1"
-            max="5000"
-            value="5"
-            aria-label="Maximum cases to pull"
-          >
-          Maximum matched cases
-        </label>
-      <label>
-        <input type="radio" name="search_scope" value="all">
-        Pull full date range
-      </label>
-    </fieldset>
+      <form
+        method="post"
+        action="{{ url_for('admin_federal_data_dashboard_judge_search_start') }}"
+        class="stack wizard-form"
+        id="judge-search-form"
+        novalidate
+      >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="judge_id" value="{{ selected_judge_id }}">
+        <input type="hidden" name="court_id" id="court-id" value="{{ selected_court_id }}">
+        <input type="hidden" name="max_batch_iterations" value="300">
 
-    <script>
-      (function () {
-        const limitRadio = document.querySelector("input[name=\"search_scope\"][value=\"limited\"]");
-        const fullRadio = document.querySelector("input[name=\"search_scope\"][value=\"all\"]");
-        const maxCasesInput = document.querySelector('input[name="max_cases"]');
-        const sync = () => {
-          if (!maxCasesInput) {
-            return;
-          }
-          maxCasesInput.disabled = !limitRadio || !limitRadio.checked;
-        };
-        if (limitRadio && fullRadio && maxCasesInput) {
-          limitRadio.addEventListener("change", sync);
-          fullRadio.addEventListener("change", sync);
-          sync();
-        }
-      })();
-    </script>
+        <section class="wizard-step" data-wizard-step="1">
+          <h3>Step 1 of 4: Choose the district court</h3>
+          <p class="small">Start by selecting where the case was filed.</p>
 
-      <input type="hidden" name="max_batch_iterations" value="300">
+          <div class="court-picker">
+            <label for="court-query">Search district courts</label>
+            <input
+              id="court-query"
+              type="search"
+              placeholder="Type a court name (example: Pennsylvania Eastern)"
+              autocomplete="off"
+              spellcheck="false"
+            >
 
-      <p class="small">
-        Full runs can take longer due PACER batching. A limited run (e.g. 5 cases) gives quick validation and shows the same workflow.
-      </p>
+            <div class="actions">
+              <button type="button" class="pill muted" id="court-browse-all">Browse all courts</button>
+              <button type="button" class="pill" id="court-clear">Clear</button>
+            </div>
 
-      <button class="primary" type="submit">Search PACER</button>
-    </form>
+            <div class="small court-picker__meta" id="court-meta" aria-live="polite"></div>
+
+            <div class="court-picker__results" id="court-results" role="listbox" aria-label="District courts">
+              {% for court in court_choices %}
+                <button
+                  type="button"
+                  class="court-picker__option"
+                  role="option"
+                  data-court-id="{{ court.id }}"
+                  data-court-name="{{ court.name }}"
+                  data-court-label="{{ court.label }}"
+                >
+                  <span class="court-picker__name">{{ court.name }}</span>
+                  <span class="court-picker__id">{{ court.id }}</span>
+                </button>
+              {% endfor %}
+            </div>
+
+            <div class="wizard-selected small" id="court-selected" aria-live="polite"></div>
+            <div class="wizard-error small" id="wizard-error-1" aria-live="polite"></div>
+          </div>
+
+          <div class="wizard-actions">
+            <button type="button" class="primary" data-wizard-next>Continue</button>
+          </div>
+        </section>
+
+        <section class="wizard-step" data-wizard-step="2" hidden>
+          <h3>Step 2 of 4: Choose the date range</h3>
+          <p class="small">For sentencing habit analysis, start with January 1, 2010 through today.</p>
+
+          <div class="grid two">
+            <div>
+              <label for="date-from">Date filed from</label>
+              <input id="date-from" type="date" name="date_filed_from" value="{{ date_from }}" required>
+            </div>
+            <div>
+              <label for="date-to">Date filed to</label>
+              <input id="date-to" type="date" name="date_filed_to" value="{{ date_to }}" required>
+            </div>
+          </div>
+
+          <div class="wizard-error small" id="wizard-error-2" aria-live="polite"></div>
+
+          <div class="wizard-actions">
+            <button type="button" class="secondary" data-wizard-back>Back</button>
+            <button type="button" class="primary" data-wizard-next>Continue</button>
+          </div>
+        </section>
+
+        <section class="wizard-step" data-wizard-step="3" hidden>
+          <h3>Step 3 of 4: Choose how many cases to pull now</h3>
+          <p class="small">Start with a small test run to confirm results before running the full date range.</p>
+
+          <fieldset class="stack wizard-fieldset">
+            <legend class="small">Run type</legend>
+            <label class="wizard-radio">
+              <input
+                type="radio"
+                name="search_scope"
+                value="limited"
+                {% if search_scope != 'all' %}checked{% endif %}
+              >
+              Test run (recommended first)
+            </label>
+
+            <div class="wizard-cap">
+              <label for="max-cases">Maximum cases</label>
+              <input
+                id="max-cases"
+                type="number"
+                name="max_cases"
+                min="1"
+                max="5000"
+                value="{{ max_cases }}"
+              >
+              <div class="actions wizard-cap__quick">
+                <button type="button" class="pill" data-max-cases="5">5</button>
+                <button type="button" class="pill" data-max-cases="25">25</button>
+                <button type="button" class="pill" data-max-cases="100">100</button>
+              </div>
+            </div>
+
+            <label class="wizard-radio">
+              <input type="radio" name="search_scope" value="all" {% if search_scope == 'all' %}checked{% endif %}>
+              Full run (entire date range)
+            </label>
+          </fieldset>
+
+          <div class="wizard-error small" id="wizard-error-3" aria-live="polite"></div>
+
+          <div class="wizard-actions">
+            <button type="button" class="secondary" data-wizard-back>Back</button>
+            <button type="button" class="primary" data-wizard-next>Continue</button>
+          </div>
+        </section>
+
+        <section class="wizard-step" data-wizard-step="4" hidden>
+          <h3>Step 4 of 4: Confirm and start</h3>
+          <p class="small">Review your choices, then start the PACER case search.</p>
+
+          <div class="wizard-summary" role="status" aria-live="polite">
+            <div>
+              <span class="wizard-summary__label">Court</span>
+              <strong class="wizard-summary__value" id="summary-court">—</strong>
+            </div>
+            <div>
+              <span class="wizard-summary__label">Date range</span>
+              <strong class="wizard-summary__value" id="summary-dates">—</strong>
+            </div>
+            <div>
+              <span class="wizard-summary__label">Case cap</span>
+              <strong class="wizard-summary__value" id="summary-cap">—</strong>
+            </div>
+          </div>
+
+          <div class="wizard-actions">
+            <button type="button" class="secondary" data-wizard-back>Back</button>
+            <button class="primary" type="submit" id="wizard-submit">Start search</button>
+          </div>
+        </section>
+      </form>
+    </div>
   </section>
+
+  <script>
+    (function () {
+      const wizardRoot = document.querySelector("[data-wizard]");
+      if (!wizardRoot) return;
+
+      const form = document.getElementById("judge-search-form");
+      const stepEls = Array.from(document.querySelectorAll("[data-wizard-step]"));
+      const progressEls = Array.from(document.querySelectorAll("[data-wizard-progress]"));
+      const nextButtons = Array.from(document.querySelectorAll("[data-wizard-next]"));
+      const backButtons = Array.from(document.querySelectorAll("[data-wizard-back]"));
+
+      const errorByStep = {
+        1: document.getElementById("wizard-error-1"),
+        2: document.getElementById("wizard-error-2"),
+        3: document.getElementById("wizard-error-3"),
+      };
+
+      const courtHidden = document.getElementById("court-id");
+      const courtQuery = document.getElementById("court-query");
+      const courtMeta = document.getElementById("court-meta");
+      const courtResults = document.getElementById("court-results");
+      const courtSelected = document.getElementById("court-selected");
+      const courtClear = document.getElementById("court-clear");
+      const courtBrowseAll = document.getElementById("court-browse-all");
+      const courtOptions = Array.from(document.querySelectorAll(".court-picker__option"));
+
+      const dateFrom = document.getElementById("date-from");
+      const dateTo = document.getElementById("date-to");
+
+      const maxCasesInput = document.getElementById("max-cases");
+      const scopeLimited = document.querySelector("input[name=\"search_scope\"][value=\"limited\"]");
+      const scopeAll = document.querySelector("input[name=\"search_scope\"][value=\"all\"]");
+      const quickCaps = Array.from(document.querySelectorAll("[data-max-cases]"));
+
+      const summaryCourt = document.getElementById("summary-court");
+      const summaryDates = document.getElementById("summary-dates");
+      const summaryCap = document.getElementById("summary-cap");
+
+      let currentStep = Number({{ initial_step|default(1)|int }}) || 1;
+      if (currentStep < 1 || currentStep > 4) currentStep = 1;
+
+      let showAllCourts = false;
+
+      const setError = (step, message) => {
+        const el = errorByStep[step];
+        if (!el) return;
+        el.textContent = message || "";
+        if (message) {
+          el.classList.add("is-visible");
+        } else {
+          el.classList.remove("is-visible");
+        }
+      };
+
+      const activeCourtLabel = () => {
+        const id = (courtHidden && courtHidden.value || "").toLowerCase();
+        if (!id) return "";
+        const match = courtOptions.find((opt) => (opt.dataset.courtId || "").toLowerCase() === id);
+        return match ? (match.dataset.courtLabel || match.dataset.courtName || match.dataset.courtId) : id;
+      };
+
+      const renderSelectedCourt = () => {
+        const label = activeCourtLabel();
+        if (!courtSelected) return;
+        if (label) {
+          courtSelected.textContent = `Selected court: ${label}`;
+        } else {
+          courtSelected.textContent = "No court selected yet. Search above and click a court to select it.";
+        }
+
+        const selectedId = (courtHidden && courtHidden.value || "").toLowerCase();
+        for (const opt of courtOptions) {
+          const isSelected = (opt.dataset.courtId || "").toLowerCase() === selectedId;
+          opt.classList.toggle("is-selected", isSelected);
+          if (isSelected) {
+            opt.setAttribute("aria-selected", "true");
+          } else {
+            opt.removeAttribute("aria-selected");
+          }
+        }
+      };
+
+      const filterCourts = () => {
+        if (!courtOptions.length) return;
+
+        const q = (courtQuery && courtQuery.value || "").trim().toLowerCase();
+        const selectedId = (courtHidden && courtHidden.value || "").toLowerCase();
+
+        let visible = 0;
+        let total = 0;
+        for (const opt of courtOptions) {
+          total += 1;
+          const haystack = `${opt.dataset.courtName || ""} ${opt.dataset.courtLabel || ""} ${opt.dataset.courtId || ""}`.toLowerCase();
+          const match = !q ? showAllCourts : haystack.includes(q);
+          opt.hidden = !match;
+          if (match) visible += 1;
+        }
+
+        // If we are not showing all courts and the query is empty, reveal a short list
+        // so the user isn't forced to type to make progress.
+        if (!q && !showAllCourts) {
+          let revealed = 0;
+          for (const opt of courtOptions) {
+            const isSelected = (opt.dataset.courtId || "").toLowerCase() === selectedId;
+            if (isSelected) {
+              opt.hidden = false;
+              continue;
+            }
+            if (revealed < 12) {
+              opt.hidden = false;
+              revealed += 1;
+              continue;
+            }
+            opt.hidden = true;
+          }
+          visible = revealed + (selectedId ? 1 : 0);
+        }
+
+        if (courtMeta) {
+          if (q) {
+            courtMeta.textContent = `Matches: ${visible} court(s)`;
+          } else if (showAllCourts) {
+            courtMeta.textContent = `Showing all ${total} courts`;
+          } else {
+            courtMeta.textContent = `Showing ${visible} courts. Type to filter or click “Browse all courts”.`;
+          }
+        }
+        renderSelectedCourt();
+      };
+
+      const setCourt = (courtId) => {
+        if (!courtHidden) return;
+        courtHidden.value = (courtId || "").trim().toLowerCase();
+        setError(1, "");
+        filterCourts();
+      };
+
+      if (courtOptions.length) {
+        for (const opt of courtOptions) {
+          opt.addEventListener("click", () => {
+            setCourt(opt.dataset.courtId || "");
+          });
+        }
+      }
+
+      if (courtQuery) {
+        courtQuery.addEventListener("input", () => {
+          showAllCourts = false;
+          filterCourts();
+        });
+        courtQuery.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            courtQuery.value = "";
+            showAllCourts = false;
+            filterCourts();
+          }
+        });
+      }
+
+      if (courtClear) {
+        courtClear.addEventListener("click", () => {
+          if (courtQuery) courtQuery.value = "";
+          setCourt("");
+          showAllCourts = false;
+          filterCourts();
+        });
+      }
+
+      if (courtBrowseAll) {
+        courtBrowseAll.addEventListener("click", () => {
+          showAllCourts = true;
+          if (courtQuery) courtQuery.value = "";
+          filterCourts();
+          if (courtResults) courtResults.scrollTop = 0;
+        });
+      }
+
+      const syncMaxCasesEnabled = () => {
+        if (!maxCasesInput || !scopeLimited) return;
+        maxCasesInput.disabled = !scopeLimited.checked;
+      };
+
+      if (scopeLimited && scopeAll) {
+        scopeLimited.addEventListener("change", syncMaxCasesEnabled);
+        scopeAll.addEventListener("change", syncMaxCasesEnabled);
+      }
+
+      if (quickCaps.length && maxCasesInput) {
+        for (const btn of quickCaps) {
+          btn.addEventListener("click", () => {
+            const value = Number(btn.dataset.maxCases || "0");
+            if (Number.isFinite(value) && value > 0) {
+              if (scopeLimited) scopeLimited.checked = true;
+              maxCasesInput.disabled = false;
+              maxCasesInput.value = String(value);
+              setError(3, "");
+            }
+          });
+        }
+      }
+
+      const validateStep = (step) => {
+        if (step === 1) {
+          if (!courtHidden || !courtHidden.value) {
+            setError(1, "Select a court to continue.");
+            return false;
+          }
+          setError(1, "");
+          return true;
+        }
+
+        if (step === 2) {
+          if (!dateFrom || !dateTo || !dateFrom.value || !dateTo.value) {
+            setError(2, "Enter a valid date range to continue.");
+            return false;
+          }
+          if (dateFrom.value > dateTo.value) {
+            setError(2, "Date filed from must be before date filed to.");
+            return false;
+          }
+          setError(2, "");
+          return true;
+        }
+
+        if (step === 3) {
+          if (scopeLimited && scopeLimited.checked) {
+            const value = Number(maxCasesInput && maxCasesInput.value || "0");
+            if (!Number.isFinite(value) || value <= 0) {
+              setError(3, "Enter a valid maximum case count.");
+              return false;
+            }
+          }
+          setError(3, "");
+          return true;
+        }
+
+        return true;
+      };
+
+      const updateSummary = () => {
+        if (summaryCourt) {
+          summaryCourt.textContent = activeCourtLabel() || "—";
+        }
+
+        if (summaryDates && dateFrom && dateTo) {
+          const from = dateFrom.value || "—";
+          const to = dateTo.value || "—";
+          summaryDates.textContent = `${from} to ${to}`;
+        }
+
+        if (summaryCap) {
+          if (scopeAll && scopeAll.checked) {
+            summaryCap.textContent = "Full run (no cap)";
+          } else {
+            const value = (maxCasesInput && maxCasesInput.value) || "—";
+            summaryCap.textContent = `Test run (up to ${value} cases)`;
+          }
+        }
+      };
+
+      const showStep = (step) => {
+        currentStep = step;
+        for (const el of stepEls) {
+          const elStep = Number(el.dataset.wizardStep || "0");
+          el.hidden = elStep !== step;
+        }
+        for (const el of progressEls) {
+          const elStep = Number(el.dataset.wizardProgress || "0");
+          el.classList.toggle("is-current", elStep === step);
+          el.classList.toggle("is-complete", elStep < step);
+        }
+        updateSummary();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+
+      for (const btn of nextButtons) {
+        btn.addEventListener("click", () => {
+          if (!validateStep(currentStep)) return;
+          const next = Math.min(4, currentStep + 1);
+          showStep(next);
+        });
+      }
+
+      for (const btn of backButtons) {
+        btn.addEventListener("click", () => {
+          const prev = Math.max(1, currentStep - 1);
+          showStep(prev);
+        });
+      }
+
+      if (form) {
+        form.addEventListener("submit", (event) => {
+          // Make sure earlier steps are valid before allowing submission.
+          for (const step of [1, 2, 3]) {
+            if (!validateStep(step)) {
+              event.preventDefault();
+              showStep(step);
+              return;
+            }
+          }
+        });
+      }
+
+      syncMaxCasesEnabled();
+      filterCourts();
+      showStep(currentStep);
+    })();
+  </script>
 {% endblock %}
+

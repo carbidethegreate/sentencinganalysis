@@ -2,23 +2,36 @@
 
 {% block title %}Judge Search Results{% endblock %}
 
-{% block federal_content %}
-  <section class="card stack">
-    <div class="page-header page-header--tight">
-      <h2>{{ judge.name }} PACER results</h2>
-      <p class="small">
-        Judge search run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ batch_request.court_id|upper }}
-      </p>
-    </div>
-  </section>
-
-  <section class="card stack">
-    <h3>Search status</h3>
-    <dl class="pcl-detail-list">
-      <div>
-        <dt>Total cases discovered</dt>
-        <dd>{{ discovered_total }}</dd>
+  {% block federal_content %}
+    <section class="card stack">
+      <div class="page-header page-header--tight">
+        <h2>{{ judge.name }} PACER results</h2>
+        <p class="small">
+          Judge search run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ batch_request.court_id|upper }}
+        </p>
+        <p class="small">
+          Next: wait for cases to appear below, then click “Add … to docket queue” to pull docket histories.
+        </p>
       </div>
+    </section>
+
+    <section class="card stack">
+      <h3>Search status</h3>
+
+      {% if segment_statuses.get('failed', 0) %}
+        <div class="flash error">
+          <strong>Some segments failed.</strong>
+          If this was caused by PACER auth, re-authenticate under
+          <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>,
+          then refresh this page.
+        </div>
+      {% endif %}
+
+      <dl class="pcl-detail-list">
+        <div>
+          <dt>Total cases discovered</dt>
+          <dd>{{ discovered_total }}</dd>
+        </div>
       <div>
         <dt>Discovered matches</dt>
         <dd>{{ discovered_count }}</dd>

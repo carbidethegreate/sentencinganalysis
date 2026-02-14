@@ -9864,11 +9864,27 @@ def create_app() -> Flask:
             preset = _find_judge_preset(judge_id)
         now_utc = datetime.utcnow().date()
         start_default = now_utc.replace(year=2010, month=1, day=1)
+        initial_step = _parse_optional_int(request.args.get("step") or None) or 1
+        if initial_step < 1 or initial_step > 4:
+            initial_step = 1
         selected_court_id = (
             (request.args.get("court_id") or (preset or {}).get("court_id") or "").strip().lower()
         )
         if selected_court_id and not _is_active_pcl_court_id(selected_court_id):
             selected_court_id = (preset or {}).get("court_id") or ""
+
+        date_from = _parse_iso_date(request.args.get("date_filed_from") or "") or start_default
+        date_to = _parse_iso_date(request.args.get("date_filed_to") or "") or now_utc
+        if date_from > date_to:
+            date_from, date_to = date_to, date_from
+
+        scope = (request.args.get("search_scope") or "limited").strip().lower()
+        if scope not in {"limited", "all"}:
+            scope = "limited"
+        max_cases = _parse_optional_int(request.args.get("max_cases") or None) or 5
+        if max_cases < 1:
+            max_cases = 5
+        max_cases = min(5000, max_cases)
         return render_template(
             "admin_judge_search.html",
             active_page="federal_data_dashboard",
@@ -9877,8 +9893,12 @@ def create_app() -> Flask:
             court_choices=_load_pcl_district_court_choices(),
             selected_court_id=selected_court_id,
             selected_judge_id=judge_id,
-            date_from=start_default.isoformat(),
-            date_to=now_utc.isoformat(),
+            judge=preset,
+            initial_step=initial_step,
+            search_scope=scope,
+            max_cases=max_cases,
+            date_from=date_from.isoformat(),
+            date_to=date_to.isoformat(),
             csrf_token=get_csrf_token(),
         )
 
@@ -9895,13 +9915,29 @@ def create_app() -> Flask:
         court_id = (request.form.get("court_id") or preset.get("court_id") or "").strip().lower()
         if not court_id or not _is_active_pcl_court_id(court_id):
             flash("Select a valid district court.", "error")
-            return redirect(url_for("admin_federal_data_dashboard_judge_search", judge_id=judge_id))
+            return redirect(
+                url_for(
+                    "admin_federal_data_dashboard_judge_search",
+                    judge_id=judge_id,
+                    court_id=court_id,
+                    step=1,
+                )
+            )
 
         date_from = _parse_iso_date(request.form.get("date_filed_from") or "")
         date_to = _parse_iso_date(request.form.get("date_filed_to") or "")
         if not date_from or not date_to:
             flash("Date range is required.", "error")
-            return redirect(url_for("admin_federal_data_dashboard_judge_search", judge_id=judge_id))
+            return redirect(
+                url_for(
+                    "admin_federal_data_dashboard_judge_search",
+                    judge_id=judge_id,
+                    court_id=court_id,
+                    date_filed_from=(request.form.get("date_filed_from") or "").strip(),
+                    date_filed_to=(request.form.get("date_filed_to") or "").strip(),
+                    step=2,
+                )
+            )
         if date_from > date_to:
             date_from, date_to = date_to, date_from
 
@@ -9911,7 +9947,18 @@ def create_app() -> Flask:
             max_case_limit = _parse_optional_int(request.form.get("max_cases") or "5")
             if not max_case_limit or max_case_limit <= 0:
                 flash("Enter a valid limited case count.", "error")
-                return redirect(url_for("admin_federal_data_dashboard_judge_search", judge_id=judge_id))
+                return redirect(
+                    url_for(
+                        "admin_federal_data_dashboard_judge_search",
+                        judge_id=judge_id,
+                        court_id=court_id,
+                        date_filed_from=date_from.isoformat(),
+                        date_filed_to=date_to.isoformat(),
+                        search_scope="limited",
+                        max_cases=(request.form.get("max_cases") or "").strip(),
+                        step=3,
+                    )
+                )
             max_case_limit = min(5000, max_case_limit)
         else:
             max_case_limit = None
