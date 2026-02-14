@@ -6,6 +6,8 @@ import random
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import Table, insert, select, update
@@ -16,6 +18,33 @@ from pcl_client import PclApiError, PclClient
 
 CRIMINAL_CASE_TYPES = {"cr", "crim", "ncrim", "dcrim"}
 PCL_BATCH_CAP = 108000
+
+
+@lru_cache(maxsize=1)
+def _load_known_pcl_court_ids() -> set[str]:
+    """Fallback list of PCL court IDs from Appendix A (data/pcl_courts.json).
+
+    In some environments the `pcl_courts` table exists but hasn't been seeded yet.
+    The batch worker still needs to validate (or at least not hard-fail) known IDs.
+    """
+
+    catalog_path = Path(__file__).resolve().parent / "data" / "pcl_courts.json"
+    try:
+        payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    if not isinstance(payload, list):
+        return set()
+    ids: set[str] = set()
+    for row in payload:
+        if not isinstance(row, dict):
+            continue
+        if not bool(row.get("active", True)):
+            continue
+        court_id = str(row.get("pcl_court_id") or "").strip().lower()
+        if court_id:
+            ids.add(court_id)
+    return ids
 
 
 @dataclass
@@ -269,16 +298,27 @@ class PclBatchWorker:
     def _court_id_is_valid(self, court_id: Optional[str]) -> bool:
         if not court_id:
             return False
+        normalized = str(court_id).strip().lower()
         table = self._tables.get("pcl_courts")
         if table is None:
             return True
         with self._engine.begin() as conn:
             row = conn.execute(
                 select(table.c.pcl_court_id)
-                .where(table.c.pcl_court_id == court_id)
+                .where(table.c.pcl_court_id == normalized)
                 .where(table.c.active.is_(True))
             ).first()
-        return row is not None
+        if row is not None:
+            return True
+
+        # Fallback: if DB is not seeded (or missing the entry), allow known IDs
+        # from the local Appendix A catalog.
+        known = _load_known_pcl_court_ids()
+        if known:
+            return normalized in known
+
+        # If we can't validate at all, do not block the job: let the API tell us.
+        return True
 
     def _poll_segment(self, segment: Dict[str, Any]) -> None:
         now = self._now()

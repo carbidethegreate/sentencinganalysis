@@ -19,11 +19,40 @@
       <h3>Search status</h3>
 
       {% if segment_statuses.get('failed', 0) %}
+        {% set top_failure = (failure_reasons[0].message if failure_reasons else '')|lower %}
         <div class="flash error">
           <strong>Some segments failed.</strong>
-          If this was caused by PACER auth, re-authenticate under
-          <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>,
-          then refresh this page.
+          {% if failure_reasons %}
+            <div class="small mt-8">
+              <strong>Top failure reasons:</strong>
+              <ul class="small">
+                {% for reason in failure_reasons %}
+                  <li>{{ reason.count }}: {{ reason.message }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+          <div class="small mt-8">
+            Troubleshooting:
+            {% if 'authorization' in top_failure or 'authorisation' in top_failure or 'token' in top_failure or 'expired' in top_failure %}
+              re-authenticate under
+              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>,
+              then run a new judge search.
+            {% elif 'court id' in top_failure and 'not recognized' in top_failure %}
+              this usually means the PCL court catalog is not seeded yet.
+              Check
+              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>
+              and then run a new judge search.
+            {% elif 'mismatch' in top_failure %}
+              check PACER environment alignment under
+              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>,
+              then run a new judge search.
+            {% else %}
+              check
+              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>
+              (token + environment), then run a new judge search.
+            {% endif %}
+          </div>
         </div>
       {% endif %}
 
@@ -90,6 +119,14 @@
           <input type="hidden" name="max_cases" value="{{ max_cases }}">
           <input type="hidden" name="case_scope" value="{{ case_scope }}">
           <button class="pill muted" type="submit">Cancel search</button>
+        </form>
+      {% elif segment_statuses.get('failed', 0) %}
+        <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_retry', batch_request_id=batch_request_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="judge_id" value="{{ judge_id }}">
+          <input type="hidden" name="max_cases" value="{{ max_cases }}">
+          <input type="hidden" name="case_scope" value="{{ case_scope }}">
+          <button class="pill" type="submit">Retry failed segments</button>
         </form>
       {% endif %}
     </div>

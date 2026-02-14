@@ -52,6 +52,26 @@
           Fingerprint: {{ service_token_status.fingerprint or "none" }}
         </p>
       </article>
+
+      <article class="pcl-detail-card">
+        <h3>PCL Courts Catalog</h3>
+        <p>
+          {% if pcl_courts_count is not none and pcl_courts_count > 0 %}
+            <strong>Loaded</strong>
+          {% else %}
+            <strong>Missing</strong>
+          {% endif %}
+        </p>
+        {% if pcl_courts_count is not none %}
+          <p class="small">Rows: {{ pcl_courts_count }}</p>
+        {% endif %}
+        {% if pcl_courts_error %}
+          <pre class="code-block">{{ pcl_courts_error }}</pre>
+        {% endif %}
+        <p class="small">
+          This catalog is required to validate court IDs during PACER batch downloads.
+        </p>
+      </article>
     </div>
   </section>
 {% endblock %}

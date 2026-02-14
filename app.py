@@ -818,6 +818,45 @@ def create_app() -> Flask:
     else:
         app.logger.info("DB_BOOTSTRAP disabled; skipping create_all.")
 
+    def _auto_seed_pcl_courts_if_needed() -> None:
+        """Ensure the PCL courts catalog is available for validation and UI."""
+
+        try:
+            inspector = inspect(engine)
+            if not inspector.has_table("pcl_courts"):
+                return
+        except Exception:
+            app.logger.exception("Unable to inspect pcl_courts table for seeding.")
+            return
+
+        try:
+            with engine.begin() as conn:
+                existing_count = int(
+                    conn.execute(select(func.count()).select_from(pcl_courts)).scalar_one()
+                )
+        except Exception:
+            app.logger.exception("Unable to read pcl_courts row count.")
+            return
+
+        if existing_count > 0:
+            return
+
+        try:
+            from pcl_courts_seed import load_pcl_courts_catalog, seed_pcl_courts
+
+            courts = load_pcl_courts_catalog()
+            stats = seed_pcl_courts(engine, pcl_courts, courts)
+            app.logger.info(
+                "Auto-seeded pcl_courts: %s inserted, %s updated, %s skipped.",
+                stats.get("inserted"),
+                stats.get("updated"),
+                stats.get("skipped"),
+            )
+        except Exception:
+            app.logger.exception("Unable to auto-seed pcl_courts from catalog.")
+
+    _auto_seed_pcl_courts_if_needed()
+
     def _ensure_table_columns(
         table_name: str, column_specs: Dict[str, str], *, label: str
     ) -> None:
@@ -7938,6 +7977,15 @@ def create_app() -> Flask:
         env_config = app.config.get("PACER_ENV_CONFIG") or {}
         pacer_env_ok = not bool(app.config.get("PACER_ENV_MISMATCH"))
         pacer_env_reason = app.config.get("PACER_ENV_MISMATCH_REASON")
+        pcl_courts_count = None
+        pcl_courts_error = None
+        try:
+            with engine.connect() as conn:
+                pcl_courts_count = int(
+                    conn.execute(select(func.count()).select_from(pcl_courts)).scalar_one()
+                )
+        except Exception as exc:
+            pcl_courts_error = str(exc)
         service_record = pacer_service_token_store.get_token(
             expected_environment=pacer_env_config.pcl_env
         )
@@ -7957,6 +8005,8 @@ def create_app() -> Flask:
             pacer_env_ok=pacer_env_ok,
             pacer_env_reason=pacer_env_reason,
             pacer_env_config=env_config,
+            pcl_courts_count=pcl_courts_count,
+            pcl_courts_error=pcl_courts_error,
             service_token_status=service_token_status,
         )
 
@@ -8341,6 +8391,40 @@ def create_app() -> Flask:
             for row in rows:
                 status_counts[str(row["status"])] = int(row["segment_count"])
         return status_counts
+
+    def _load_batch_segment_failure_reasons(
+        batch_request_id: int, *, limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        message_expr = func.trim(
+            func.coalesce(batch_segments.c.error_message, batch_segments.c.remote_status_message, "")
+        )
+        stmt = (
+            select(
+                message_expr.label("message"),
+                func.count().label("failure_count"),
+            )
+            .where(batch_segments.c.batch_request_id == batch_request_id)
+            .where(batch_segments.c.status == "failed")
+            .where(message_expr != "")
+            .group_by(message_expr)
+            .order_by(func.count().desc())
+            .limit(max(1, int(limit)))
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        reasons: List[Dict[str, Any]] = []
+        for row in rows:
+            message = str(row.get("message") or "").strip()
+            if not message:
+                continue
+            reasons.append(
+                {
+                    "message": message,
+                    "count": int(row.get("failure_count") or 0),
+                }
+            )
+        return reasons
 
     def _estimate_kearney_docket_runs(*, include_docket_text: bool) -> Dict[str, Any]:
         filters = _build_kearney_docket_filters()
@@ -10018,6 +10102,9 @@ def create_app() -> Flask:
         max_cases = max(0, max_cases)
 
         segment_statuses = _load_batch_segment_status_summary(batch_request_id)
+        failure_reasons: List[Dict[str, Any]] = []
+        if segment_statuses.get("failed", 0) > 0:
+            failure_reasons = _load_batch_segment_failure_reasons(batch_request_id, limit=6)
         discovered_total = _count_cases_in_batch_segments(batch_request_id)
         discovered_with_judge = _count_cases_with_judge_metadata_in_batch_segments(
             batch_request_id
@@ -10059,6 +10146,7 @@ def create_app() -> Flask:
             discovered_with_judge=discovered_with_judge,
             segment_total=segment_total,
             segment_complete=segment_complete,
+            failure_reasons=failure_reasons,
             display_rows=display_rows["rows"],
             max_cases=max_cases,
             case_scope=case_scope,
@@ -10097,6 +10185,75 @@ def create_app() -> Flask:
                 )
             )
         flash("Cancelled remaining segments for this search.", "success")
+        return redirect(
+            url_for(
+                "admin_federal_data_dashboard_judge_search_results",
+                batch_request_id=batch_request_id,
+                judge_id=judge_id,
+                max_cases=max_cases or 0,
+                case_scope=case_scope,
+            )
+        )
+
+    @app.post("/admin/federal-data-dashboard/judge-search/results/<int:batch_request_id>/retry")
+    @admin_required
+    def admin_federal_data_dashboard_judge_search_retry(batch_request_id: int):
+        require_csrf()
+        batch_request = _load_batch_request(batch_request_id)
+        if not batch_request:
+            abort(404)
+
+        judge_id = (request.form.get("judge_id") or "mak").strip().lower()
+        preset = _find_judge_preset(judge_id)
+        if not preset:
+            flash("Select a valid judge preset.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_judge_search"))
+
+        max_cases = _parse_optional_int(request.form.get("max_cases") or None)
+        if max_cases is None:
+            max_cases = 0
+        max_cases = max(0, max_cases)
+        case_scope = (request.form.get("case_scope") or "matched").strip().lower()
+        if case_scope not in {"matched", "all"}:
+            case_scope = "matched"
+
+        # Re-queue failed segments (common after a missing token or unseeded court catalog).
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        with engine.begin() as conn:
+            conn.execute(
+                update(batch_segments)
+                .where(batch_segments.c.batch_request_id == batch_request_id)
+                .where(batch_segments.c.status == "failed")
+                .values(
+                    status="queued",
+                    report_id=None,
+                    remote_status=None,
+                    remote_status_message=None,
+                    submitted_at=None,
+                    completed_at=None,
+                    next_poll_at=None,
+                    poll_attempts=0,
+                    error_message=None,
+                    last_error=None,
+                    updated_at=func.now(),
+                )
+            )
+
+        max_case_limit: Optional[int] = max_cases if max_cases > 0 else None
+
+        threading.Thread(
+            target=_run_judge_search_in_background,
+            kwargs={
+                "batch_request_id": batch_request_id,
+                "judge_last_name": preset["judge_last_name"],
+                "judge_initials": preset["judge_initials"],
+                "max_case_limit": max_case_limit,
+                "max_batch_iterations": 300,
+            },
+            daemon=True,
+        ).start()
+
+        flash("Retry started in the background. Refresh for updated segment status.", "success")
         return redirect(
             url_for(
                 "admin_federal_data_dashboard_judge_search_results",
