@@ -155,26 +155,33 @@ class PclBatchWorker:
         self._claim_timeout_minutes = claim_timeout_minutes
         self._rng = random.Random()
 
-    def run_once(self, max_segments: int = 1) -> int:
+    def run_once(self, max_segments: int = 1, *, batch_request_id: Optional[int] = None) -> int:
         processed = 0
-        segments = self._load_segments(max_segments)
+        segments = self._load_segments(max_segments, batch_request_id=batch_request_id)
         for segment in segments:
             self._process_segment(segment)
             processed += 1
         return processed
 
-    def _load_segments(self, max_segments: int) -> List[Dict[str, Any]]:
+    def _load_segments(
+        self, max_segments: int, *, batch_request_id: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
         segment_table = self._tables["pcl_batch_segments"]
         now = self._now()
+        where_clause = segment_table.c.status.in_(["queued", "submitted", "running"])
+        if batch_request_id is not None:
+            where_clause = where_clause & (segment_table.c.batch_request_id == batch_request_id)
         with self._engine.begin() as conn:
             if conn.dialect.name == "postgresql":
                 stale_cutoff = now - timedelta(minutes=self._claim_timeout_minutes)
-                claimable = segment_table.c.status.in_(
-                    ["queued", "submitted", "running"]
-                )
+                claimable = where_clause
                 reclaimable = (segment_table.c.status == "processing") & (
                     segment_table.c.updated_at < stale_cutoff
                 )
+                if batch_request_id is not None:
+                    reclaimable = reclaimable & (
+                        segment_table.c.batch_request_id == batch_request_id
+                    )
                 # Use transactional claiming to prevent two workers from processing
                 # the same segment concurrently. Stale processing rows are reclaimed
                 # so a crashed worker does not leave segments stuck forever.
@@ -193,11 +200,7 @@ class PclBatchWorker:
                 rows = (
                     conn.execute(
                         select(segment_table)
-                        .where(
-                            segment_table.c.status.in_(
-                                ["queued", "submitted", "running"]
-                            )
-                        )
+                        .where(where_clause)
                         .order_by(segment_table.c.created_at.asc())
                         .limit(max_segments)
                     )

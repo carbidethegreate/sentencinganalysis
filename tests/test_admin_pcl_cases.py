@@ -129,7 +129,7 @@ class AdminPclCasesTests(unittest.TestCase):
                         "data_json": "{}",
                     },
                     {
-                        "court_id": "edpa",
+                        "court_id": "paedc",
                         "case_number": "5:10-cr-00101",
                         "case_number_full": "5:10-cr-00101",
                         "case_type": "cr",
@@ -143,7 +143,7 @@ class AdminPclCasesTests(unittest.TestCase):
                         "data_json": "{}",
                     },
                     {
-                        "court_id": "edpa",
+                        "court_id": "paedc",
                         "case_number": "3:10-cr-00202",
                         "case_number_full": "3:10-cr-00202",
                         "case_type": "cr",
@@ -383,7 +383,7 @@ class AdminPclCasesTests(unittest.TestCase):
 
     def test_estimate_docket_cost_for_kearney_filter_has_fallback(self):
         filters = PclCaseFilters(
-            court_id="edpa",
+            court_id="paedc",
             case_type="cr",
             judge_last_name="kearney",
             date_filed_from=date(2010, 1, 1),

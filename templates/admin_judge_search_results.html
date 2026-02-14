@@ -7,7 +7,7 @@
     <div class="page-header page-header--tight">
       <h2>{{ judge.name }} PACER results</h2>
       <p class="small">
-        Judge search run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ judge.court_id|upper }}
+        Judge search run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ batch_request.court_id|upper }}
       </p>
     </div>
   </section>
@@ -32,9 +32,10 @@
         <dd>{% if max_cases > 0 %}Limited to {{ max_cases }}{% else %}Full search requested{% endif %}</dd>
       </div>
       <div>
-        <dt>Segments complete</dt>
+        <dt>Segments finished</dt>
         <dd>
-          {{ segment_complete }} completed / {{ segment_total }}
+          {{ segment_complete }} / {{ segment_total }}
+          ({{ segment_statuses.get('completed', 0) }} completed, {{ segment_statuses.get('failed', 0) }} failed{% if segment_statuses.get('cancelled', 0) %}, {{ segment_statuses.get('cancelled', 0) }} cancelled{% endif %})
         </dd>
       </div>
       <div>
@@ -42,6 +43,18 @@
         <dd>{% if is_complete %}search complete{% else %}still collecting results{% endif %}</dd>
       </div>
     </dl>
+
+    {% set segment_percent = 0 %}
+    {% if segment_total > 0 %}
+      {% set segment_percent = (segment_complete * 100) // segment_total %}
+    {% endif %}
+    <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ segment_percent }}">
+      <div class="progress-bar" style="width: {{ segment_percent }}%"></div>
+    </div>
+    <div class="progress-meta small">
+      <span>{{ segment_percent }}%</span>
+      <span>{{ segment_complete }} / {{ segment_total }} segments</span>
+    </div>
 
     {% if discovered_total and not discovered_with_judge %}
       <p class="small">
@@ -51,25 +64,49 @@
     {% endif %}
 
     <div class="actions mt-12">
-      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases) }}">
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope) }}">
         Refresh now
       </a>
       <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">
         Start new judge search
       </a>
+      {% if not is_complete %}
+        <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_cancel', batch_request_id=batch_request_id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="judge_id" value="{{ judge_id }}">
+          <input type="hidden" name="max_cases" value="{{ max_cases }}">
+          <input type="hidden" name="case_scope" value="{{ case_scope }}">
+          <button class="pill muted" type="submit">Cancel search</button>
+        </form>
+      {% endif %}
     </div>
   </section>
 
   <section class="card stack">
-    <h3>Matched cases</h3>
+    <h3>{% if case_scope == 'all' %}Discovered cases{% else %}Matched cases{% endif %}</h3>
     <p class="small">
       Showing {{ display_rows|length }} case(s). This list is ordered newest-to-oldest.
     </p>
 
+    <div class="actions">
+      <a
+        class="pill {% if case_scope != 'all' %}is-current{% endif %}"
+        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='matched') }}"
+      >
+        Show matches
+      </a>
+      <a
+        class="pill {% if case_scope == 'all' %}is-current{% endif %}"
+        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='all') }}"
+      >
+        Show all discovered
+      </a>
+    </div>
+
     {% if not is_complete %}
       <p class="small">Background search is active. This page auto-refreshes every 12 seconds.</p>
       <script>
-        const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases) | tojson }};
+        const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope) | tojson }};
         setTimeout(() => {
           window.location.assign(refreshUrl);
         }, 12000);
@@ -84,6 +121,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="judge_id" value="{{ judge_id }}">
       <input type="hidden" name="max_cases" value="{{ max_cases }}">
+      <input type="hidden" name="case_scope" value="{{ case_scope }}">
       <label>
         <input type="checkbox" name="include_docket_text" value="1" checked>
         Include docket text when queueing
@@ -97,7 +135,7 @@
         <input type="number" name="max_docket_jobs" min="1" max="200" value="50">
       </label>
       <button class="primary" type="submit">
-        Add these cases to docket queue
+        {% if case_scope == 'all' %}Add discovered cases to docket queue{% else %}Add matched cases to docket queue{% endif %}
       </button>
     </form>
 
@@ -130,7 +168,11 @@
         </table>
       </div>
     {% else %}
-    <p class="small">No matches yet. If the run is still in progress, refresh for updates.</p>
+      {% if case_scope == 'all' %}
+        <p class="small">No cases discovered yet. If the run is still in progress, refresh for updates.</p>
+      {% else %}
+        <p class="small">No judge-filtered matches yet. If cases were discovered, try “Show all discovered”.</p>
+      {% endif %}
     {% endif %}
   </section>
 {% endblock %}

@@ -16,6 +16,71 @@
     >
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
+      {% if court_choices %}
+        <label for="court-filter">Find district court</label>
+        <input
+          id="court-filter"
+          type="search"
+          placeholder="Type to filter courts (e.g., Pennsylvania Eastern)"
+          autocomplete="off"
+        >
+        <div class="small" id="court-filter-status" aria-live="polite"></div>
+
+        <label for="court-id">District court</label>
+        <select id="court-id" name="court_id" required>
+          {% for court in court_choices %}
+            <option value="{{ court.id }}" {% if court.id == selected_court_id %}selected{% endif %}>
+              {{ court.label }}
+            </option>
+          {% endfor %}
+        </select>
+        <script>
+          (function () {
+            const filterInput = document.getElementById("court-filter");
+            const selectEl = document.getElementById("court-id");
+            const statusEl = document.getElementById("court-filter-status");
+            if (!filterInput || !selectEl) {
+              return;
+            }
+            const options = Array.from(selectEl.options || []);
+            const update = () => {
+              const q = (filterInput.value || "").trim().toLowerCase();
+              const selectedValue = (selectEl.value || "").toLowerCase();
+              let visible = 0;
+              for (const opt of options) {
+                const text = (opt.text || "").toLowerCase();
+                const value = (opt.value || "").toLowerCase();
+                const match = !q || text.includes(q) || value.includes(q);
+                opt.hidden = !match;
+                if (match) {
+                  visible += 1;
+                }
+              }
+
+              // Keep the currently selected option visible so the user
+              // always knows what will be submitted.
+              if (selectedValue) {
+                const selectedOpt = options.find((opt) => (opt.value || "").toLowerCase() === selectedValue);
+                if (selectedOpt) {
+                  selectedOpt.hidden = false;
+                }
+              }
+
+              if (statusEl) {
+                statusEl.textContent = q
+                  ? `Showing ${visible} of ${options.length} courts`
+                  : `Showing all ${options.length} courts`;
+              }
+            };
+            filterInput.addEventListener("input", update);
+            update();
+          })();
+        </script>
+      {% else %}
+        <label for="court-id">District court</label>
+        <input id="court-id" name="court_id" value="{{ selected_court_id }}" required>
+      {% endif %}
+
       <label for="judge-id">Judge</label>
       <select id="judge-id" name="judge_id">
         {% for judge in judges %}
