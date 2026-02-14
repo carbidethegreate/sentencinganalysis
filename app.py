@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from functools import wraps
 from pathlib import Path
 from typing import (
@@ -8123,6 +8123,376 @@ def create_app() -> Flask:
             include_docket_text=include_docket_text,
         )
 
+    def _extract_receipt_metric(
+        receipt_payload: Any,
+        metric_keys: Sequence[str],
+    ) -> Optional[float]:
+        def _coerce_number(value: Any) -> Optional[float]:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                stripped = value.strip().replace("$", "")
+                try:
+                    return float(stripped)
+                except ValueError:
+                    return None
+            return None
+
+        if isinstance(receipt_payload, str):
+            try:
+                receipt_payload = json.loads(receipt_payload)
+            except json.JSONDecodeError:
+                return None
+
+        if isinstance(receipt_payload, dict):
+            for key in metric_keys:
+                if key in receipt_payload:
+                    value = _coerce_number(receipt_payload.get(key))
+                    if value is not None:
+                        return value
+            for value in receipt_payload.values():
+                found = _extract_receipt_metric(value, metric_keys)
+                if found is not None:
+                    return found
+            return None
+
+        if isinstance(receipt_payload, (list, tuple)):
+            for item in receipt_payload:
+                found = _extract_receipt_metric(item, metric_keys)
+                if found is not None:
+                    return found
+        return None
+
+    def _count_kearney_discovery_segments(
+        date_from: Optional[date],
+        date_to: Optional[date],
+    ) -> int:
+        if not date_from or not date_to:
+            return 0
+        start = date_from.date() if isinstance(date_from, datetime) else date_from
+        end = date_to.date() if isinstance(date_to, datetime) else date_to
+        if not isinstance(start, date) or not isinstance(end, date):
+            return 0
+        if end < start:
+            start, end = end, start
+        segment_count = 0
+        cursor = start
+        while cursor <= end:
+            segment_count += 1
+            if cursor.month == 12:
+                cursor = datetime(cursor.year + 1, 1, 1).date()
+            else:
+                cursor = datetime(cursor.year, cursor.month + 1, 1).date()
+        return segment_count
+
+    def _estimate_kearney_batch_search() -> Dict[str, Any]:
+        filters = _build_kearney_docket_filters()
+        batch_requests = pcl_tables["pcl_batch_requests"]
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        batch_receipts = pcl_tables["pcl_batch_receipts"]
+
+        estimated_segments = _count_kearney_discovery_segments(
+            filters.date_filed_from, filters.date_filed_to
+        )
+        candidate_count_by_receipts: List[float] = []
+        fee_values: List[float] = []
+        with engine.begin() as conn:
+            segment_rows = conn.execute(
+                select(batch_segments.c.id, batch_segments.c.case_types)
+                .join(
+                    batch_requests,
+                    batch_requests.c.id == batch_segments.c.batch_request_id,
+                )
+                .where(batch_requests.c.court_id == filters.court_id)
+                .where(batch_segments.c.case_types.like(f"%{filters.case_type}%"))
+            ).mappings().all()
+
+            segment_ids = []
+            for row in segment_rows:
+                if row["case_types"] and isinstance(row["case_types"], str):
+                    if f'"{filters.case_type}"' not in row["case_types"]:
+                        continue
+                if row["id"] is not None:
+                    segment_ids.append(int(row["id"]))
+            if segment_ids:
+                receipt_rows = (
+                    conn.execute(
+                        select(batch_receipts.c.receipt_json)
+                        .where(batch_receipts.c.segment_id.in_(segment_ids))
+                    )
+                    .mappings()
+                    .all()
+                )
+            else:
+                receipt_rows = []
+        for row in receipt_rows:
+            payload = row["receipt_json"]
+            candidate_value = _extract_receipt_metric(
+                payload,
+                ("itemCount", "item_count", "total_items", "results_count", "resultCount"),
+            )
+            if candidate_value is not None:
+                candidate_count_by_receipts.append(candidate_value)
+
+            fee_value = _extract_receipt_metric(
+                payload,
+                ("searchFee", "search_fee", "searchFeeAmount", "search_cost", "totalCost"),
+            )
+            if fee_value is not None:
+                fee_values.append(fee_value)
+
+        avg_fee = sum(fee_values) / len(fee_values) if fee_values else None
+        avg_case_count = (
+            sum(candidate_count_by_receipts) / len(candidate_count_by_receipts)
+            if candidate_count_by_receipts
+            else None
+        )
+        estimated_discovery_cases = (
+            int(round(avg_case_count * estimated_segments))
+            if avg_case_count is not None and estimated_segments
+            else None
+        )
+        estimated_search_cost = (
+            avg_fee * estimated_segments if avg_fee is not None else None
+        )
+        fallback = "history"
+        if not fee_values and not candidate_count_by_receipts:
+            fallback = "none"
+        elif not candidate_count_by_receipts:
+            fallback = "fees_only"
+
+        return {
+            "estimated_segment_count": estimated_segments,
+            "estimated_discovery_cost": estimated_search_cost,
+            "estimated_case_count": estimated_discovery_cases,
+            "avg_case_count_per_segment": avg_case_count,
+            "avg_search_fee": avg_fee,
+            "history_fee_samples": len(fee_values),
+            "history_case_samples": len(candidate_count_by_receipts),
+            "fallback": fallback,
+        }
+
+    def _load_kearney_case_ids(filters: PclCaseFilters) -> List[int]:
+        pcl_cases = pcl_tables["pcl_cases"]
+        clauses: List[Any] = [pcl_cases.c.id.is_not(None)]
+        if filters.court_id:
+            clauses.append(pcl_cases.c.court_id == filters.court_id)
+        if filters.case_type:
+            clauses.append(pcl_cases.c.case_type == filters.case_type)
+        if filters.judge_last_name:
+            clauses.append(
+                func.lower(func.coalesce(pcl_cases.c.judge_last_name, "")) == filters.judge_last_name.lower()
+            )
+        if filters.date_filed_from:
+            clauses.append(pcl_cases.c.date_filed >= filters.date_filed_from)
+        if filters.date_filed_to:
+            clauses.append(pcl_cases.c.date_filed <= filters.date_filed_to)
+
+        stmt = (
+            select(pcl_cases.c.id)
+            .where(and_(*clauses))
+            .order_by(pcl_cases.c.date_filed.desc(), pcl_cases.c.id.desc())
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [int(row["id"]) for row in rows if row["id"] is not None]
+
+    def _queue_kearney_docket_jobs_for_case_ids(
+        case_ids: Sequence[int],
+        include_docket_text: bool,
+        *,
+        skipped_case_ids: Optional[Set[int]] = None,
+    ) -> Dict[str, int]:
+        job_table = pcl_tables["docket_enrichment_jobs"]
+        skipped_case_ids = set(skipped_case_ids or [])
+        queued = 0
+        skipped = 0
+        with engine.begin() as conn:
+            for case_id in case_ids:
+                if case_id in skipped_case_ids:
+                    skipped += 1
+                    continue
+                skipped_case_ids.add(case_id)
+
+                last_status = _latest_job_status(conn, job_table, case_id=case_id)
+                if last_status in {"queued", "running"}:
+                    skipped += 1
+                    continue
+
+                _enqueue_docket_enrichment(case_id, include_docket_text)
+                queued += 1
+        return {"docket_jobs_queued": queued, "docket_jobs_skipped": skipped}
+
+    def _queue_kearney_document_jobs_for_case_ids(
+        case_ids: Sequence[int],
+        document_keywords: Optional[Sequence[str]] = None,
+    ) -> Dict[str, int]:
+        document_jobs_table = pcl_tables.get("docket_document_jobs")
+        if document_jobs_table is None:
+            return {
+                "document_jobs_queued": 0,
+                "document_jobs_skipped": 0,
+                "document_jobs_no_matches": 0,
+                "document_jobs_disabled": 1,
+            }
+
+        queued = 0
+        skipped = 0
+        no_matches = 0
+        with engine.begin() as conn:
+            for case_id in case_ids:
+                latest_doc_status = _latest_job_status(
+                    conn, document_jobs_table, case_id=case_id
+                )
+                if latest_doc_status in {"queued", "running"}:
+                    skipped += 1
+                    continue
+
+                entries = _load_case_docket_entries(conn, case_id)
+                items = _extract_document_links_from_case_fields(
+                    [{"field_name": "docket_entries", "field_value_json": entries}],
+                    keyword_filters=document_keywords or None,
+                )
+                if not items:
+                    no_matches += 1
+                    continue
+
+                _queue_document_job(conn, case_id, items)
+                queued += 1
+
+        return {
+            "document_jobs_queued": queued,
+            "document_jobs_skipped": skipped,
+            "document_jobs_no_matches": no_matches,
+            "document_jobs_disabled": 0,
+        }
+
+    def _estimate_and_run_kearney_backfill(
+        include_docket_text: bool,
+        queue_documents: bool,
+        document_keywords: Optional[Sequence[str]],
+        run_docket_worker: bool,
+        max_batch_iterations: int,
+        max_docket_jobs: int,
+    ) -> Dict[str, int]:
+        filters = _build_kearney_docket_filters()
+        planner = PclBatchPlanner(engine, pcl_tables)
+        batch_request_id = planner.create_batch_request(
+            court_id=filters.court_id,
+            date_filed_from=filters.date_filed_from,
+            date_filed_to=filters.date_filed_to,
+            case_types=[filters.case_type],
+        )
+
+        batch_worker = PclBatchWorker(
+            engine,
+            pcl_tables,
+            pcl_client,
+            logger=app.logger,
+            sleep_fn=time.sleep,
+        )
+
+        max_batch_iterations = max(1, int(max_batch_iterations))
+        total_segments_processed = 0
+        for _ in range(max_batch_iterations):
+            processed = batch_worker.run_once(max_segments=50)
+            total_segments_processed += processed
+            if processed == 0:
+                break
+
+        case_ids = _load_kearney_case_ids(filters)
+        dedupe_case_ids: Set[int] = set()
+        queue_stats = _queue_kearney_docket_jobs_for_case_ids(
+            case_ids,
+            include_docket_text=include_docket_text,
+            skipped_case_ids=dedupe_case_ids,
+        )
+
+        document_stats: Dict[str, int] = {
+            "document_jobs_queued": 0,
+            "document_jobs_skipped": 0,
+            "document_jobs_no_matches": 0,
+            "document_jobs_disabled": 0,
+        }
+
+        if run_docket_worker and case_ids:
+            docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "html")
+            docket_url_template = os.environ.get("PACER_DOCKET_URL_TEMPLATE")
+            worker = DocketEnrichmentWorker(
+                engine,
+                pcl_tables,
+                logger=app.logger,
+                endpoint_available=True,
+                http_client=pcl_background_http_client,
+                docket_output=docket_output,
+                docket_url_template=docket_url_template,
+            )
+
+            max_docket_jobs = max(1, int(max_docket_jobs))
+            while worker.run_once(max_jobs=max_docket_jobs) > 0:
+                pass
+
+            if queue_documents:
+                document_stats = _queue_kearney_document_jobs_for_case_ids(
+                    case_ids,
+                    document_keywords=document_keywords,
+                )
+
+        queue_stats.update(document_stats)
+        queue_stats["batch_request_id"] = batch_request_id
+        queue_stats["discovery_case_count"] = len(case_ids)
+        queue_stats["total_segments_processed"] = total_segments_processed
+        return queue_stats
+
+    def _run_kearney_discovery_in_background(
+        *,
+        include_docket_text: bool,
+        queue_documents: bool,
+        document_keywords: Optional[Sequence[str]],
+        run_docket_worker: bool,
+        max_batch_iterations: int,
+        max_docket_jobs: int,
+    ) -> None:
+        try:
+            stats = _estimate_and_run_kearney_backfill(
+                include_docket_text=include_docket_text,
+                queue_documents=queue_documents,
+                document_keywords=document_keywords,
+                run_docket_worker=run_docket_worker,
+                max_batch_iterations=max_batch_iterations,
+                max_docket_jobs=max_docket_jobs,
+            )
+            app.logger.info(
+                "Completed Kearney backfill: batch_request_id=%s, discovered=%s, docket_jobs_queued=%s, document_jobs_queued=%s, segments=%s",
+                stats.get("batch_request_id"),
+                stats.get("discovery_case_count"),
+                stats.get("docket_jobs_queued"),
+                stats.get("document_jobs_queued"),
+                stats.get("total_segments_processed"),
+            )
+        except Exception:
+            app.logger.exception(
+                "Error while running Mark A. Kearney discovery backfill."
+            )
+
+    def _build_kearney_candidate_filters(max_cases: int) -> Dict[str, Any]:
+        filters = _build_kearney_docket_filters()
+        return {
+            "court_id": filters.court_id,
+            "case_type": filters.case_type,
+            "judge_last_name": filters.judge_last_name,
+            "search_text": "",
+            "docket_status": "any",
+            "docket_text": "any",
+            "sort": "date_filed_desc",
+            "page": 1,
+            "page_size": max_cases,
+            "date_filed_from": filters.date_filed_from,
+            "date_filed_to": filters.date_filed_to,
+        }
+
     def _load_docket_dashboard_rows(limit: int = 200) -> List[Dict[str, Any]]:
         job_table = pcl_tables["docket_enrichment_jobs"]
         receipt_table = pcl_tables["docket_enrichment_receipts"]
@@ -8836,6 +9206,7 @@ def create_app() -> Flask:
         kearney_estimate_without_text = _estimate_kearney_docket_runs(
             include_docket_text=False
         )
+        kearney_discovery_estimate = _estimate_kearney_batch_search()
         kearney_candidates = kearney_estimate_with_text.get("candidate_count", 0)
         service_record = pacer_service_token_store.get_token(
             expected_environment=pacer_env_config.pcl_env
@@ -8870,6 +9241,7 @@ def create_app() -> Flask:
             docket_filters=filters,
             kearney_estimate_with_text=kearney_estimate_with_text,
             kearney_estimate_without_text=kearney_estimate_without_text,
+            kearney_discovery_estimate=kearney_discovery_estimate,
             kearney_candidate_count=kearney_candidates,
             csrf_token=get_csrf_token(),
         )
@@ -8952,82 +9324,95 @@ def create_app() -> Flask:
         )
         document_keywords = _parse_document_keywords(request.form.get("document_keywords"))
 
-        filters = _build_kearney_docket_filters()
-        candidate_filters = {
-            "court_id": filters.court_id,
-            "case_type": filters.case_type,
-            "judge_last_name": filters.judge_last_name,
-            "search_text": "",
-            "docket_status": "any",
-            "docket_text": "any",
-            "sort": "date_filed_desc",
-            "page": 1,
-            "page_size": max_cases_int,
-            "date_filed_from": filters.date_filed_from,
-            "date_filed_to": filters.date_filed_to,
-        }
+        candidate_filters = _build_kearney_candidate_filters(max_cases=max_cases_int)
         candidates = _load_docket_case_candidates(candidate_filters)
-
-        docket_jobs_queued = 0
-        docket_jobs_skipped = 0
-        document_jobs_queued = 0
-        document_jobs_skipped = 0
-        document_no_matches = 0
-
-        document_jobs_table = pcl_tables.get("docket_document_jobs")
-
-        with engine.begin() as conn:
-            for row in candidates["rows"]:
-                case_id = int(row["id"])
-
-                if row.get("last_job_status") in {"queued", "running"}:
-                    docket_jobs_skipped += 1
-                else:
-                    _enqueue_docket_enrichment(case_id, include_docket_text)
-                    docket_jobs_queued += 1
-
-                if not queue_documents:
-                    continue
-                if document_jobs_table is None:
-                    continue
-                latest_doc_status = _latest_job_status(
-                    conn, document_jobs_table, case_id=case_id
-                )
-                if latest_doc_status in {"queued", "running"}:
-                    document_jobs_skipped += 1
-                    continue
-
-                entries = _load_case_docket_entries(conn, case_id)
-                items = _extract_document_links_from_case_fields(
-                    [{"field_name": "docket_entries", "field_value_json": entries}],
-                    keyword_filters=document_keywords or None,
-                )
-                if not items:
-                    document_no_matches += 1
-                    continue
-                _queue_document_job(conn, case_id, items)
-                document_jobs_queued += 1
+        case_ids = [int(row["id"]) for row in candidates["rows"]]
+        queue_stats = _queue_kearney_docket_jobs_for_case_ids(
+            case_ids,
+            include_docket_text=include_docket_text,
+        )
+        document_stats = {"document_jobs_queued": 0, "document_jobs_skipped": 0, "document_jobs_no_matches": 0, "document_jobs_disabled": 0}
+        if queue_documents:
+            document_stats = _queue_kearney_document_jobs_for_case_ids(
+                case_ids,
+                document_keywords=document_keywords,
+            )
 
         message_parts = [
-            f"Queued {docket_jobs_queued} docket enrichment jobs for Mark A. Kearney",
-            f"skipped {docket_jobs_skipped} already queued/running",
+            f"Queued {queue_stats['docket_jobs_queued']} docket enrichment jobs for Mark A. Kearney",
+            f"skipped {queue_stats['docket_jobs_skipped']} already queued/running",
         ]
         if queue_documents:
             if document_keywords:
                 message_parts.append(
-                    f"Queued {document_jobs_queued} document jobs using {len(document_keywords)} keyword filter(s)"
+                    f"Queued {document_stats['document_jobs_queued']} document jobs using {len(document_keywords)} keyword filter(s)"
                 )
             else:
-                message_parts.append(f"Queued {document_jobs_queued} document jobs")
-            if document_jobs_skipped:
                 message_parts.append(
-                    f"skipped {document_jobs_skipped} document jobs already queued/running"
+                    f"Queued {document_stats['document_jobs_queued']} document jobs"
                 )
-            if document_no_matches:
+            if document_stats["document_jobs_skipped"]:
                 message_parts.append(
-                    f"{document_no_matches} cases had no matching document links"
+                    f"skipped {document_stats['document_jobs_skipped']} document jobs already queued/running"
                 )
+            if document_stats["document_jobs_no_matches"]:
+                message_parts.append(
+                    f"{document_stats['document_jobs_no_matches']} cases had no matching document links"
+                )
+            if document_stats["document_jobs_disabled"]:
+                message_parts.append("Document job queue tables are unavailable")
         flash(". ".join(message_parts) + ".", "success")
+        return redirect(url_for("admin_docket_enrichment_dashboard"))
+
+    @app.post("/admin/docket-enrichment/discover-kearney")
+    @admin_required
+    def admin_docket_enrichment_discover_kearney():
+        require_csrf()
+        include_docket_text = _parse_include_docket_text(
+            request.form.get("include_docket_text")
+        )
+        queue_documents = _parse_include_docket_text(request.form.get("queue_documents"))
+        document_keywords = _parse_document_keywords(request.form.get("document_keywords"))
+        run_docket_worker = _parse_include_docket_text(request.form.get("run_docket_worker"))
+        if queue_documents:
+            run_docket_worker = True
+
+        max_batch_iterations = _parse_optional_int(
+            request.form.get("max_batch_iterations") or None
+        )
+        if not max_batch_iterations:
+            max_batch_iterations = 600
+        max_batch_iterations = max(1, min(4000, max_batch_iterations))
+        max_docket_jobs = _parse_optional_int(
+            request.form.get("max_docket_jobs") or None
+        )
+        if not max_docket_jobs:
+            max_docket_jobs = 50
+        max_docket_jobs = max(1, min(200, max_docket_jobs))
+
+        discovery_thread = threading.Thread(
+            target=_run_kearney_discovery_in_background,
+            kwargs={
+                "include_docket_text": include_docket_text,
+                "queue_documents": queue_documents,
+                "document_keywords": document_keywords,
+                "run_docket_worker": run_docket_worker,
+                "max_batch_iterations": max_batch_iterations,
+                "max_docket_jobs": max_docket_jobs,
+            },
+            daemon=True,
+        )
+        discovery_thread.start()
+
+        flash(
+            "Started full Mark A. Kearney discovery and queueing run in the background.",
+            "success",
+        )
+        if queue_documents and run_docket_worker:
+            flash(
+                "Document downloads will be queued after docket histories are pulled.",
+                "success",
+            )
         return redirect(url_for("admin_docket_enrichment_dashboard"))
 
     @app.get("/admin/federal-data-dashboard/expand-existing")
