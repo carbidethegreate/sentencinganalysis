@@ -426,8 +426,10 @@ def _normalize_pacer_base_url(base_url: str) -> str:
 
 
 def get_configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
-    login_id = _first_env_or_secret_file("puser")
-    password = _first_env_or_secret_file("ppass")
+    # Support a few common Render secret/env names.
+    # Avoid generic names like "Password" because that is typically reserved for DB creds.
+    login_id = _first_env_or_secret_file("puser", "PACER_USERNAME")
+    password = _first_env_or_secret_file("ppass", "ppassword", "PACER_PASSWORD")
     return login_id, password
 
 
@@ -1064,8 +1066,8 @@ def create_app() -> Flask:
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
-    pacer_auth_base_url_env = os.environ.get("PACER_AUTH_BASE_URL")
-    pcl_base_url_env = os.environ.get("PCL_BASE_URL")
+    pacer_auth_base_url_env = _first_env_or_secret_file("PACER_AUTH_BASE_URL")
+    pcl_base_url_env = _first_env_or_secret_file("PCL_BASE_URL")
     pacer_auth_base_url = _normalize_pacer_base_url(
         pacer_auth_base_url_env or DEFAULT_PACER_AUTH_BASE_URL
     )
@@ -5359,9 +5361,8 @@ def create_app() -> Flask:
     @admin_required
     def admin_federal_data_dashboard_get_pacer_data():
         pacer_session = _get_pacer_session()
-        pacer_server_creds_available = bool(
-            _first_env_or_secret_file("puser") and _first_env_or_secret_file("ppass")
-        )
+        configured_user, configured_pass = get_configured_pacer_credentials()
+        pacer_server_creds_available = bool(configured_user and configured_pass)
         pacer_authenticated = bool(pacer_session)
         pacer_search_disabled = bool(session.get("pacer_search_disabled"))
         pacer_search_enabled = bool(pacer_authenticated and _pacer_search_enabled())
@@ -7413,7 +7414,7 @@ def create_app() -> Flask:
                 session["pacer_search_disabled_reason"] = None
                 message = (
                     "PACER credentials are not configured. Set Render env var puser and "
-                    "secret file ppass, or use manual mode."
+                    "secret file ppass (or ppassword), or use manual mode."
                 )
                 if wants_json:
                     return (
@@ -8228,8 +8229,14 @@ def create_app() -> Flask:
                 .where(pcl_courts.c.active.is_(True))
                 .order_by(pcl_courts.c.name.asc())
             )
-            with engine.begin() as conn:
-                rows = conn.execute(stmt).all()
+            try:
+                with engine.begin() as conn:
+                    rows = conn.execute(stmt).all()
+            except SQLAlchemyError as exc:
+                # If the DB is misconfigured or the table isn't migrated yet, fall back to
+                # the static Appendix A catalog so the admin UI still loads.
+                app.logger.warning("Unable to query pcl_courts for court choices: %s", exc)
+                rows = []
             for court_id, name in rows:
                 if not court_id or not name:
                     continue
@@ -8278,13 +8285,17 @@ def create_app() -> Flask:
             return False
         pcl_courts = pcl_tables.get("pcl_courts")
         if pcl_courts is not None:
-            with engine.begin() as conn:
-                row = conn.execute(
-                    select(pcl_courts.c.pcl_court_id)
-                    .where(pcl_courts.c.pcl_court_id == normalized)
-                    .where(pcl_courts.c.active.is_(True))
-                    .limit(1)
-                ).first()
+            try:
+                with engine.begin() as conn:
+                    row = conn.execute(
+                        select(pcl_courts.c.pcl_court_id)
+                        .where(pcl_courts.c.pcl_court_id == normalized)
+                        .where(pcl_courts.c.active.is_(True))
+                        .limit(1)
+                    ).first()
+            except SQLAlchemyError as exc:
+                app.logger.warning("Unable to validate PCL court id %s: %s", normalized, exc)
+                row = None
             if row is not None:
                 return True
 

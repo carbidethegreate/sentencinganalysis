@@ -23,6 +23,7 @@
         </a>
 
         <nav class="nav-links">
+          {% set in_admin_area = request.path.startswith('/admin') %}
           <a href="{{ url_for('home') }}" class="{% if active_page == 'home' %}active{% endif %}">Home</a>
 
           {% if current_user %}
@@ -31,14 +32,15 @@
             <a href="{{ url_for('login') }}" class="{% if active_page == 'login' %}active{% endif %}">Login / Sign Up</a>
           {% endif %}
 
-          {% if is_admin %}
+          {# Admin navigation should only appear inside the /admin interface. #}
+          {% if is_admin and in_admin_area %}
             <a href="{{ url_for('admin_federal_data_dashboard') }}" class="{% if active_page == 'federal_data_dashboard' %}active{% endif %}">Federal Data Dashboard</a>
             <a href="{{ url_for('admin_database_dashboard') }}" class="{% if active_page == 'database_dashboard' %}active{% endif %}">Database</a>
             <a href="{{ url_for('admin_case_data_one_upload') }}">Add Data</a>
             <a href="{{ url_for('admin_case_data_one_list') }}">Case Reports</a>
           {% endif %}
 
-          {% if not is_admin %}
+          {% if not (is_admin and in_admin_area) %}
             <a href="{{ url_for('pricing') }}" class="{% if active_page == 'pricing' %}active{% endif %}">Pricing</a>
             <a href="{{ url_for('news') }}" class="{% if active_page == 'news' %}active{% endif %}">News</a>
             <a href="{{ url_for('about') }}" class="{% if active_page == 'about' %}active{% endif %}">About</a>

@@ -26,6 +26,7 @@ Federal data dashboard
 - `PCL_BASE_URL`: PACER Case Locator API base URL (default `https://qa-pcl.uscourts.gov/pcl-public-api/rest`)
 - QA and Production endpoints require **separate PACER accounts**. Keep `PACER_AUTH_BASE_URL` and `PCL_BASE_URL` aligned to the same environment or PCL calls will be blocked locally.
 - PCL requests must include the `X-NEXT-GEN-CSO` header returned by PACER auth. Some accounts also require a PACER client code to enable searching; re-authorize with the client code if searches are disabled.
+- Server-side PACER credentials (optional, used for background workers): set `puser` + `ppass` (or `ppassword`) as env vars or Render secret files. Alternatively set `PACER_USERNAME` + `PACER_PASSWORD`.
 
 Database
 The app will try these, in order:
