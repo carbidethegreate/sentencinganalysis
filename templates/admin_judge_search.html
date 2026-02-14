@@ -470,8 +470,11 @@
           }
 
           if (event.key === "Enter") {
-            if (!courtMatches.length) return;
             event.preventDefault();
+            if (!courtMatches.length) {
+              setError(1, "No matching court to select. Keep typing a court name.");
+              return;
+            }
             const idx = activeCourtMatchIndex >= 0 ? activeCourtMatchIndex : 0;
             const court = courtMatches[idx];
             if (court) setSelectedCourt(court);
