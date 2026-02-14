@@ -7088,6 +7088,33 @@ def create_app() -> Flask:
         )
         run_result["save_summary"] = counts
 
+        # Batch reports count against PCL limits even after completion. If we have already
+        # downloaded/stored the results, delete the remote report to prevent 429s later.
+        if search_mode == "batch" and report_id is not None:
+            cleanup_error = None
+            try:
+                if mode == "cases":
+                    pcl_client.delete_case_report(str(report_id))
+                else:
+                    pcl_client.delete_party_report(str(report_id))
+                flash(f"Deleted remote PCL report {report_id}.", "info")
+            except TokenExpired:
+                cleanup_error = (
+                    "PACER token expired; unable to delete the remote PCL report. Re-authorize and try again."
+                )
+            except PclApiError as exc:
+                cleanup_error = f"PCL report cleanup failed ({exc.status_code}): {exc.message}"
+            except Exception as exc:  # pragma: no cover - defensive guardrail
+                cleanup_error = f"Unexpected error while deleting remote PCL report: {exc}"
+                app.logger.exception("Unexpected PCL report cleanup error.")
+            if cleanup_error:
+                app.logger.warning(
+                    "Unable to delete remote PCL report %s after store: %s",
+                    report_id,
+                    cleanup_error,
+                )
+                flash(cleanup_error, "warning")
+
         if mode == "cases":
             run_result["cases"] = results
             observed_fields = _observed_fields(results)
@@ -7184,6 +7211,131 @@ def create_app() -> Flask:
             run_result=run_result,
             pacer_authorized=_pacer_token_matches_pcl(),
         )
+
+    def _load_batch_segment_queue_reasons(
+        batch_request_id: int, *, limit: int = 6
+    ) -> List[Dict[str, Any]]:
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        message_expr = func.trim(
+            func.coalesce(
+                batch_segments.c.error_message,
+                batch_segments.c.last_error,
+                batch_segments.c.remote_status_message,
+                "",
+            )
+        )
+        stmt = (
+            select(
+                message_expr.label("message"),
+                func.count().label("reason_count"),
+                func.min(batch_segments.c.next_poll_at).label("next_poll_at"),
+            )
+            .where(batch_segments.c.batch_request_id == batch_request_id)
+            .where(batch_segments.c.status == "queued")
+            .where(message_expr != "")
+            .group_by(message_expr)
+            .order_by(func.count().desc())
+            .limit(max(1, int(limit)))
+        )
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        reasons: List[Dict[str, Any]] = []
+        for row in rows:
+            message = str(row.get("message") or "").strip()
+            if not message:
+                continue
+            reasons.append(
+                {
+                    "message": message,
+                    "count": int(row.get("reason_count") or 0),
+                    "next_poll_at": row.get("next_poll_at"),
+                }
+            )
+        return reasons
+
+    @app.post("/admin/federal-data-dashboard/pcl-reports/cleanup")
+    @admin_required
+    def admin_federal_data_dashboard_pcl_reports_cleanup():
+        """Delete completed/failed PCL batch reports that block new batch submissions.
+
+        PCL limits the number of batch reports that can exist at once. The admin
+        PACER explore flow is intentionally interactive, but it is easy to forget to
+        delete remote reports after downloading. This endpoint is a safety valve.
+        """
+
+        require_csrf()
+
+        next_url = request.form.get("next") or url_for("admin_federal_data_dashboard_health_checks")
+        if not next_url.startswith("/"):
+            next_url = url_for("admin_federal_data_dashboard_health_checks")
+
+        def _extract_report_ids(payload: Any) -> List[str]:
+            if not isinstance(payload, dict):
+                return []
+            content = payload.get("content")
+            if not isinstance(content, list):
+                return []
+            ids: List[str] = []
+            for row in content:
+                if not isinstance(row, dict):
+                    continue
+                report_id = row.get("reportId") or row.get("report_id") or row.get("id")
+                if report_id is None:
+                    continue
+                ids.append(str(report_id))
+            return ids
+
+        def _cleanup_reports(*, label: str, list_fn: Callable[[], Dict[str, Any]], delete_fn: Callable[[str], Dict[str, Any]]) -> Dict[str, int]:
+            payload = list_fn()
+            report_ids = _extract_report_ids(payload)
+            deleted = 0
+            failed = 0
+            for report_id in report_ids:
+                try:
+                    delete_fn(report_id)
+                    deleted += 1
+                except TokenExpired:
+                    raise
+                except PclApiError as exc:
+                    failed += 1
+                    app.logger.warning("%s cleanup failed for report %s: %s", label, report_id, exc)
+                except Exception:
+                    failed += 1
+                    app.logger.exception("%s cleanup failed for report %s", label, report_id)
+            return {"listed": len(report_ids), "deleted": deleted, "failed": failed}
+
+        try:
+            case_stats = _cleanup_reports(
+                label="Case report",
+                list_fn=pcl_background_client.list_case_reports,
+                delete_fn=pcl_background_client.delete_case_report,
+            )
+            party_stats = _cleanup_reports(
+                label="Party report",
+                list_fn=pcl_background_client.list_party_reports,
+                delete_fn=pcl_background_client.delete_party_report,
+            )
+        except TokenExpired:
+            flash(
+                "PACER token expired or missing. Re-authorize (including 2FA code if needed), then retry cleanup.",
+                "error",
+            )
+            return redirect(next_url)
+        except PclApiError as exc:
+            flash(f"PCL report cleanup failed: {exc}", "error")
+            return redirect(next_url)
+
+        flash(
+            (
+                "Remote PCL report cleanup complete. "
+                f"Cases: {case_stats['deleted']} deleted, {case_stats['failed']} failed "
+                f"(listed {case_stats['listed']}). "
+                f"Parties: {party_stats['deleted']} deleted, {party_stats['failed']} failed "
+                f"(listed {party_stats['listed']})."
+            ),
+            "success",
+        )
+        return redirect(next_url)
 
     @app.get("/admin/pacer/explore/batch/download/<int:request_id>")
     @admin_required
@@ -10264,6 +10416,9 @@ def create_app() -> Flask:
         segment_statuses = _load_batch_segment_status_summary(batch_request_id)
         next_poll_at = _load_batch_next_poll_at(batch_request_id)
         global_slot_status = _load_global_pcl_remote_slot_status(limit=5)
+        queue_reasons: List[Dict[str, Any]] = []
+        if segment_statuses.get("queued", 0) > 0:
+            queue_reasons = _load_batch_segment_queue_reasons(batch_request_id, limit=6)
         remote_slot_limit = (
             int(getattr(tick_worker, "_max_concurrent_remote_jobs", 2)) if tick_worker else 2
         )
@@ -10312,6 +10467,7 @@ def create_app() -> Flask:
             segment_total=segment_total,
             segment_complete=segment_complete,
             failure_reasons=failure_reasons,
+            queue_reasons=queue_reasons,
             next_poll_at=next_poll_at,
             display_rows=display_rows["rows"],
             max_cases=max_cases,

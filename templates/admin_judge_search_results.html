@@ -48,6 +48,31 @@
               This run should begin as soon as a worker tick submits the first segment.
             </div>
           {% endif %}
+          {% if queue_reasons %}
+            {% set top_queue = (queue_reasons[0].message if queue_reasons else '')|lower %}
+            <div class="small mt-8">
+              <strong>Queued segment notes:</strong>
+              <ul class="small">
+                {% for reason in queue_reasons %}
+                  <li>
+                    {{ reason.count }}: {{ reason.message }}
+                    {% if reason.next_poll_at %} (next retry UTC: {{ reason.next_poll_at.isoformat() }}){% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% if '429' in top_queue or 'concurrent' in top_queue or 'maximum batch' in top_queue %}
+              <div class="small mt-8">
+                PCL is throttling new batch submissions. This often happens when too many remote batch reports exist.
+                You can clean them up now (safe after you have downloaded/stored results).
+              </div>
+              <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_reports_cleanup') }}" class="mt-8">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                <button class="pill" type="submit">Cleanup Remote PCL Reports</button>
+              </form>
+            {% endif %}
+          {% endif %}
           <div class="small mt-8">
             Click “Refresh now” below (refresh = reload this page) to run another worker tick.
           </div>
