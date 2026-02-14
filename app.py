@@ -8114,6 +8114,99 @@ def create_app() -> Flask:
             date_filed_to=datetime.utcnow().date(),
         )
 
+    def _judge_search_presets() -> List[Dict[str, Any]]:
+        return [
+            {
+                "id": "mak",
+                "name": "Mark A. Kearney",
+                "judge_last_name": "kearney",
+                "judge_initials": "mak",
+                "court_id": "edpa",
+                "case_type": "cr",
+                "label": "Mark A. Kearney (MAK)",
+            }
+        ]
+
+    def _find_judge_preset(preset_id: str) -> Optional[Dict[str, Any]]:
+        for preset in _judge_search_presets():
+            if preset["id"] == preset_id:
+                return preset
+        return None
+
+    def _judge_search_case_match_clauses(
+        *,
+        judge_last_name: str,
+        judge_initials: str,
+    ) -> List[Any]:
+        pcl_cases = pcl_tables["pcl_cases"]
+        clauses: List[Any] = []
+        normalized_last_name = (judge_last_name or "").strip().lower()
+        if normalized_last_name:
+            clauses.append(
+                func.lower(func.coalesce(pcl_cases.c.judge_last_name, "")) == normalized_last_name
+            )
+        normalized_initials = (judge_initials or "").strip().lower()
+        if normalized_initials:
+            like_pattern = f"%{normalized_initials}%"
+            clauses.append(
+                or_(
+                    func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(
+                        like_pattern
+                    ),
+                    func.lower(
+                        func.coalesce(pcl_cases.c.case_number_full, "")
+                    ).like(like_pattern),
+                )
+            )
+        return clauses
+
+    def _load_batch_request(batch_request_id: int) -> Optional[Dict[str, Any]]:
+        batch_requests = pcl_tables["pcl_batch_requests"]
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(batch_requests)
+                    .where(batch_requests.c.id == batch_request_id)
+                )
+                .mappings()
+                .first()
+            )
+        return dict(row) if row else None
+
+    def _load_batch_segments_for_request(batch_request_id: int) -> List[Dict[str, Any]]:
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        with engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    select(batch_segments).where(
+                        batch_segments.c.batch_request_id == batch_request_id
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [dict(row) for row in rows]
+
+    def _load_batch_segment_status_summary(batch_request_id: int) -> Dict[str, int]:
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        status_counts: Dict[str, int] = {}
+        with engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    select(
+                        batch_segments.c.status,
+                        func.count().label("segment_count"),
+                    )
+                    .where(batch_segments.c.batch_request_id == batch_request_id)
+                    .group_by(batch_segments.c.status)
+                )
+                .mappings()
+                .all()
+            )
+            for row in rows:
+                status_counts[str(row["status"])] = int(row["segment_count"])
+        return status_counts
+
     def _estimate_kearney_docket_runs(*, include_docket_text: bool) -> Dict[str, Any]:
         filters = _build_kearney_docket_filters()
         return estimate_docket_cost_for_filters(
@@ -8299,6 +8392,132 @@ def create_app() -> Flask:
             rows = conn.execute(stmt).mappings().all()
         return [int(row["id"]) for row in rows if row["id"] is not None]
 
+    def _load_judge_search_case_match_clauses(
+        *,
+        judge_last_name: str,
+        judge_initials: str,
+    ) -> Any:
+        clauses = _judge_search_case_match_clauses(
+            judge_last_name=judge_last_name,
+            judge_initials=judge_initials,
+        )
+        if clauses:
+            return or_(*clauses)
+        return None
+
+    def _load_judge_search_case_ids(
+        batch_request_id: int,
+        *,
+        judge_last_name: str,
+        judge_initials: str,
+        max_case_count: Optional[int] = None,
+    ) -> List[int]:
+        pcl_cases = pcl_tables["pcl_cases"]
+        segments = _load_batch_segments_for_request(batch_request_id)
+        segment_ids = [row["id"] for row in segments if row.get("id") is not None]
+        if not segment_ids:
+            return []
+
+        match_clause = _load_judge_search_case_match_clauses(
+            judge_last_name=judge_last_name,
+            judge_initials=judge_initials,
+        )
+        where_clause = [pcl_cases.c.last_segment_id.in_(segment_ids)]
+        if match_clause is not None:
+            where_clause.append(match_clause)
+
+        stmt = (
+            select(pcl_cases.c.id)
+            .where(and_(*where_clause))
+            .order_by(pcl_cases.c.date_filed.desc(), pcl_cases.c.id.desc())
+        )
+        if max_case_count and max_case_count > 0:
+            stmt = stmt.limit(max_case_count)
+
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [int(row["id"]) for row in rows if row["id"] is not None]
+
+    def _load_judge_search_case_rows(
+        batch_request_id: int,
+        *,
+        judge_last_name: str,
+        judge_initials: str,
+        max_case_count: Optional[int] = None,
+        offset: int = 0,
+        page_size: int = 200,
+    ) -> Dict[str, Any]:
+        pcl_cases = pcl_tables["pcl_cases"]
+        segment_ids = [
+            row["id"] for row in _load_batch_segments_for_request(batch_request_id) if row.get("id") is not None
+        ]
+        if not segment_ids:
+            return {"rows": [], "total": 0, "offset": offset, "page_size": page_size}
+
+        match_clause = _load_judge_search_case_match_clauses(
+            judge_last_name=judge_last_name,
+            judge_initials=judge_initials,
+        )
+        where_clause = [pcl_cases.c.last_segment_id.in_(segment_ids)]
+        if match_clause is not None:
+            where_clause.append(match_clause)
+        where_expr = and_(*where_clause)
+
+        base_stmt = (
+            select(
+                pcl_cases.c.id,
+                pcl_cases.c.court_id,
+                pcl_cases.c.case_number,
+                pcl_cases.c.case_number_full,
+                pcl_cases.c.case_title,
+                pcl_cases.c.short_title,
+                pcl_cases.c.date_filed,
+                pcl_cases.c.case_type,
+            )
+            .where(where_expr)
+            .order_by(pcl_cases.c.date_filed.desc(), pcl_cases.c.id.desc())
+            .offset(offset)
+            .limit(page_size if max_case_count is None or max_case_count <= 0 else min(page_size, max_case_count))
+        )
+        total_stmt = select(func.count()).select_from(pcl_cases).where(where_expr)
+        with engine.begin() as conn:
+            total = int(conn.execute(total_stmt).scalar_one())
+            rows = conn.execute(base_stmt).mappings().all()
+
+        return {
+            "rows": [dict(row) for row in rows],
+            "total": total,
+            "offset": offset,
+            "page_size": page_size,
+        }
+
+    def _count_judge_search_discovered_cases(
+        batch_request_id: int,
+        *,
+        judge_last_name: str,
+        judge_initials: str,
+    ) -> int:
+        pcl_cases = pcl_tables["pcl_cases"]
+        segment_ids = [
+            row["id"]
+            for row in _load_batch_segments_for_request(batch_request_id)
+            if row.get("id") is not None
+        ]
+        if not segment_ids:
+            return 0
+
+        match_clause = _load_judge_search_case_match_clauses(
+            judge_last_name=judge_last_name,
+            judge_initials=judge_initials,
+        )
+        where_clause = [pcl_cases.c.last_segment_id.in_(segment_ids)]
+        if match_clause is not None:
+            where_clause.append(match_clause)
+
+        stmt = select(func.count()).select_from(pcl_cases).where(and_(*where_clause))
+        with engine.begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
+
     def _queue_kearney_docket_jobs_for_case_ids(
         case_ids: Sequence[int],
         include_docket_text: bool,
@@ -8481,6 +8700,54 @@ def create_app() -> Flask:
             app.logger.exception(
                 "Error while running Mark A. Kearney discovery backfill."
             )
+
+    def _run_judge_search_in_background(
+        *,
+        batch_request_id: int,
+        judge_last_name: str,
+        judge_initials: str,
+        max_case_limit: Optional[int],
+        max_batch_iterations: int,
+    ) -> None:
+        worker = PclBatchWorker(
+            engine,
+            pcl_tables,
+            pcl_client,
+            logger=app.logger,
+            sleep_fn=time.sleep,
+        )
+        max_batch_iterations = max(1, min(3000, int(max_batch_iterations)))
+        for _ in range(max_batch_iterations):
+            processed = worker.run_once(max_segments=5)
+            if processed == 0:
+                break
+            if max_case_limit is not None and max_case_limit > 0:
+                discovered = _count_judge_search_discovered_cases(
+                    batch_request_id,
+                    judge_last_name=judge_last_name,
+                    judge_initials=judge_initials,
+                )
+                if discovered >= max_case_limit:
+                    app.logger.info(
+                        "Judge search reached requested case cap: batch_request_id=%s, found=%s, cap=%s",
+                        batch_request_id,
+                        discovered,
+                        max_case_limit,
+                    )
+                    break
+
+        app.logger.info(
+            "Judge search worker finished: batch_request_id=%s, cap=%s",
+            batch_request_id,
+            max_case_limit,
+        )
+
+    def _is_batch_request_complete(batch_request_id: int) -> bool:
+        status_counts = _load_batch_segment_status_summary(batch_request_id)
+        for status in ("queued", "submitted", "running", "processing"):
+            if status_counts.get(status, 0) > 0:
+                return False
+        return True
 
     def _build_kearney_candidate_filters(max_cases: int) -> Dict[str, Any]:
         filters = _build_kearney_docket_filters()
@@ -9435,12 +9702,229 @@ def create_app() -> Flask:
                 f"Test run is capped at {max_case_limit} case(s).",
                 "info",
             )
-        if queue_documents and run_docket_worker:
-            flash(
-                "Document downloads will be queued after docket histories are pulled.",
-                "success",
-            )
+            if queue_documents and run_docket_worker:
+                flash(
+                    "Document downloads will be queued after docket histories are pulled.",
+                    "success",
+                )
         return redirect(url_for("admin_docket_enrichment_dashboard"))
+
+    @app.get("/admin/federal-data-dashboard/judge-search")
+    @admin_required
+    def admin_federal_data_dashboard_judge_search():
+        judge_id = (request.args.get("judge_id") or "mak").strip().lower()
+        if not _find_judge_preset(judge_id):
+            judge_id = "mak"
+        now_utc = datetime.utcnow().date()
+        start_default = now_utc.replace(year=2010, month=1, day=1)
+        return render_template(
+            "admin_judge_search.html",
+            active_page="federal_data_dashboard",
+            active_subnav="docket_enrichment",
+            judges=_judge_search_presets(),
+            selected_judge_id=judge_id,
+            date_from=start_default.isoformat(),
+            date_to=now_utc.isoformat(),
+            csrf_token=get_csrf_token(),
+        )
+
+    @app.post("/admin/federal-data-dashboard/judge-search/start")
+    @admin_required
+    def admin_federal_data_dashboard_judge_search_start():
+        require_csrf()
+        judge_id = (request.form.get("judge_id") or "mak").strip().lower()
+        preset = _find_judge_preset(judge_id)
+        if not preset:
+            flash("Select a valid judge preset.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_judge_search"))
+
+        date_from = _parse_iso_date(request.form.get("date_filed_from") or "")
+        date_to = _parse_iso_date(request.form.get("date_filed_to") or "")
+        if not date_from or not date_to:
+            flash("Date range is required.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_judge_search", judge_id=judge_id))
+        if date_from > date_to:
+            date_from, date_to = date_to, date_from
+
+        scope = (request.form.get("search_scope") or "all").strip().lower()
+        max_case_limit: Optional[int] = 0
+        if scope == "limited":
+            max_case_limit = _parse_optional_int(request.form.get("max_cases") or "5")
+            if not max_case_limit or max_case_limit <= 0:
+                flash("Enter a valid limited case count.", "error")
+                return redirect(url_for("admin_federal_data_dashboard_judge_search", judge_id=judge_id))
+            max_case_limit = min(5000, max_case_limit)
+        else:
+            max_case_limit = None
+
+        max_batch_iterations = _parse_optional_int(
+            request.form.get("max_batch_iterations") or None
+        ) or 300
+
+        planner = PclBatchPlanner(engine, pcl_tables)
+        batch_request_id = planner.create_batch_request(
+            court_id=preset["court_id"],
+            date_filed_from=date_from,
+            date_filed_to=date_to,
+            case_types=[preset["case_type"]],
+        )
+
+        threading.Thread(
+            target=_run_judge_search_in_background,
+            kwargs={
+                "batch_request_id": batch_request_id,
+                "judge_last_name": preset["judge_last_name"],
+                "judge_initials": preset["judge_initials"],
+                "max_case_limit": max_case_limit,
+                "max_batch_iterations": max_batch_iterations,
+            },
+            daemon=True,
+        ).start()
+
+        flash(
+            "Judge search started in the background. Use refresh below to see newly discovered cases.",
+            "success",
+        )
+        return redirect(
+            url_for(
+                "admin_federal_data_dashboard_judge_search_results",
+                batch_request_id=batch_request_id,
+                judge_id=judge_id,
+                max_cases=max_case_limit or 0,
+            )
+        )
+
+    @app.get("/admin/federal-data-dashboard/judge-search/results/<int:batch_request_id>")
+    @admin_required
+    def admin_federal_data_dashboard_judge_search_results(batch_request_id: int):
+        judge_id = (request.args.get("judge_id") or "mak").strip().lower()
+        preset = _find_judge_preset(judge_id)
+        if not preset:
+            abort(404)
+
+        batch_request = _load_batch_request(batch_request_id)
+        if not batch_request:
+            abort(404)
+
+        max_cases = _parse_optional_int(request.args.get("max_cases") or None)
+        if max_cases is None:
+            max_cases = 0
+        max_cases = max(0, max_cases)
+
+        display_limit = max_cases if max_cases > 0 else 200
+        display_rows = _load_judge_search_case_rows(
+            batch_request_id,
+            judge_last_name=preset["judge_last_name"],
+            judge_initials=preset["judge_initials"],
+            max_case_count=None if max_cases == 0 else max_cases,
+            page_size=min(200, display_limit),
+        )
+        segment_statuses = _load_batch_segment_status_summary(batch_request_id)
+        discovered_count = _count_judge_search_discovered_cases(
+            batch_request_id,
+            judge_last_name=preset["judge_last_name"],
+            judge_initials=preset["judge_initials"],
+        )
+        is_complete = _is_batch_request_complete(batch_request_id)
+        segment_total = sum(segment_statuses.values())
+        segment_complete = segment_statuses.get("completed", 0) + segment_statuses.get(
+            "failed", 0
+        ) + segment_statuses.get("completed_delete_failed", 0)
+        return render_template(
+            "admin_judge_search_results.html",
+            active_page="federal_data_dashboard",
+            active_subnav="docket_enrichment",
+            judge=preset,
+            judge_id=judge_id,
+            batch_request=batch_request,
+            batch_request_id=batch_request_id,
+            segment_statuses=segment_statuses,
+            discovered_count=discovered_count,
+            segment_total=segment_total,
+            segment_complete=segment_complete,
+            display_rows=display_rows["rows"],
+            max_cases=max_cases,
+            is_complete=is_complete,
+            csrf_token=get_csrf_token(),
+        )
+
+    @app.post("/admin/federal-data-dashboard/judge-search/results/<int:batch_request_id>/queue")
+    @admin_required
+    def admin_federal_data_dashboard_judge_search_queue(batch_request_id: int):
+        require_csrf()
+        judge_id = (request.form.get("judge_id") or "mak").strip().lower()
+        preset = _find_judge_preset(judge_id)
+        if not preset:
+            flash("Select a valid judge preset.", "error")
+            return redirect(url_for("admin_federal_data_dashboard_judge_search"))
+
+        max_cases = _parse_optional_int(request.form.get("max_cases") or None)
+        if max_cases is None:
+            max_cases = 0
+        max_cases = max(0, max_cases)
+        include_docket_text = _parse_include_docket_text(
+            request.form.get("include_docket_text")
+        )
+        start_docket_worker = _parse_include_docket_text(
+            request.form.get("start_docket_worker")
+        )
+        max_docket_jobs = _parse_optional_int(request.form.get("max_docket_jobs") or None)
+        if not max_docket_jobs:
+            max_docket_jobs = 50
+
+        case_ids = _load_judge_search_case_ids(
+            batch_request_id,
+            judge_last_name=preset["judge_last_name"],
+            judge_initials=preset["judge_initials"],
+            max_case_count=max_cases if max_cases > 0 else None,
+        )
+        if not case_ids:
+            flash("No cases found for this judge search yet.", "info")
+            return redirect(
+                url_for(
+                    "admin_federal_data_dashboard_judge_search_results",
+                    batch_request_id=batch_request_id,
+                    judge_id=judge_id,
+                    max_cases=max_cases or 0,
+                )
+            )
+
+        queue_stats = _queue_kearney_docket_jobs_for_case_ids(
+            case_ids,
+            include_docket_text=include_docket_text,
+            skipped_case_ids=set(),
+        )
+        flash(
+            f"Queued {queue_stats['docket_jobs_queued']} docket jobs and skipped {queue_stats['docket_jobs_skipped']} already queued/running.",
+            "success",
+        )
+
+        if start_docket_worker and queue_stats["docket_jobs_queued"]:
+            def _run_worker() -> None:
+                docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "html")
+                docket_url_template = os.environ.get("PACER_DOCKET_URL_TEMPLATE")
+                worker = DocketEnrichmentWorker(
+                    engine,
+                    pcl_tables,
+                    logger=app.logger,
+                    endpoint_available=True,
+                    http_client=pcl_background_http_client,
+                    docket_output=docket_output,
+                    docket_url_template=docket_url_template,
+                )
+                worker.run_once(max_jobs=max(1, max_docket_jobs))
+
+            threading.Thread(target=_run_worker, daemon=True).start()
+            flash("Docket worker started with requested batch size.", "success")
+
+        return redirect(
+            url_for(
+                "admin_federal_data_dashboard_judge_search_results",
+                batch_request_id=batch_request_id,
+                judge_id=judge_id,
+                max_cases=max_cases or 0,
+            )
+        )
 
     @app.get("/admin/federal-data-dashboard/expand-existing")
     @admin_required

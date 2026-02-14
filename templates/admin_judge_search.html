@@ -1,0 +1,90 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Admin | Judge PACER Search{% endblock %}
+
+{% block federal_content %}
+  <section class="card stack">
+    <div class="page-header page-header--tight">
+      <h2>Search PACER for a specific judge</h2>
+      <p class="small">Search by judge and date range first, then review matched case rows and queue docket jobs.</p>
+    </div>
+
+    <form
+      method="post"
+      action="{{ url_for('admin_federal_data_dashboard_judge_search_start') }}"
+      class="stack"
+    >
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <label for="judge-id">Judge</label>
+      <select id="judge-id" name="judge_id">
+        {% for judge in judges %}
+          <option value="{{ judge.id }}" {% if judge.id == selected_judge_id %}selected{% endif %}>
+            {{ judge.label }}
+          </option>
+        {% endfor %}
+      </select>
+
+      <div class="grid two">
+        <div>
+          <label for="date-from">Date filed from</label>
+          <input id="date-from" type="date" name="date_filed_from" value="{{ date_from }}" required>
+        </div>
+        <div>
+          <label for="date-to">Date filed to</label>
+          <input id="date-to" type="date" name="date_filed_to" value="{{ date_to }}" required>
+        </div>
+      </div>
+
+    <fieldset class="stack">
+      <legend class="small">How many cases to pull now?</legend>
+      <label>
+        <input type="radio" name="search_scope" value="limited" checked>
+        Limit for a test run (recommended first)
+      </label>
+        <label>
+          <input
+            type="number"
+            name="max_cases"
+            min="1"
+            max="5000"
+            value="5"
+            aria-label="Maximum cases to pull"
+          >
+          Maximum matched cases
+        </label>
+      <label>
+        <input type="radio" name="search_scope" value="all">
+        Pull full date range
+      </label>
+    </fieldset>
+
+    <script>
+      (function () {
+        const limitRadio = document.querySelector("input[name=\"search_scope\"][value=\"limited\"]");
+        const fullRadio = document.querySelector("input[name=\"search_scope\"][value=\"all\"]");
+        const maxCasesInput = document.querySelector('input[name="max_cases"]');
+        const sync = () => {
+          if (!maxCasesInput) {
+            return;
+          }
+          maxCasesInput.disabled = !limitRadio || !limitRadio.checked;
+        };
+        if (limitRadio && fullRadio && maxCasesInput) {
+          limitRadio.addEventListener("change", sync);
+          fullRadio.addEventListener("change", sync);
+          sync();
+        }
+      })();
+    </script>
+
+      <input type="hidden" name="max_batch_iterations" value="300">
+
+      <p class="small">
+        Full runs can take longer due PACER batching. A limited run (e.g. 5 cases) gives quick validation and shows the same workflow.
+      </p>
+
+      <button class="primary" type="submit">Search PACER</button>
+    </form>
+  </section>
+{% endblock %}

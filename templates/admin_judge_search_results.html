@@ -1,0 +1,121 @@
+{% extends "admin_federal_data_base.html" %}
+
+{% block title %}Judge Search Results{% endblock %}
+
+{% block federal_content %}
+  <section class="card stack">
+    <div class="page-header page-header--tight">
+      <h2>{{ judge.name }} PACER results</h2>
+      <p class="small">
+        Judge search run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ judge.court_id|upper }}
+      </p>
+    </div>
+  </section>
+
+  <section class="card stack">
+    <h3>Search status</h3>
+    <dl class="pcl-detail-list">
+      <div>
+        <dt>Discovered matches</dt>
+        <dd>{{ discovered_count }}</dd>
+      </div>
+      <div>
+        <dt>Discovery cap</dt>
+        <dd>{% if max_cases > 0 %}Limited to {{ max_cases }}{% else %}Full search requested{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Segments complete</dt>
+        <dd>
+          {{ segment_complete }} completed / {{ segment_total }}
+        </dd>
+      </div>
+      <div>
+        <dt>Run state</dt>
+        <dd>{% if is_complete %}search complete{% else %}still collecting results{% endif %}</dd>
+      </div>
+    </dl>
+
+    <div class="actions mt-12">
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases) }}">
+        Refresh now
+      </a>
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">
+        Start new judge search
+      </a>
+    </div>
+  </section>
+
+  <section class="card stack">
+    <h3>Matched cases</h3>
+    <p class="small">
+      Showing {{ display_rows|length }} case(s). This list is ordered newest-to-oldest.
+    </p>
+
+    {% if not is_complete %}
+      <p class="small">Background search is active. This page auto-refreshes every 12 seconds.</p>
+      <script>
+        const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases) | tojson }};
+        setTimeout(() => {
+          window.location.assign(refreshUrl);
+        }, 12000);
+      </script>
+    {% endif %}
+
+    <form
+      method="post"
+      action="{{ url_for('admin_federal_data_dashboard_judge_search_queue', batch_request_id=batch_request_id) }}"
+      class="stack"
+    >
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="judge_id" value="{{ judge_id }}">
+      <input type="hidden" name="max_cases" value="{{ max_cases }}">
+      <label>
+        <input type="checkbox" name="include_docket_text" value="1" checked>
+        Include docket text when queueing
+      </label>
+      <label>
+        <input type="checkbox" name="start_docket_worker" value="1">
+        Start docket worker now (runs one batch)
+      </label>
+      <label>
+        Docket worker batch size
+        <input type="number" name="max_docket_jobs" min="1" max="200" value="50">
+      </label>
+      <button class="primary" type="submit">
+        Add these cases to docket queue
+      </button>
+    </form>
+
+    {% if display_rows %}
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Case</th>
+              <th>Jurisdiction</th>
+              <th>Type</th>
+              <th>Date filed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for case in display_rows %}
+              <tr>
+                <td>
+                  <a class="pacer-text-link" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">
+                    {{ case.case_number_full or case.case_number }}
+                  </a>
+                  <div class="small">{{ case.short_title or case.case_title or "Untitled case" }}</div>
+                </td>
+                <td>{{ case.court_id }}</td>
+                <td>{{ case.case_type or "—" }}</td>
+                <td>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+    <p class="small">No matches yet. If the run is still in progress, refresh for updates.</p>
+    {% endif %}
+  </section>
+{% endblock %}

@@ -28,6 +28,10 @@
         <span class="federal-overview-card__title">Docket Enrichment</span>
         <span class="federal-overview-card__desc">Queue docket pulls, run workers, and inspect recent enrichment jobs.</span>
       </a>
+      <a class="federal-overview-card" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">
+        <span class="federal-overview-card__title">Search PACER for Specific Judge</span>
+        <span class="federal-overview-card__desc">Find cases for a selected judge by date, then queue docket pulls with clear progress feedback.</span>
+      </a>
       <a class="federal-overview-card" href="{{ url_for('admin_federal_data_dashboard_logs') }}">
         <span class="federal-overview-card__title">Logs</span>
         <span class="federal-overview-card__desc">Review operational history for jobs, receipts, and pipeline activity.</span>
