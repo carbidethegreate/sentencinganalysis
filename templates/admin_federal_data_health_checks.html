@@ -42,14 +42,19 @@
         <h3>Service Token</h3>
         <p>
           {% if service_token_status.connected %}
-            <strong>Connected</strong>
+            <strong>Present</strong>
           {% else %}
             <strong>Missing</strong>
           {% endif %}
         </p>
         <p class="small">
           Env: {{ service_token_status.environment_label }}<br>
-          Fingerprint: {{ service_token_status.fingerprint or "none" }}
+          Fingerprint: {{ service_token_status.fingerprint or "none" }}<br>
+          {% if service_token_status.obtained_at %}
+            Obtained at: {{ service_token_status.obtained_at.isoformat() }} UTC
+          {% else %}
+            Obtained at: —
+          {% endif %}
         </p>
       </article>
 

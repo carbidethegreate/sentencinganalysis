@@ -64,6 +64,7 @@ from sqlalchemy import (
     create_engine,
     delete,
     desc,
+    exists,
     func,
     inspect,
     insert,
@@ -8216,6 +8217,7 @@ def create_app() -> Flask:
         service_token_status = {
             "connected": bool(service_record),
             "fingerprint": token_fingerprint(service_record.token if service_record else None),
+            "obtained_at": service_record.obtained_at if service_record else None,
             "environment_label": pacer_env_label(
                 (service_record.environment if service_record else None) or "unknown"
             ),
@@ -9273,8 +9275,6 @@ def create_app() -> Flask:
     def _run_judge_search_in_background(
         *,
         batch_request_id: int,
-        judge_last_name: str,
-        judge_initials: str,
         max_case_limit: Optional[int],
         max_batch_iterations: int,
     ) -> None:
@@ -9454,6 +9454,112 @@ def create_app() -> Flask:
             for row in conn.execute(stmt):
                 counts[str(row.status)] = int(row.count)
         return counts
+
+    def _load_docket_overview_case_rows(case_ids: Sequence[int]) -> List[Dict[str, Any]]:
+        """Return a per-case view of the latest docket job + whether docket data exists."""
+
+        if not case_ids:
+            return []
+
+        pcl_cases = pcl_tables["pcl_cases"]
+        job_table = pcl_tables["docket_enrichment_jobs"]
+        case_fields = pcl_tables.get("pcl_case_fields")
+
+        last_job_status = (
+            select(job_table.c.status)
+            .where(job_table.c.case_id == pcl_cases.c.id)
+            .order_by(job_table.c.created_at.desc(), job_table.c.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        last_job_updated_at = (
+            select(job_table.c.updated_at)
+            .where(job_table.c.case_id == pcl_cases.c.id)
+            .order_by(job_table.c.created_at.desc(), job_table.c.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        last_job_error = (
+            select(job_table.c.last_error)
+            .where(job_table.c.case_id == pcl_cases.c.id)
+            .order_by(job_table.c.created_at.desc(), job_table.c.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        has_docket_data_expr = literal_column("0").label("has_docket_data")
+        if case_fields is not None:
+            has_docket_data_expr = (
+                exists(
+                    select(1).where(
+                        and_(
+                            case_fields.c.case_id == pcl_cases.c.id,
+                            case_fields.c.field_name.in_(
+                                ["docket_entries", "docket_text", "docket_html"]
+                            ),
+                        )
+                    )
+                )
+                .label("has_docket_data")
+            )
+
+        stmt = (
+            select(
+                pcl_cases.c.id.label("case_id"),
+                pcl_cases.c.court_id,
+                pcl_cases.c.case_number,
+                pcl_cases.c.case_number_full,
+                pcl_cases.c.case_title,
+                pcl_cases.c.short_title,
+                pcl_cases.c.case_type,
+                pcl_cases.c.date_filed,
+                last_job_status.label("job_status"),
+                last_job_updated_at.label("job_updated_at"),
+                last_job_error.label("job_last_error"),
+                has_docket_data_expr,
+            )
+            .where(pcl_cases.c.id.in_(list(case_ids)))
+            .order_by(pcl_cases.c.date_filed.desc().nullslast(), pcl_cases.c.id.desc())
+        )
+
+        with engine.begin() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return [dict(row) for row in rows]
+
+    def _summarize_docket_overview(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        status_counts: Dict[str, int] = {"queued": 0, "running": 0, "completed": 0, "failed": 0}
+        error_counts: Dict[str, int] = {}
+
+        def _compact_error(value: Any, *, limit: int = 160) -> str:
+            message = str(value or "").strip()
+            if not message:
+                return ""
+            message = message.splitlines()[0].strip()
+            if len(message) > limit:
+                return message[: limit - 3] + "..."
+            return message
+
+        for row in rows:
+            status = (row.get("job_status") or "").strip().lower()
+            if status in status_counts:
+                status_counts[status] += 1
+            if status == "failed":
+                msg = _compact_error(row.get("job_last_error"))
+                if msg:
+                    error_counts[msg] = error_counts.get(msg, 0) + 1
+
+        top_errors = [
+            {"count": count, "message": message}
+            for message, count in sorted(
+                error_counts.items(), key=lambda item: (-item[1], item[0].lower())
+            )[:6]
+        ]
+
+        return {
+            "total_cases": len(rows),
+            "status_counts": status_counts,
+            "top_errors": top_errors,
+        }
 
     def _load_docket_filter_choices() -> Dict[str, List[str]]:
         pcl_cases = pcl_tables["pcl_cases"]
@@ -10117,6 +10223,7 @@ def create_app() -> Flask:
         service_token = {
             "connected": bool(service_record),
             "fingerprint": token_fingerprint(service_record.token if service_record else None),
+            "obtained_at": service_record.obtained_at if service_record else None,
             "environment_label": pacer_env_label(
                 (service_record.environment if service_record else None) or "unknown"
             ),
@@ -10339,21 +10446,14 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard/judge-search")
     @admin_required
     def admin_federal_data_dashboard_judge_search():
-        judge_id = (request.args.get("judge_id") or "mak").strip().lower()
-        preset = _find_judge_preset(judge_id)
-        if not preset:
-            judge_id = "mak"
-            preset = _find_judge_preset(judge_id)
         now_utc = datetime.utcnow().date()
         start_default = now_utc.replace(year=2010, month=1, day=1)
         initial_step = _parse_optional_int(request.args.get("step") or None) or 1
         if initial_step < 1 or initial_step > 4:
             initial_step = 1
-        selected_court_id = (
-            (request.args.get("court_id") or (preset or {}).get("court_id") or "").strip().lower()
-        )
+        selected_court_id = ((request.args.get("court_id") or "").strip().lower())
         if selected_court_id and not _is_active_pcl_court_id(selected_court_id):
-            selected_court_id = (preset or {}).get("court_id") or ""
+            selected_court_id = ""
 
         date_from = _parse_iso_date(request.args.get("date_filed_from") or "") or start_default
         date_to = _parse_iso_date(request.args.get("date_filed_to") or "") or now_utc
@@ -10367,18 +10467,26 @@ def create_app() -> Flask:
         if max_cases < 1:
             max_cases = 5
         max_cases = min(5000, max_cases)
+
+        selected_case_types = [
+            str(value).strip().lower()
+            for value in request.args.getlist("case_types")
+            if str(value).strip()
+        ]
+        selected_case_types = [case_type for case_type in selected_case_types if case_type in CRIMINAL_CASE_TYPES]
+        if not selected_case_types:
+            selected_case_types = ["cr"]
         return render_template(
             "admin_judge_search.html",
             active_page="federal_data_dashboard",
-            active_subnav="docket_enrichment",
-            judges=_judge_search_presets(),
+            active_subnav="judge_search",
             court_choices=_load_pcl_district_court_choices(),
             selected_court_id=selected_court_id,
-            selected_judge_id=judge_id,
-            judge=preset,
             initial_step=initial_step,
             search_scope=scope,
             max_cases=max_cases,
+            case_type_choices=PCL_CRIMINAL_CASE_TYPES,
+            selected_case_types=selected_case_types,
             date_from=date_from.isoformat(),
             date_to=date_to.isoformat(),
             csrf_token=get_csrf_token(),
@@ -10388,19 +10496,12 @@ def create_app() -> Flask:
     @admin_required
     def admin_federal_data_dashboard_judge_search_start():
         require_csrf()
-        judge_id = (request.form.get("judge_id") or "mak").strip().lower()
-        preset = _find_judge_preset(judge_id)
-        if not preset:
-            flash("Select a valid judge preset.", "error")
-            return redirect(url_for("admin_federal_data_dashboard_judge_search"))
-
-        court_id = (request.form.get("court_id") or preset.get("court_id") or "").strip().lower()
+        court_id = (request.form.get("court_id") or "").strip().lower()
         if not court_id or not _is_active_pcl_court_id(court_id):
             flash("Select a valid district court.", "error")
             return redirect(
                 url_for(
                     "admin_federal_data_dashboard_judge_search",
-                    judge_id=judge_id,
                     court_id=court_id,
                     step=1,
                 )
@@ -10413,7 +10514,6 @@ def create_app() -> Flask:
             return redirect(
                 url_for(
                     "admin_federal_data_dashboard_judge_search",
-                    judge_id=judge_id,
                     court_id=court_id,
                     date_filed_from=(request.form.get("date_filed_from") or "").strip(),
                     date_filed_to=(request.form.get("date_filed_to") or "").strip(),
@@ -10422,6 +10522,15 @@ def create_app() -> Flask:
             )
         if date_from > date_to:
             date_from, date_to = date_to, date_from
+
+        case_types = [
+            str(value).strip().lower()
+            for value in request.form.getlist("case_types")
+            if str(value).strip()
+        ]
+        case_types = [case_type for case_type in case_types if case_type in CRIMINAL_CASE_TYPES]
+        if not case_types:
+            case_types = ["cr"]
 
         scope = (request.form.get("search_scope") or "all").strip().lower()
         max_case_limit: Optional[int] = 0
@@ -10432,10 +10541,10 @@ def create_app() -> Flask:
                 return redirect(
                     url_for(
                         "admin_federal_data_dashboard_judge_search",
-                        judge_id=judge_id,
                         court_id=court_id,
                         date_filed_from=date_from.isoformat(),
                         date_filed_to=date_to.isoformat(),
+                        case_types=case_types,
                         search_scope="limited",
                         max_cases=(request.form.get("max_cases") or "").strip(),
                         step=3,
@@ -10454,15 +10563,13 @@ def create_app() -> Flask:
             court_id=court_id,
             date_filed_from=date_from,
             date_filed_to=date_to,
-            case_types=[preset["case_type"]],
+            case_types=case_types,
         )
 
         threading.Thread(
             target=_run_judge_search_in_background,
             kwargs={
                 "batch_request_id": batch_request_id,
-                "judge_last_name": preset["judge_last_name"],
-                "judge_initials": preset["judge_initials"],
                 "max_case_limit": max_case_limit,
                 "max_batch_iterations": max_batch_iterations,
             },
@@ -10477,8 +10584,8 @@ def create_app() -> Flask:
             url_for(
                 "admin_federal_data_dashboard_judge_search_results",
                 batch_request_id=batch_request_id,
-                judge_id=judge_id,
                 max_cases=max_case_limit or 0,
+                case_scope="all",
                 tick=1,
             )
         )
@@ -10486,10 +10593,9 @@ def create_app() -> Flask:
     @app.get("/admin/federal-data-dashboard/judge-search/results/<int:batch_request_id>")
     @admin_required
     def admin_federal_data_dashboard_judge_search_results(batch_request_id: int):
-        judge_id = (request.args.get("judge_id") or "mak").strip().lower()
-        preset = _find_judge_preset(judge_id)
-        if not preset:
-            abort(404)
+        judge_last_name = (request.args.get("judge_last_name") or "").strip()
+        judge_initials = (request.args.get("judge_initials") or "").strip()
+        has_judge_filter = bool(judge_last_name or judge_initials)
 
         batch_request = _load_batch_request(batch_request_id)
         if not batch_request:
@@ -10543,32 +10649,78 @@ def create_app() -> Flask:
         discovered_with_judge = _count_cases_with_judge_metadata_in_batch_segments(
             batch_request_id
         )
-        discovered_count = _count_judge_search_discovered_cases(
-            batch_request_id,
-            judge_last_name=preset["judge_last_name"],
-            judge_initials=preset["judge_initials"],
+        filtered_count = (
+            _count_judge_search_discovered_cases(
+                batch_request_id,
+                judge_last_name=judge_last_name,
+                judge_initials=judge_initials,
+            )
+            if has_judge_filter
+            else 0
         )
         case_scope = (request.args.get("case_scope") or "").strip().lower()
         if case_scope not in {"matched", "all"}:
-            case_scope = "all" if discovered_total > 0 and discovered_count == 0 else "matched"
+            case_scope = "matched" if has_judge_filter else "all"
 
         display_limit = max_cases if max_cases > 0 else 200
+        apply_filter = case_scope == "matched" and has_judge_filter
         display_rows = _load_judge_search_case_rows(
             batch_request_id,
-            judge_last_name=preset["judge_last_name"],
-            judge_initials=preset["judge_initials"],
+            judge_last_name=judge_last_name,
+            judge_initials=judge_initials,
             max_case_count=None if max_cases == 0 else max_cases,
             page_size=min(200, display_limit),
-            apply_judge_filter=(case_scope == "matched"),
+            apply_judge_filter=apply_filter,
         )
         is_complete = _is_batch_request_complete(batch_request_id)
         segment_total = sum(segment_statuses.values())
         active_statuses = ("queued", "submitted", "running", "processing")
         segment_active = sum(segment_statuses.get(status, 0) for status in active_statuses)
         segment_complete = max(0, segment_total - segment_active)
-        active_step = requested_step if requested_step in {1, 2, 3} else (1 if not is_complete else 2)
+        active_step = requested_step if requested_step in {1, 2, 3, 4} else (1 if not is_complete else 2)
         if not is_complete and active_step != 1:
             active_step = 1
+
+        batch_case_types: List[str] = []
+        try:
+            parsed_case_types = json.loads(batch_request.get("case_types") or "[]")
+        except Exception:
+            parsed_case_types = []
+        if isinstance(parsed_case_types, list):
+            batch_case_types = [
+                str(case_type).strip().lower()
+                for case_type in parsed_case_types
+                if str(case_type).strip()
+            ]
+
+        case_cards_params: Dict[str, Any] = {
+            "court_id": batch_request.get("court_id") or "",
+            "date_filed_from": batch_request.get("date_filed_from").isoformat()
+            if batch_request.get("date_filed_from")
+            else "",
+            "date_filed_to": batch_request.get("date_filed_to").isoformat()
+            if batch_request.get("date_filed_to")
+            else "",
+        }
+        if len(batch_case_types) == 1:
+            case_cards_params["case_type"] = batch_case_types[0]
+        if judge_last_name:
+            case_cards_params["judge_last_name"] = judge_last_name
+        case_cards_url = url_for("admin_federal_data_dashboard_case_cards", **case_cards_params)
+
+        docket_case_rows: List[Dict[str, Any]] = []
+        docket_summary: Dict[str, Any] = {"total_cases": 0, "status_counts": {}, "top_errors": []}
+        if active_step == 4:
+            result_limit = max_cases if max_cases > 0 else 200
+            case_ids_for_results = _load_judge_search_case_ids(
+                batch_request_id,
+                judge_last_name=judge_last_name,
+                judge_initials=judge_initials,
+                max_case_count=result_limit,
+                apply_judge_filter=apply_filter,
+            )
+            docket_case_rows = _load_docket_overview_case_rows(case_ids_for_results)
+            docket_summary = _summarize_docket_overview(docket_case_rows)
 
         last_queue = None
         queued_param = _parse_optional_int(request.args.get("queued") or None)
@@ -10594,14 +10746,16 @@ def create_app() -> Flask:
         return render_template(
             "admin_judge_search_results.html",
             active_page="federal_data_dashboard",
-            active_subnav="docket_enrichment",
-            judge=preset,
-            judge_id=judge_id,
+            active_subnav="judge_search",
+            judge_last_name=judge_last_name,
+            judge_initials=judge_initials,
+            has_judge_filter=has_judge_filter,
+            batch_case_types=batch_case_types,
             batch_request=batch_request,
             batch_request_id=batch_request_id,
             active_step=active_step,
             segment_statuses=segment_statuses,
-            discovered_count=discovered_count,
+            filtered_count=filtered_count,
             discovered_total=discovered_total,
             discovered_with_judge=discovered_with_judge,
             segment_total=segment_total,
@@ -10618,6 +10772,9 @@ def create_app() -> Flask:
             global_slot_status=global_slot_status,
             remote_slot_limit=remote_slot_limit,
             last_queue=last_queue,
+            docket_case_rows=docket_case_rows,
+            docket_summary=docket_summary,
+            case_cards_url=case_cards_url,
             csrf_token=get_csrf_token(),
         )
 
@@ -10629,7 +10786,8 @@ def create_app() -> Flask:
         if not batch_request:
             abort(404)
 
-        judge_id = (request.form.get("judge_id") or "mak").strip().lower()
+        judge_last_name = (request.form.get("judge_last_name") or "").strip()
+        judge_initials = (request.form.get("judge_initials") or "").strip()
         max_cases = _parse_optional_int(request.form.get("max_cases") or None)
         if max_cases is None:
             max_cases = 0
@@ -10656,7 +10814,8 @@ def create_app() -> Flask:
             url_for(
                 "admin_federal_data_dashboard_judge_search_results",
                 batch_request_id=batch_request_id,
-                judge_id=judge_id,
+                judge_last_name=judge_last_name,
+                judge_initials=judge_initials,
                 max_cases=max_cases or 0,
                 case_scope=case_scope,
                 tick=1,
@@ -10671,11 +10830,8 @@ def create_app() -> Flask:
         if not batch_request:
             abort(404)
 
-        judge_id = (request.form.get("judge_id") or "mak").strip().lower()
-        preset = _find_judge_preset(judge_id)
-        if not preset:
-            flash("Select a valid judge preset.", "error")
-            return redirect(url_for("admin_federal_data_dashboard_judge_search"))
+        judge_last_name = (request.form.get("judge_last_name") or "").strip()
+        judge_initials = (request.form.get("judge_initials") or "").strip()
 
         max_cases = _parse_optional_int(request.form.get("max_cases") or None)
         if max_cases is None:
@@ -10713,8 +10869,6 @@ def create_app() -> Flask:
             target=_run_judge_search_in_background,
             kwargs={
                 "batch_request_id": batch_request_id,
-                "judge_last_name": preset["judge_last_name"],
-                "judge_initials": preset["judge_initials"],
                 "max_case_limit": max_case_limit,
                 "max_batch_iterations": 300,
             },
@@ -10726,7 +10880,8 @@ def create_app() -> Flask:
             url_for(
                 "admin_federal_data_dashboard_judge_search_results",
                 batch_request_id=batch_request_id,
-                judge_id=judge_id,
+                judge_last_name=judge_last_name,
+                judge_initials=judge_initials,
                 max_cases=max_cases or 0,
                 case_scope=case_scope,
                 tick=1,
@@ -10737,11 +10892,9 @@ def create_app() -> Flask:
     @admin_required
     def admin_federal_data_dashboard_judge_search_queue(batch_request_id: int):
         require_csrf()
-        judge_id = (request.form.get("judge_id") or "mak").strip().lower()
-        preset = _find_judge_preset(judge_id)
-        if not preset:
-            flash("Select a valid judge preset.", "error")
-            return redirect(url_for("admin_federal_data_dashboard_judge_search"))
+        judge_last_name = (request.form.get("judge_last_name") or "").strip()
+        judge_initials = (request.form.get("judge_initials") or "").strip()
+        has_judge_filter = bool(judge_last_name or judge_initials)
 
         max_cases = _parse_optional_int(request.form.get("max_cases") or None)
         if max_cases is None:
@@ -10762,10 +10915,10 @@ def create_app() -> Flask:
 
         case_ids = _load_judge_search_case_ids(
             batch_request_id,
-            judge_last_name=preset["judge_last_name"],
-            judge_initials=preset["judge_initials"],
+            judge_last_name=judge_last_name,
+            judge_initials=judge_initials,
             max_case_count=max_cases if max_cases > 0 else None,
-            apply_judge_filter=(case_scope == "matched"),
+            apply_judge_filter=(case_scope == "matched" and has_judge_filter),
         )
         if not case_ids:
             flash("No cases found for this judge search yet.", "info")
@@ -10773,7 +10926,8 @@ def create_app() -> Flask:
                 url_for(
                     "admin_federal_data_dashboard_judge_search_results",
                     batch_request_id=batch_request_id,
-                    judge_id=judge_id,
+                    judge_last_name=judge_last_name,
+                    judge_initials=judge_initials,
                     max_cases=max_cases or 0,
                     case_scope=case_scope,
                     step=2,
@@ -10836,7 +10990,8 @@ def create_app() -> Flask:
             url_for(
                 "admin_federal_data_dashboard_judge_search_results",
                 batch_request_id=batch_request_id,
-                judge_id=judge_id,
+                judge_last_name=judge_last_name,
+                judge_initials=judge_initials,
                 max_cases=max_cases or 0,
                 case_scope=case_scope,
                 step=3,

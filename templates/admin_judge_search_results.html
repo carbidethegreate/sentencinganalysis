@@ -13,7 +13,13 @@
     <div class="page-header page-header--tight">
       <h2>Judge Search</h2>
       <p class="small">
-        Judge: {{ judge.name }} · Run #{{ batch_request_id }} · {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} · court {{ batch_request.court_id|upper }}
+        Run #{{ batch_request_id }}
+        · {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }}
+        · court {{ batch_request.court_id|upper }}
+        {% if batch_case_types %}· types {{ batch_case_types|join(', ')|upper }}{% endif %}
+        {% if has_judge_filter %}
+          · Judge filter: {{ judge_last_name }}{% if judge_initials %} ({{ judge_initials }}){% endif %}
+        {% endif %}
       </p>
     </div>
 
@@ -27,9 +33,13 @@
           <span class="wizard-progress__num">2</span>
           <span class="wizard-progress__label">Review</span>
         </div>
-        <div class="wizard-progress__step {% if active_step == 3 %}is-current{% endif %}">
+        <div class="wizard-progress__step {% if active_step == 3 %}is-current{% elif active_step > 3 %}is-complete{% endif %}">
           <span class="wizard-progress__num">3</span>
           <span class="wizard-progress__label">Queue dockets</span>
+        </div>
+        <div class="wizard-progress__step {% if active_step == 4 %}is-current{% endif %}">
+          <span class="wizard-progress__num">4</span>
+          <span class="wizard-progress__label">View results</span>
         </div>
       </div>
 
@@ -160,8 +170,14 @@
               <dd>{{ discovered_total }}</dd>
             </div>
             <div>
-              <dt>Judge-filtered matches</dt>
-              <dd>{{ discovered_count }}</dd>
+              <dt>{% if has_judge_filter %}Judge-filtered matches{% else %}Judge filter{% endif %}</dt>
+              <dd>
+                {% if has_judge_filter %}
+                  {{ filtered_count }}
+                {% else %}
+                  not set
+                {% endif %}
+              </dd>
             </div>
             <div>
               <dt>Segments processed</dt>
@@ -184,17 +200,21 @@
             <span>{{ segment_complete }} / {{ segment_total }} segments</span>
           </div>
 
-          {% if discovered_total and not discovered_with_judge %}
+          {% if discovered_total and has_judge_filter and not discovered_with_judge %}
             <p class="small">
               Note: cases were discovered, but the batch payload did not include judge metadata. If matches stay at 0,
-              you will need to confirm assignment via docket headers during docket enrichment.
+              you will need to confirm assignment via docket headers during docket pulls.
+            </p>
+          {% elif discovered_total and not has_judge_filter %}
+            <p class="small">
+              Tip: set a judge filter in Step 2 if you want to pull dockets for one judge.
             </p>
           {% endif %}
 
           <div class="wizard-actions">
             <a
               class="pill"
-              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=1, tick=1) }}"
+              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=1, tick=1) }}"
             >
               Refresh now
             </a>
@@ -202,7 +222,8 @@
             {% if not is_complete %}
               <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_cancel', batch_request_id=batch_request_id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="judge_id" value="{{ judge_id }}">
+                <input type="hidden" name="judge_last_name" value="{{ judge_last_name }}">
+                <input type="hidden" name="judge_initials" value="{{ judge_initials }}">
                 <input type="hidden" name="max_cases" value="{{ max_cases }}">
                 <input type="hidden" name="case_scope" value="{{ case_scope }}">
                 <button class="pill muted" type="submit">Cancel search</button>
@@ -210,7 +231,8 @@
             {% elif segment_statuses.get('failed', 0) %}
               <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_retry', batch_request_id=batch_request_id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="judge_id" value="{{ judge_id }}">
+                <input type="hidden" name="judge_last_name" value="{{ judge_last_name }}">
+                <input type="hidden" name="judge_initials" value="{{ judge_initials }}">
                 <input type="hidden" name="max_cases" value="{{ max_cases }}">
                 <input type="hidden" name="case_scope" value="{{ case_scope }}">
                 <button class="pill" type="submit">Retry failed segments</button>
@@ -219,7 +241,7 @@
             {% if is_complete %}
               <a
                 class="primary"
-                href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=2) }}"
+                href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=2) }}"
               >
                 Continue to review cases
               </a>
@@ -228,7 +250,7 @@
 
           {% if not is_complete %}
             <script>
-              const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=1, tick=1) | tojson }};
+              const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=1, tick=1) | tojson }};
               setTimeout(() => {
                 window.location.assign(refreshUrl);
               }, 12000);
@@ -237,27 +259,75 @@
         </section>
       {% elif active_step == 2 %}
         <section class="wizard-step stack">
-          <h3>Step 2: Review cases ({% if case_scope == 'all' %}all discovered{% else %}judge-filtered matches{% endif %})</h3>
+          <h3>Step 2: Review cases ({% if case_scope == 'all' %}all discovered{% else %}filtered by judge{% endif %})</h3>
+          <div class="flash">
+            <strong>Filter by judge (optional)</strong>
+            <div class="small mt-8">
+              Enter a judge last name to narrow the list before pulling dockets. If matches are empty, switch to “Show all discovered”.
+            </div>
+            <form
+              method="get"
+              action="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id) }}"
+              class="pcl-filter-form mt-8"
+            >
+              <input type="hidden" name="step" value="2">
+              <input type="hidden" name="max_cases" value="{{ max_cases }}">
+              <input type="hidden" name="case_scope" value="matched">
+              <div class="grid two">
+                <div>
+                  <label for="judge-last-name">Judge last name</label>
+                  <input
+                    id="judge-last-name"
+                    name="judge_last_name"
+                    value="{{ judge_last_name }}"
+                    placeholder="Example: Kearney"
+                  >
+                </div>
+                <div>
+                  <label for="judge-initials">Judge initials (optional)</label>
+                  <input
+                    id="judge-initials"
+                    name="judge_initials"
+                    value="{{ judge_initials }}"
+                    placeholder="Example: MAK"
+                  >
+                </div>
+              </div>
+              <div class="actions mt-8">
+                <button class="pill" type="submit">Apply judge filter</button>
+                <a
+                  class="pill"
+                  href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, max_cases=max_cases, case_scope='all', step=2) }}"
+                >
+                  Clear filter
+                </a>
+              </div>
+            </form>
+          </div>
           <div class="flash">
             <strong>What to do on this step</strong>
             <ul class="small mt-8">
-              <li>Start with “Show all discovered” if “Show matches” is empty (discovery often lacks judge metadata).</li>
-              <li>Open 1 to 2 cases to confirm they belong to the judge.</li>
+              <li>Open 1 to 2 cases to confirm you are looking at the right group.</li>
+              <li>If you want only one judge, apply a judge filter above and click “Show filtered”.</li>
               <li>When the list looks right, click “Continue to queue dockets”.</li>
             </ul>
           </div>
           <p class="small">Showing {{ display_rows|length }} case(s). This list is ordered newest-to-oldest.</p>
 
           <div class="actions">
-            <a
-              class="pill {% if case_scope != 'all' %}is-current{% endif %}"
-              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='matched', step=2) }}"
-            >
-              Show matches
-            </a>
+            {% if has_judge_filter %}
+              <a
+                class="pill {% if case_scope != 'all' %}is-current{% endif %}"
+                href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope='matched', step=2) }}"
+              >
+                Show filtered
+              </a>
+            {% else %}
+              <span class="pill muted" aria-disabled="true">Show filtered</span>
+            {% endif %}
             <a
               class="pill {% if case_scope == 'all' %}is-current{% endif %}"
-              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='all', step=2) }}"
+              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope='all', step=2) }}"
             >
               Show all discovered
             </a>
@@ -295,21 +365,21 @@
             {% if case_scope == 'all' %}
               <p class="small">No cases discovered for this run.</p>
             {% else %}
-              <p class="small">No judge-filtered matches. If cases were discovered, try “Show all discovered”.</p>
+              <p class="small">No filtered matches. Try a different judge last name or switch to “Show all discovered”.</p>
             {% endif %}
           {% endif %}
 
           <div class="wizard-actions">
-            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=1) }}">Back</a>
-            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=2, tick=1) }}">Refresh</a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=1) }}">Back</a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=2, tick=1) }}">Refresh</a>
             {% if display_rows %}
-              <a class="primary" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=3) }}">Continue to queue dockets</a>
+              <a class="primary" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=3) }}">Continue to queue dockets</a>
             {% endif %}
           </div>
         </section>
-      {% else %}
+      {% elif active_step == 3 %}
         <section class="wizard-step stack">
-          <h3>Step 3: Pull docket histories</h3>
+          <h3>Step 3: Pull dockets</h3>
           {% if last_queue %}
             <div class="flash success">
               <strong>Queued docket jobs.</strong>
@@ -318,7 +388,7 @@
               </div>
               {% if last_queue.worker_started %}
                 <div class="small mt-8">
-                  Worker started for up to {{ last_queue.worker_jobs }} job(s). Open the docket queue to watch progress.
+                  Worker started for up to {{ last_queue.worker_jobs }} job(s). Continue to Step 4 to see results.
                 </div>
               {% endif %}
             </div>
@@ -330,7 +400,7 @@
                 <li>Click “Add … to docket queue” to create docket jobs for these cases.</li>
                 <li>Leave “Include docket text” checked unless you are minimizing cost.</li>
                 <li>If you check “Run the worker now”, it will process a batch in the background.</li>
-                <li>Use “Open docket queue” to see jobs move from queued to running to completed or failed.</li>
+                <li>After queueing, go to Step 4 to view job status and open docket results.</li>
                 <li>
                   If jobs fail with a token/login error, re-authenticate under
                   <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>.
@@ -343,7 +413,8 @@
               class="stack"
             >
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="judge_id" value="{{ judge_id }}">
+              <input type="hidden" name="judge_last_name" value="{{ judge_last_name }}">
+              <input type="hidden" name="judge_initials" value="{{ judge_initials }}">
               <input type="hidden" name="max_cases" value="{{ max_cases }}">
               <input type="hidden" name="case_scope" value="{{ case_scope }}">
               <label>
@@ -359,21 +430,108 @@
                 <input type="number" name="max_docket_jobs" min="1" max="200" value="50">
               </label>
               <button class="primary" type="submit">
-                {% if case_scope == 'all' %}Add discovered cases to docket queue{% else %}Add matched cases to docket queue{% endif %}
+                {% if case_scope == 'all' %}Add discovered cases to docket queue{% else %}Add filtered cases to docket queue{% endif %}
               </button>
             </form>
           {% else %}
             {% if case_scope == 'all' %}
               <p class="small">This step unlocks once discovered cases appear in Step 2.</p>
             {% else %}
-              <p class="small">This step unlocks once judge-filtered matches appear in Step 2.</p>
+              <p class="small">This step unlocks once filtered matches appear in Step 2.</p>
             {% endif %}
           {% endif %}
 
           <div class="wizard-actions">
-            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=2) }}">Back</a>
-            <a class="pill" href="{{ url_for('admin_docket_enrichment_dashboard') }}">Open docket queue</a>
-            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=3, tick=1) }}">Refresh</a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=2) }}">Back</a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=3, tick=1) }}">Refresh</a>
+            <a class="primary" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=4) }}">Continue to view results</a>
+          </div>
+        </section>
+      {% else %}
+        <section class="wizard-step stack">
+          <h3>Step 4: View results</h3>
+
+          <div class="flash">
+            <strong>What to do on this step</strong>
+            <ul class="small mt-8">
+              <li>Refresh to watch jobs move from queued to running to completed.</li>
+              <li>If jobs failed with a token/login error, re-authenticate under <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>, then retry.</li>
+              <li>Open a case to view the saved docket text/entries.</li>
+            </ul>
+          </div>
+
+          <dl class="pcl-detail-list">
+            <div>
+              <dt>Cases in this step</dt>
+              <dd>{{ docket_summary.total_cases }}</dd>
+            </div>
+            <div>
+              <dt>Completed</dt>
+              <dd>{{ docket_summary.status_counts.get('completed', 0) }}</dd>
+            </div>
+            <div>
+              <dt>Queued</dt>
+              <dd>{{ docket_summary.status_counts.get('queued', 0) }}</dd>
+            </div>
+            <div>
+              <dt>Running</dt>
+              <dd>{{ docket_summary.status_counts.get('running', 0) }}</dd>
+            </div>
+            <div>
+              <dt>Failed</dt>
+              <dd>{{ docket_summary.status_counts.get('failed', 0) }}</dd>
+            </div>
+          </dl>
+
+          {% if docket_summary.top_errors %}
+            <div class="flash error">
+              <strong>Top docket failures</strong>
+              <ul class="small mt-8">
+                {% for reason in docket_summary.top_errors %}
+                  <li>{{ reason.count }}: {{ reason.message }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+
+          {% if docket_case_rows %}
+            <div class="table-wrap">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>Case</th>
+                    <th>Docket job</th>
+                    <th>Docket data</th>
+                    <th>Last update</th>
+                    <th>Last error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in docket_case_rows %}
+                    <tr>
+                      <td>
+                        <a class="pacer-text-link" href="{{ url_for('admin_pcl_case_detail', case_id=row.case_id) }}">
+                          {{ row.case_number_full or row.case_number }}
+                        </a>
+                        <div class="small">{{ row.short_title or row.case_title or "Untitled case" }}</div>
+                      </td>
+                      <td>{{ row.job_status or "—" }}</td>
+                      <td>{% if row.has_docket_data %}yes{% else %}no{% endif %}</td>
+                      <td>{{ row.job_updated_at.isoformat() if row.job_updated_at else "—" }}</td>
+                      <td>{{ row.job_last_error or "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="small">No cases available for results yet. Queue dockets in Step 3 first.</p>
+          {% endif %}
+
+          <div class="wizard-actions">
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=3) }}">Back</a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=4, tick=1) }}">Refresh</a>
+            <a class="pill" href="{{ case_cards_url }}">Open Case Cards</a>
           </div>
         </section>
       {% endif %}

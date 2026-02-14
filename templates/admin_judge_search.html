@@ -23,7 +23,7 @@
         </div>
         <div class="wizard-progress__step" data-wizard-progress="3">
           <span class="wizard-progress__num">3</span>
-          <span class="wizard-progress__label">Case cap</span>
+          <span class="wizard-progress__label">Thresholds</span>
         </div>
         <div class="wizard-progress__step" data-wizard-progress="4">
           <span class="wizard-progress__num">4</span>
@@ -39,7 +39,6 @@
         novalidate
       >
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="judge_id" value="{{ selected_judge_id }}">
         <input type="hidden" name="court_id" id="court-id" value="{{ selected_court_id }}">
         <input type="hidden" name="max_batch_iterations" value="300">
 
@@ -101,8 +100,26 @@
         </section>
 
         <section class="wizard-step" data-wizard-step="3" hidden>
-          <h3>Step 3 of 4: Choose how many cases to pull now</h3>
+          <h3>Step 3 of 4: Set thresholds</h3>
           <p class="small">Start with a small test run to confirm results before running the full date range.</p>
+
+          <fieldset class="stack wizard-fieldset">
+            <legend class="small">Case types</legend>
+            <div class="grid two">
+              {% for case_type in case_type_choices %}
+                <label class="wizard-radio">
+                  <input
+                    type="checkbox"
+                    name="case_types"
+                    value="{{ case_type }}"
+                    {% if case_type in selected_case_types %}checked{% endif %}
+                  >
+                  {{ case_type|upper }}
+                </label>
+              {% endfor %}
+            </div>
+            <p class="small mt-8">Tip: start with <strong>CR</strong> for sentencing analysis.</p>
+          </fieldset>
 
           <fieldset class="stack wizard-fieldset">
             <legend class="small">Run type</legend>
@@ -164,6 +181,10 @@
               <span class="wizard-summary__label">Case cap</span>
               <strong class="wizard-summary__value" id="summary-cap">—</strong>
             </div>
+            <div>
+              <span class="wizard-summary__label">Case types</span>
+              <strong class="wizard-summary__value" id="summary-case-types">—</strong>
+            </div>
           </div>
 
           <div class="wizard-actions">
@@ -211,6 +232,9 @@
       const summaryCourt = document.getElementById("summary-court");
       const summaryDates = document.getElementById("summary-dates");
       const summaryCap = document.getElementById("summary-cap");
+      const summaryCaseTypes = document.getElementById("summary-case-types");
+
+      const caseTypeCheckboxes = Array.from(document.querySelectorAll("input[name=\"case_types\"]"));
 
       let currentStep = Number({{ initial_step|default(1)|int }}) || 1;
       if (currentStep < 1 || currentStep > 4) currentStep = 1;
@@ -558,6 +582,11 @@
         }
 
         if (step === 3) {
+          const selectedTypes = caseTypeCheckboxes.filter((el) => el && el.checked);
+          if (!selectedTypes.length) {
+            setError(3, "Select at least one case type to continue.");
+            return false;
+          }
           if (scopeLimited && scopeLimited.checked) {
             const value = Number(maxCasesInput && maxCasesInput.value || "0");
             if (!Number.isFinite(value) || value <= 0) {
@@ -590,6 +619,14 @@
             const value = (maxCasesInput && maxCasesInput.value) || "—";
             summaryCap.textContent = `Test run (up to ${value} cases)`;
           }
+        }
+
+        if (summaryCaseTypes) {
+          const selectedTypes = caseTypeCheckboxes
+            .filter((el) => el && el.checked)
+            .map((el) => (el.value || "").toString().toUpperCase())
+            .filter(Boolean);
+          summaryCaseTypes.textContent = selectedTypes.length ? selectedTypes.join(", ") : "—";
         }
       };
 

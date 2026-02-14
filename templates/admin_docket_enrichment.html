@@ -5,8 +5,8 @@
 {% block federal_content %}
   <section class="card">
     <div class="page-header page-header--tight">
-      <h2>Docket enrichment queue</h2>
-      <p class="small">Queue docket pulls for saved cases, then run the worker to fetch PACER docket reports.</p>
+      <h2>Docket queue (Advanced)</h2>
+      <p class="small">Global docket worker queue. Most users should start from Judge Search.</p>
     </div>
 
     <div class="flash">
@@ -40,8 +40,11 @@
         <h3>Run worker</h3>
         <p class="small pacer-token-status">
           <span class="status-dot {% if service_token.connected %}status-dot--connected{% else %}status-dot--offline{% endif %}" aria-hidden="true"></span>
-          Token {{ "connected" if service_token.connected else "not connected" }} ({{ service_token.environment_label }})
+          Token {{ "present" if service_token.connected else "missing" }} ({{ service_token.environment_label }})
         </p>
+        {% if service_token.obtained_at %}
+          <p class="small">Obtained at {{ service_token.obtained_at.isoformat() }} UTC.</p>
+        {% endif %}
         <p class="small">Runs one worker cycle on queued jobs (in the background). Refresh to see updates.</p>
         <form method="post" action="{{ url_for('admin_docket_enrichment_run') }}" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -54,11 +57,18 @@
       </article>
     </div>
 
-    <article class="card">
-      <h3>Advanced: batch queue docket pulls</h3>
-      <p class="small">
-        Use this if you did not come from Judge Search. Filter cases, then queue docket jobs in bulk.
-      </p>
+    <details class="pacer-status-summary mt-16">
+      <summary>
+        <div class="pacer-status-summary__row">
+          <span>Advanced</span>
+          <span class="pacer-status-summary__text">Batch queue and global worker diagnostics</span>
+          <span class="pacer-status-summary__hint">expand</span>
+        </div>
+      </summary>
+
+    <article class="card mt-12">
+      <h3>Batch queue docket pulls</h3>
+      <p class="small">Use this if you did not come from Judge Search.</p>
 
       <form method="get" action="{{ url_for('admin_docket_enrichment_dashboard') }}" class="pcl-filter-form">
         <div class="grid two">
@@ -271,5 +281,6 @@
         <p class="small">No docket enrichment jobs queued yet.</p>
       {% endif %}
     </article>
+    </details>
   </section>
 {% endblock %}
