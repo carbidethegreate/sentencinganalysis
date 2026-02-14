@@ -6,6 +6,8 @@ import hashlib
 from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy import Column, DateTime, MetaData, String, Table, Text, delete, insert, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 
@@ -60,17 +62,46 @@ class DatabaseTokenBackend:
         self._table = table
 
     def save_token(self, session_key: str, record: PacerTokenRecord) -> None:
+        values = {
+            "session_key": session_key,
+            "token": record.token,
+            "obtained_at": record.obtained_at,
+            "expires_at": record.expires_at,
+            "environment": record.environment,
+        }
+
         with self._engine.begin() as conn:
-            conn.execute(delete(self._table).where(self._table.c.session_key == session_key))
-            conn.execute(
-                insert(self._table).values(
-                    session_key=session_key,
-                    token=record.token,
-                    obtained_at=record.obtained_at,
-                    expires_at=record.expires_at,
-                    environment=record.environment,
+            if conn.dialect.name == "postgresql":
+                stmt = pg_insert(self._table).values(**values)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[self._table.c.session_key],
+                    set_={
+                        "token": stmt.excluded.token,
+                        "obtained_at": stmt.excluded.obtained_at,
+                        "expires_at": stmt.excluded.expires_at,
+                        "environment": stmt.excluded.environment,
+                    },
                 )
-            )
+                conn.execute(stmt)
+                return
+
+            if conn.dialect.name == "sqlite":
+                stmt = sqlite_insert(self._table).values(**values)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[self._table.c.session_key],
+                    set_={
+                        "token": stmt.excluded.token,
+                        "obtained_at": stmt.excluded.obtained_at,
+                        "expires_at": stmt.excluded.expires_at,
+                        "environment": stmt.excluded.environment,
+                    },
+                )
+                conn.execute(stmt)
+                return
+
+            # Fallback: delete + insert.
+            conn.execute(delete(self._table).where(self._table.c.session_key == session_key))
+            conn.execute(insert(self._table).values(**values))
 
     def get_token(self, session_key: str) -> Optional[PacerTokenRecord]:
         with self._engine.begin() as conn:

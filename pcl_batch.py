@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from sqlalchemy import Table, case, insert, select, update
+from sqlalchemy import Table, case, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from pacer_http import PacerEnvironmentMismatch, TokenExpired
@@ -167,6 +167,7 @@ class PclBatchWorker:
         logger: Optional[Any] = None,
         sleep_fn: Callable[[float], None] = None,
         now_fn: Callable[[], datetime] = None,
+        max_concurrent_remote_jobs: int = 2,
         poll_base_seconds: float = 5.0,
         poll_jitter_seconds: float = 2.0,
         max_poll_attempts: int = 6,
@@ -178,11 +179,24 @@ class PclBatchWorker:
         self._logger = logger
         self._sleep = sleep_fn or (lambda seconds: None)
         self._now = now_fn or datetime.utcnow
+        self._max_concurrent_remote_jobs = max(1, int(max_concurrent_remote_jobs))
         self._poll_base_seconds = poll_base_seconds
         self._poll_jitter_seconds = poll_jitter_seconds
         self._max_poll_attempts = max_poll_attempts
         self._claim_timeout_minutes = claim_timeout_minutes
         self._rng = random.Random()
+
+    def _remote_in_flight_count(self) -> int:
+        segment_table = self._tables["pcl_batch_segments"]
+        in_flight_statuses = ["submitted", "running", "processing"]
+        with self._engine.begin() as conn:
+            value = conn.execute(
+                select(func.count())
+                .select_from(segment_table)
+                .where(segment_table.c.status.in_(in_flight_statuses))
+                .where(segment_table.c.report_id.isnot(None))
+            ).scalar_one()
+        return int(value or 0)
 
     def run_once(self, max_segments: int = 1, *, batch_request_id: Optional[int] = None) -> int:
         processed = 0
@@ -211,26 +225,19 @@ class PclBatchWorker:
             (segment_table.c.next_poll_at.is_(None))
             | (segment_table.c.next_poll_at <= now)
         )
+        queueable = (segment_table.c.status == "queued") & (
+            (segment_table.c.next_poll_at.is_(None))
+            | (segment_table.c.next_poll_at <= now)
+        )
         allow_submit_new = True
 
-        # If scoped to a batch request, keep the number of in-flight remote jobs bounded
-        # to the worker tick size so we don't submit all segments at once.
-        if batch_request_id is not None:
-            in_flight_statuses = ["submitted", "running", "processing"]
-            with self._engine.begin() as conn:
-                in_flight = conn.execute(
-                    select(segment_table.c.id)
-                    .where(segment_table.c.batch_request_id == batch_request_id)
-                    .where(segment_table.c.status.in_(in_flight_statuses))
-                    .where(segment_table.c.report_id.isnot(None))
-                    .limit(max(1, int(max_segments)))
-                ).all()
-            if len(in_flight) >= max(1, int(max_segments)):
-                allow_submit_new = False  # only poll existing jobs until the in-flight count drops
+        # Keep the number of remote batch jobs bounded globally (PCL enforces concurrency limits).
+        if self._remote_in_flight_count() >= self._max_concurrent_remote_jobs:
+            allow_submit_new = False  # only poll existing jobs until the in-flight count drops
 
         where_clause = pollable
         if allow_submit_new:
-            where_clause = where_clause | (segment_table.c.status == "queued")
+            where_clause = where_clause | queueable
         if batch_request_id is not None:
             where_clause = where_clause & (segment_table.c.batch_request_id == batch_request_id)
         # Poll due segments before submitting new queued segments.
@@ -301,6 +308,12 @@ class PclBatchWorker:
             self._poll_segment(segment)
 
     def _submit_segment(self, segment: Dict[str, Any]) -> Dict[str, Any]:
+        # Double-check concurrency right before submission so a single run_once call
+        # can't submit more jobs than allowed.
+        if self._remote_in_flight_count() >= self._max_concurrent_remote_jobs:
+            self._mark_deferred(segment, "waiting for a free batch slot")
+            return segment
+
         if not self._court_id_is_valid(segment.get("court_id")):
             self._mark_failed(
                 segment, "Court ID is not recognized. Please select a valid court."
@@ -316,6 +329,9 @@ class PclBatchWorker:
             self._mark_needs_reauth(segment)
             return segment
         except PclApiError as exc:
+            if exc.status_code == 429 or _looks_like_pcl_concurrency_limit(exc.message):
+                self._mark_throttled(segment, exc.message)
+                return segment
             self._mark_failed(segment, exc.message)
             return segment
         report_id = response.get("reportId") or response.get("report_id")
@@ -467,7 +483,7 @@ class PclBatchWorker:
         normalized: Dict[str, Any],
     ) -> None:
         raw_table = self._tables["pcl_case_result_raw"]
-        insert_stmt = insert(raw_table).values(
+        stmt_values = dict(
             segment_id=segment["id"],
             report_id=report_id,
             ingested_at=self._now(),
@@ -476,8 +492,10 @@ class PclBatchWorker:
             record_hash=record_hash,
             payload_json=payload_json,
         )
+        insert_stmt = insert(raw_table).values(**stmt_values)
         if conn.dialect.name == "postgresql":
-            insert_stmt = insert_stmt.on_conflict_do_nothing(
+            # SQLAlchemy's generic Insert doesn't support PG upsert helpers; use dialect insert.
+            insert_stmt = pg_insert(raw_table).values(**stmt_values).on_conflict_do_nothing(
                 index_elements=["record_hash"]
             )
         try:
@@ -609,6 +627,53 @@ class PclBatchWorker:
             {"status": "failed", "error_message": message, "remote_status_message": message},
         )
 
+    def _mark_deferred(self, segment: Dict[str, Any], message: str) -> None:
+        # Local throttling: delay submission a bit without counting as an API attempt.
+        delay_seconds = 8 + self._rng.uniform(0, 6)
+        now = self._now()
+        if self._logger:
+            self._logger.info(
+                "Deferring PCL segment %s: %s (retry in %.0fs)",
+                segment.get("id"),
+                message,
+                delay_seconds,
+            )
+        self._update_segment(
+            segment["id"],
+            {
+                "status": "queued",
+                "next_poll_at": now + timedelta(seconds=delay_seconds),
+                "last_error": message,
+                "updated_at": now,
+            },
+        )
+
+    def _mark_throttled(self, segment: Dict[str, Any], message: str) -> None:
+        # PCL can reject submissions when too many batch jobs are running.
+        # Re-queue with backoff instead of permanently failing the segment.
+        attempt = int(segment.get("attempt_count") or 0) + 1
+        delay_seconds = min(900, 20 * (2 ** min(6, attempt - 1)))
+        delay_seconds += self._rng.uniform(0, 10)
+        now = self._now()
+        if self._logger:
+            self._logger.info(
+                "PCL segment %s throttled (429); re-queueing in %.0fs",
+                segment.get("id"),
+                delay_seconds,
+            )
+        self._update_segment(
+            segment["id"],
+            {
+                "status": "queued",
+                "attempt_count": attempt,
+                "next_poll_at": now + timedelta(seconds=delay_seconds),
+                "last_error": message,
+                "error_message": message,
+                "remote_status_message": message,
+                "updated_at": now,
+            },
+        )
+
     def _mark_needs_reauth(self, segment: Dict[str, Any]) -> None:
         self._update_segment(
             segment["id"],
@@ -678,6 +743,13 @@ def _extract_case_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     if "case" in payload and isinstance(payload.get("case"), list):
         return payload["case"]
     return []
+
+
+def _looks_like_pcl_concurrency_limit(message: str) -> bool:
+    lowered = (message or "").strip().lower()
+    if not lowered:
+        return False
+    return "exceeded maximum batch jobs" in lowered or "running concurrently" in lowered
 
 
 def _record_hash(record: Dict[str, Any]) -> str:
