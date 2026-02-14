@@ -10111,14 +10111,6 @@ def create_app() -> Flask:
         filter_choices = _load_docket_filter_choices()
         filters = _parse_docket_filters(request.args.to_dict(flat=True))
         candidates = _load_docket_case_candidates(filters)
-        kearney_estimate_with_text = _estimate_kearney_docket_runs(
-            include_docket_text=True
-        )
-        kearney_estimate_without_text = _estimate_kearney_docket_runs(
-            include_docket_text=False
-        )
-        kearney_discovery_estimate = _estimate_kearney_batch_search()
-        kearney_candidates = kearney_estimate_with_text.get("candidate_count", 0)
         service_record = pacer_service_token_store.get_token(
             expected_environment=pacer_env_config.pcl_env
         )
@@ -10150,10 +10142,6 @@ def create_app() -> Flask:
             candidate_page_size=candidates["page_size"],
             candidate_page_url=page_url,
             docket_filters=filters,
-            kearney_estimate_with_text=kearney_estimate_with_text,
-            kearney_estimate_without_text=kearney_estimate_without_text,
-            kearney_discovery_estimate=kearney_discovery_estimate,
-            kearney_candidate_count=kearney_candidates,
             csrf_token=get_csrf_token(),
         )
 
@@ -10581,6 +10569,28 @@ def create_app() -> Flask:
         active_step = requested_step if requested_step in {1, 2, 3} else (1 if not is_complete else 2)
         if not is_complete and active_step != 1:
             active_step = 1
+
+        last_queue = None
+        queued_param = _parse_optional_int(request.args.get("queued") or None)
+        skipped_param = _parse_optional_int(request.args.get("skipped") or None)
+        worker_started_param = (request.args.get("worker_started") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        worker_jobs_param = _parse_optional_int(request.args.get("worker_jobs") or None)
+        if (
+            queued_param is not None
+            or skipped_param is not None
+            or "worker_started" in request.args
+            or "worker_jobs" in request.args
+        ):
+            last_queue = {
+                "queued": int(queued_param or 0),
+                "skipped": int(skipped_param or 0),
+                "worker_started": bool(worker_started_param),
+                "worker_jobs": int(worker_jobs_param or 0),
+            }
         return render_template(
             "admin_judge_search_results.html",
             active_page="federal_data_dashboard",
@@ -10607,6 +10617,7 @@ def create_app() -> Flask:
             tick_error=tick_error,
             global_slot_status=global_slot_status,
             remote_slot_limit=remote_slot_limit,
+            last_queue=last_queue,
             csrf_token=get_csrf_token(),
         )
 
@@ -10779,7 +10790,25 @@ def create_app() -> Flask:
             "success",
         )
 
-        if start_docket_worker and queue_stats["docket_jobs_queued"]:
+        worker_started = False
+        worker_jobs = 0
+        job_ids_to_run: List[int] = []
+        if start_docket_worker:
+            job_table = pcl_tables["docket_enrichment_jobs"]
+            with engine.begin() as conn:
+                job_ids_to_run = [
+                    int(job_id)
+                    for job_id in conn.execute(
+                        select(job_table.c.id)
+                        .where(job_table.c.case_id.in_(case_ids))
+                        .where(job_table.c.status.in_(["queued", "running"]))
+                        .order_by(job_table.c.created_at.desc(), job_table.c.id.desc())
+                        .limit(max(1, max_docket_jobs))
+                    ).scalars()
+                ]
+            worker_jobs = len(job_ids_to_run)
+
+        if start_docket_worker and job_ids_to_run:
             def _run_worker() -> None:
                 docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "html")
                 docket_url_template = os.environ.get("PACER_DOCKET_URL_TEMPLATE")
@@ -10792,10 +10821,16 @@ def create_app() -> Flask:
                     docket_output=docket_output,
                     docket_url_template=docket_url_template,
                 )
-                worker.run_once(max_jobs=max(1, max_docket_jobs))
+                worker.run_jobs(job_ids_to_run)
 
             threading.Thread(target=_run_worker, daemon=True).start()
-            flash("Docket worker started with requested batch size.", "success")
+            worker_started = True
+            flash(
+                f"Docket worker started for up to {worker_jobs} job(s).",
+                "success",
+            )
+        elif start_docket_worker:
+            flash("No queued docket jobs found to run yet.", "info")
 
         return redirect(
             url_for(
@@ -10805,6 +10840,10 @@ def create_app() -> Flask:
                 max_cases=max_cases or 0,
                 case_scope=case_scope,
                 step=3,
+                queued=queue_stats.get("docket_jobs_queued", 0),
+                skipped=queue_stats.get("docket_jobs_skipped", 0),
+                worker_started=1 if worker_started else 0,
+                worker_jobs=worker_jobs,
             )
         )
 

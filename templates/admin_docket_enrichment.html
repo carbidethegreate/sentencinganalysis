@@ -6,7 +6,21 @@
   <section class="card">
     <div class="page-header page-header--tight">
       <h2>Docket enrichment queue</h2>
-      <p class="small">Queue docket text pulls for saved cases. Use filters to target the exact set of cases.</p>
+      <p class="small">Queue docket pulls for saved cases, then run the worker to fetch PACER docket reports.</p>
+    </div>
+
+    <div class="flash">
+      <strong>Quick start</strong>
+      <ul class="small mt-8">
+        <li>Recommended: use <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">Judge Search</a> to discover cases and add them to the docket queue.</li>
+        <li>Come back here and click “Run worker” (start with Max jobs = 5).</li>
+        <li>Refresh this page to see jobs move from queued to running to completed or failed.</li>
+      </ul>
+      <div class="actions mt-8">
+        <a class="primary" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">Start Judge Search</a>
+        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>
+        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_logs') }}">Logs</a>
+      </div>
     </div>
 
     <div class="grid two mb-16">
@@ -28,7 +42,7 @@
           <span class="status-dot {% if service_token.connected %}status-dot--connected{% else %}status-dot--offline{% endif %}" aria-hidden="true"></span>
           Token {{ "connected" if service_token.connected else "not connected" }} ({{ service_token.environment_label }})
         </p>
-        <p class="small">Runs one worker cycle on queued jobs.</p>
+        <p class="small">Runs one worker cycle on queued jobs (in the background). Refresh to see updates.</p>
         <form method="post" action="{{ url_for('admin_docket_enrichment_run') }}" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
@@ -38,110 +52,13 @@
           <button class="primary" type="submit">Run worker</button>
         </form>
       </article>
-
-      <article class="pcl-detail-card">
-        {% set k_with_text = kearney_estimate_with_text %}
-        {% set k_without_text = kearney_estimate_without_text %}
-        {% set k_discovery = kearney_discovery_estimate %}
-        <h3>Mark A. Kearney backfill</h3>
-        <p class="small">Queue all EDPA (paedc) criminal cases for Judge Kearney (2010-01-01 to today).</p>
-        <p class="small">What these page params mean: the long URL values are just current filters for this dashboard (court, sort, search, etc). They are not the action trigger.</p>
-        <p class="small">
-          Discovery estimate:
-          {% if k_discovery and k_discovery.estimated_discovery_cases is not none %}
-            ~{{ k_discovery.estimated_discovery_cases }} estimated matches across {{ k_discovery.estimated_segment_count }} month segments.
-          {% elif k_discovery and k_discovery.fallback == "history" and k_discovery.estimated_case_samples > 0 %}
-            {{ k_discovery.estimated_case_samples }} historical segment samples; estimates currently unavailable.
-          {% else %}
-            No historical discovery data yet.
-          {% endif %}
-          {% if k_discovery and k_discovery.estimated_discovery_cost is not none %}
-            Discovery cost estimate: ${{ '%.2f'|format(k_discovery.estimated_discovery_cost) }}.
-          {% else %}
-            Discovery cost estimate: unknown.
-          {% endif %}
-          (source: {{ k_discovery.fallback if k_discovery else "none" }}).
-        </p>
-        <p class="small">
-          {{ kearney_candidate_count }} saved cases currently match.
-          {% if k_with_text and k_with_text.avg_fee is not none %}
-            Est. with text per case: ${{ '%.2f'|format(k_with_text.avg_fee) }}.
-            Est. total: ${{ '%.2f'|format(k_with_text.estimated_total_fee) }}.
-          {% else %}
-            With-text estimate: unknown.
-          {% endif %}
-          {% if k_without_text and k_without_text.avg_fee is not none %}
-            Without-text: ${{ '%.2f'|format(k_without_text.avg_fee) }}.
-          {% else %}
-            Without-text estimate: unknown.
-          {% endif %}
-          History source: {{ k_with_text.fallback }}.
-        </p>
-
-        <form method="post" action="{{ url_for('admin_docket_enrichment_queue_kearney') }}" class="stack">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label>
-            Max cases
-            <input type="number" name="max_cases" min="1" max="5000" value="500">
-          </label>
-          <label>
-            <input type="checkbox" name="include_docket_text" value="1" checked>
-            Include docket text
-          </label>
-          <label>
-            <input type="checkbox" name="queue_documents" value="1">
-            Queue docket document jobs for matching entries
-          </label>
-          <label>
-            Document keywords (optional)
-            <input type="text" name="document_keywords" placeholder="5K1.1, cooperation, downward departure">
-          </label>
-          <button class="primary" type="submit">Queue saved Mark A. Kearney cases</button>
-        </form>
-
-        <p class="small">Recommended steps:
-          1) Set <strong>Max cases</strong> to 5 and submit for a safe test run.
-          2) Review queued jobs in the tables below.
-          3) Set <strong>Max cases</strong> to 0 to run the full pass.
-        </p>
-
-        <form method="post" action="{{ url_for('admin_docket_enrichment_discover_kearney') }}" class="stack mt-12">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <p class="small">One-click discovery from 2010 onward, with optional docket document extraction.</p>
-          <input type="hidden" name="run_docket_worker" value="1">
-          <label>
-            <input type="checkbox" name="include_docket_text" value="1" checked>
-            Include docket text
-          </label>
-          <label>
-            <input type="checkbox" name="queue_documents" value="1">
-            Queue docket document jobs for matches
-          </label>
-          <label>
-            Max cases
-            <input type="number" name="max_cases" min="0" max="5000" value="5">
-            <small>(0 = full run)</small>
-          </label>
-          <label>
-            Document keywords (optional)
-            <input type="text" name="document_keywords" placeholder="5K1.1, cooperation, downward departure">
-          </label>
-          <label>
-            Max discovery segments per batch run
-            <input type="number" name="max_batch_iterations" min="1" max="4000" value="600">
-          </label>
-          <label>
-            Max docket jobs per pass
-            <input type="number" name="max_docket_jobs" min="1" max="200" value="50">
-          </label>
-          <button class="primary" type="submit">Run discover + queue</button>
-        </form>
-      </article>
     </div>
 
     <article class="card">
-      <h3>Batch queue docket text</h3>
-      <p class="small">Filter cases, then queue docket text pulls in bulk.</p>
+      <h3>Advanced: batch queue docket pulls</h3>
+      <p class="small">
+        Use this if you did not come from Judge Search. Filter cases, then queue docket jobs in bulk.
+      </p>
 
       <form method="get" action="{{ url_for('admin_docket_enrichment_dashboard') }}" class="pcl-filter-form">
         <div class="grid two">
@@ -297,6 +214,7 @@
 
     <article class="card mt-16">
       <h3>Recent docket jobs</h3>
+      <p class="small">Refresh after running the worker. Watch “Status” and “Last error”.</p>
       {% if jobs %}
         <div class="table-wrap">
           <table class="admin-table">

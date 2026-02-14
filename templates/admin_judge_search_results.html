@@ -11,9 +11,9 @@
 
   <section class="card stack">
     <div class="page-header page-header--tight">
-      <h2>Judge search: {{ judge.name }}</h2>
+      <h2>Judge Search</h2>
       <p class="small">
-        Run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ batch_request.court_id|upper }}
+        Judge: {{ judge.name }} · Run #{{ batch_request_id }} · {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} · court {{ batch_request.court_id|upper }}
       </p>
     </div>
 
@@ -238,6 +238,14 @@
       {% elif active_step == 2 %}
         <section class="wizard-step stack">
           <h3>Step 2: Review cases ({% if case_scope == 'all' %}all discovered{% else %}judge-filtered matches{% endif %})</h3>
+          <div class="flash">
+            <strong>What to do on this step</strong>
+            <ul class="small mt-8">
+              <li>Start with “Show all discovered” if “Show matches” is empty (discovery often lacks judge metadata).</li>
+              <li>Open 1 to 2 cases to confirm they belong to the judge.</li>
+              <li>When the list looks right, click “Continue to queue dockets”.</li>
+            </ul>
+          </div>
           <p class="small">Showing {{ display_rows|length }} case(s). This list is ordered newest-to-oldest.</p>
 
           <div class="actions">
@@ -302,10 +310,33 @@
       {% else %}
         <section class="wizard-step stack">
           <h3>Step 3: Pull docket histories</h3>
+          {% if last_queue %}
+            <div class="flash success">
+              <strong>Queued docket jobs.</strong>
+              <div class="small mt-8">
+                Queued {{ last_queue.queued }} job(s) and skipped {{ last_queue.skipped }} already queued/running.
+              </div>
+              {% if last_queue.worker_started %}
+                <div class="small mt-8">
+                  Worker started for up to {{ last_queue.worker_jobs }} job(s). Open the docket queue to watch progress.
+                </div>
+              {% endif %}
+            </div>
+          {% endif %}
           {% if display_rows %}
-            <p class="small">
-              Queue these cases for docket enrichment. Leave “Include docket text” checked unless you are minimizing cost.
-            </p>
+            <div class="flash">
+              <strong>What happens next</strong>
+              <ul class="small mt-8">
+                <li>Click “Add … to docket queue” to create docket jobs for these cases.</li>
+                <li>Leave “Include docket text” checked unless you are minimizing cost.</li>
+                <li>If you check “Run the worker now”, it will process a batch in the background.</li>
+                <li>Use “Open docket queue” to see jobs move from queued to running to completed or failed.</li>
+                <li>
+                  If jobs fail with a token/login error, re-authenticate under
+                  <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>.
+                </li>
+              </ul>
+            </div>
             <form
               method="post"
               action="{{ url_for('admin_federal_data_dashboard_judge_search_queue', batch_request_id=batch_request_id) }}"
@@ -321,7 +352,7 @@
               </label>
               <label>
                 <input type="checkbox" name="start_docket_worker" value="1">
-                Start docket worker now (runs one batch)
+                Run the worker now (process a batch in the background)
               </label>
               <label>
                 Docket worker batch size
