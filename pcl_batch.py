@@ -235,13 +235,27 @@ class PclBatchWorker:
         if self._remote_in_flight_count() >= self._max_concurrent_remote_jobs:
             allow_submit_new = False  # only poll existing jobs until the in-flight count drops
 
+        # Always poll in-flight jobs globally to avoid deadlocks where a scoped runner
+        # can't free up the global concurrency slots it depends on. When a
+        # `batch_request_id` is provided, only *submission* is scoped to that batch.
         where_clause = pollable
-        if allow_submit_new:
-            where_clause = where_clause | queueable
-        if batch_request_id is not None:
-            where_clause = where_clause & (segment_table.c.batch_request_id == batch_request_id)
+        if batch_request_id is None:
+            if allow_submit_new:
+                where_clause = where_clause | queueable
+        else:
+            if allow_submit_new:
+                where_clause = where_clause | (
+                    queueable & (segment_table.c.batch_request_id == batch_request_id)
+                )
+
         # Poll due segments before submitting new queued segments.
         status_priority = case((segment_table.c.status == "queued", 1), else_=0)
+        order_by_columns = [
+            status_priority.asc(),
+            segment_table.c.next_poll_at.asc().nullsfirst(),
+            segment_table.c.date_filed_to.desc().nullslast(),
+            segment_table.c.id.asc(),
+        ]
 
         with self._engine.begin() as conn:
             if conn.dialect.name == "postgresql":
@@ -250,10 +264,6 @@ class PclBatchWorker:
                 reclaimable = (segment_table.c.status == "processing") & (
                     segment_table.c.updated_at < stale_cutoff
                 )
-                if batch_request_id is not None:
-                    reclaimable = reclaimable & (
-                        segment_table.c.batch_request_id == batch_request_id
-                    )
                 # Use transactional claiming to prevent two workers from processing
                 # the same segment concurrently. Stale processing rows are reclaimed
                 # so a crashed worker does not leave segments stuck forever.
@@ -261,7 +271,7 @@ class PclBatchWorker:
                     conn.execute(
                         select(segment_table)
                         .where(claimable | reclaimable)
-                        .order_by(status_priority.asc(), segment_table.c.created_at.asc())
+                        .order_by(*order_by_columns)
                         .limit(max_segments)
                         .with_for_update(skip_locked=True)
                     )
@@ -273,7 +283,7 @@ class PclBatchWorker:
                     conn.execute(
                         select(segment_table)
                         .where(where_clause)
-                        .order_by(status_priority.asc(), segment_table.c.created_at.asc())
+                        .order_by(*order_by_columns)
                         .limit(max_segments)
                     )
                     .mappings()
