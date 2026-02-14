@@ -86,7 +86,7 @@ def _run_workers_once(app: Any) -> int:
     batch_worker = PclBatchWorker(
         app.engine,
         app.pcl_tables,
-        app.pcl_client,
+        app.pcl_background_client,
         logger=app.logger,
         sleep_fn=time.sleep,
     )
