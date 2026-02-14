@@ -2,344 +2,349 @@
 
 {% block title %}Judge Search Results{% endblock %}
 
-  {% block federal_content %}
-    <section class="card stack">
-      <div class="page-header page-header--tight">
-        <h2>{{ judge.name }} PACER results</h2>
-        <p class="small">
-          Judge search run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ batch_request.court_id|upper }}
-        </p>
-        <p class="small">
-          Step 1: watch progress below. Step 2: review cases. Step 3: queue docket histories once cases appear.
-        </p>
-      </div>
-    </section>
+{% block federal_content %}
+  {% set segments_in_flight = segment_statuses.get('submitted', 0) + segment_statuses.get('running', 0) + segment_statuses.get('processing', 0) %}
+  {% set segment_percent = 0 %}
+  {% if segment_total > 0 %}
+    {% set segment_percent = (segment_complete * 100) // segment_total %}
+  {% endif %}
 
-    <section class="card stack">
-      <h3>Step 1: Collect cases (background search)</h3>
+  <section class="card stack">
+    <div class="page-header page-header--tight">
+      <h2>Judge search: {{ judge.name }}</h2>
       <p class="small">
-        This date range is split into {{ segment_total }} monthly segment(s). This page auto-refreshes every 12 seconds while the search is running.
+        Run #{{ batch_request_id }} | {{ batch_request.date_filed_from }} to {{ batch_request.date_filed_to }} | court {{ batch_request.court_id|upper }}
       </p>
+    </div>
 
-      {% set segments_in_flight = segment_statuses.get('submitted', 0) + segment_statuses.get('running', 0) + segment_statuses.get('processing', 0) %}
-
-      {% if tick_error %}
-        <div class="flash error">
-          <strong>Worker tick error.</strong>
-          <div class="small mt-8">{{ tick_error }}</div>
-          <div class="small mt-8">
-            Next step: open <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_logs') }}">Logs</a> and search for “Judge search tick failed”.
-          </div>
+    <div class="wizard" data-wizard>
+      <div class="wizard-progress" aria-label="Judge search steps">
+        <div class="wizard-progress__step {% if active_step == 1 %}is-current{% elif is_complete %}is-complete{% endif %}">
+          <span class="wizard-progress__num">1</span>
+          <span class="wizard-progress__label">Collect cases</span>
         </div>
-      {% endif %}
+        <div class="wizard-progress__step {% if active_step == 2 %}is-current{% elif active_step > 2 %}is-complete{% endif %}">
+          <span class="wizard-progress__num">2</span>
+          <span class="wizard-progress__label">Review</span>
+        </div>
+        <div class="wizard-progress__step {% if active_step == 3 %}is-current{% endif %}">
+          <span class="wizard-progress__num">3</span>
+          <span class="wizard-progress__label">Queue dockets</span>
+        </div>
+      </div>
 
-      {% if not is_complete and segment_statuses.get('queued', 0) and segments_in_flight == 0 and segment_complete == 0 %}
-        <div class="flash">
-          <strong>Search is waiting to start.</strong>
-          {% if global_slot_status and (global_slot_status['in_flight_count'] >= remote_slot_limit) %}
-            <div class="small mt-8">
-              All global PCL batch slots are currently in use: {{ global_slot_status['in_flight_count'] }} / {{ remote_slot_limit }}.
-              {% if global_slot_status['next_poll_at'] %}
-                Next global poll (UTC): {{ global_slot_status['next_poll_at'].isoformat() }}.
+      {% if active_step == 1 %}
+        <section class="wizard-step stack">
+          <h3>Step 1: Collect cases</h3>
+          <p class="small">
+            This date range is split into {{ segment_total }} monthly segment(s).
+            {% if not is_complete %}This page auto-refreshes every 12 seconds while the search is running.{% endif %}
+          </p>
+
+          {% if tick_error %}
+            <div class="flash error">
+              <strong>Worker tick error.</strong>
+              <div class="small mt-8">{{ tick_error }}</div>
+              <div class="small mt-8">
+                Next step: open <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_logs') }}">Logs</a> and search for “Judge search tick failed”.
+              </div>
+            </div>
+          {% endif %}
+
+          {% if not is_complete and segment_statuses.get('queued', 0) and segments_in_flight == 0 and segment_complete == 0 %}
+            <div class="flash">
+              <strong>Waiting to start.</strong>
+              {% if global_slot_status and (global_slot_status['in_flight_count'] >= remote_slot_limit) %}
+                <div class="small mt-8">
+                  All global PCL batch slots are currently in use: {{ global_slot_status['in_flight_count'] }} / {{ remote_slot_limit }}.
+                  {% if global_slot_status['next_poll_at'] %}
+                    Next global poll (UTC): {{ global_slot_status['next_poll_at'].isoformat() }}.
+                  {% endif %}
+                </div>
+              {% else %}
+                <div class="small mt-8">
+                  This run should begin as soon as a worker tick submits the first segment.
+                </div>
+              {% endif %}
+
+              {% if queue_reasons %}
+                {% set top_queue = (queue_reasons[0].message if queue_reasons else '')|lower %}
+                <div class="small mt-8">
+                  <strong>Queued segment notes:</strong>
+                  <ul class="small">
+                    {% for reason in queue_reasons %}
+                      <li>
+                        {{ reason.count }}: {{ reason.message }}
+                        {% if reason.next_poll_at %} (next retry UTC: {{ reason.next_poll_at.isoformat() }}){% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </div>
+                {% if '429' in top_queue or 'concurrent' in top_queue or 'maximum batch' in top_queue %}
+                  <div class="small mt-8">
+                    PCL is throttling new batch submissions. This often happens when too many remote batch reports exist.
+                  </div>
+                  <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_reports_cleanup') }}" class="mt-8">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="next" value="{{ request.full_path }}">
+                    <button class="pill" type="submit">Cleanup Remote PCL Reports</button>
+                  </form>
+                {% endif %}
               {% endif %}
             </div>
-          {% else %}
-            <div class="small mt-8">
-              This run should begin as soon as a worker tick submits the first segment.
+          {% endif %}
+
+          {% if segment_statuses.get('failed', 0) %}
+            {% set top_failure = (failure_reasons[0].message if failure_reasons else '')|lower %}
+            <div class="flash error">
+              <strong>Some segments failed.</strong>
+              {% if failure_reasons %}
+                <div class="small mt-8">
+                  <strong>Top failure reasons:</strong>
+                  <ul class="small">
+                    {% for reason in failure_reasons %}
+                      <li>{{ reason.count }}: {{ reason.message }}</li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              {% endif %}
+              <div class="small mt-8">
+                Next step:
+                {% if 'token' in top_failure or 'expired' in top_failure or 'authorization' in top_failure or 'authorisation' in top_failure %}
+                  re-authenticate under
+                  <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>
+                  and retry.
+                {% else %}
+                  check
+                  <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>
+                  and retry.
+                {% endif %}
+              </div>
             </div>
           {% endif %}
-          {% if queue_reasons %}
-            {% set top_queue = (queue_reasons[0].message if queue_reasons else '')|lower %}
-            <div class="small mt-8">
-              <strong>Queued segment notes:</strong>
-              <ul class="small">
-                {% for reason in queue_reasons %}
-                  <li>
-                    {{ reason.count }}: {{ reason.message }}
-                    {% if reason.next_poll_at %} (next retry UTC: {{ reason.next_poll_at.isoformat() }}){% endif %}
-                  </li>
-                {% endfor %}
-              </ul>
-            </div>
-            {% if '429' in top_queue or 'concurrent' in top_queue or 'maximum batch' in top_queue %}
-              <div class="small mt-8">
-                PCL is throttling new batch submissions. This often happens when too many remote batch reports exist.
-                You can clean them up now (safe after you have downloaded/stored results).
+
+          <details class="pacer-status-summary">
+            <summary>
+              <div class="pacer-status-summary__row">
+                <span>Debug</span>
+                <span class="pacer-status-summary__text">
+                  Global slots: {{ global_slot_status['in_flight_count'] }} / {{ remote_slot_limit }}
+                  {% if tick_processed is not none %} · last tick processed {{ tick_processed }} segment(s){% endif %}
+                </span>
+                <span class="pacer-status-summary__hint">expand</span>
               </div>
-              <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_reports_cleanup') }}" class="mt-8">
+            </summary>
+            <div class="pacer-status-details small">
+              <div><strong>Global in-flight:</strong> {{ global_slot_status['in_flight_count'] }} / {{ remote_slot_limit }}</div>
+              <div><strong>Global next poll (UTC):</strong> {% if global_slot_status['next_poll_at'] %}{{ global_slot_status['next_poll_at'].isoformat() }}{% else %}—{% endif %}</div>
+              <div><strong>This page tick:</strong> {% if tick_processed is not none %}processed {{ tick_processed }} segment(s){% else %}not run (missing tick=1){% endif %}</div>
+              {% if global_slot_status['segments'] %}
+                <div class="mt-8"><strong>Sample in-flight segments:</strong></div>
+                <ul class="small">
+                  {% for seg in global_slot_status['segments'] %}
+                    <li>
+                      run #{{ seg['batch_request_id'] }} · {{ (seg['court_id'] or '')|upper }} · {{ seg['status'] }}
+                      · {{ seg['date_filed_from'] }} to {{ seg['date_filed_to'] }}
+                      {% if seg['next_poll_at'] %}· next poll {{ seg['next_poll_at'].isoformat() }}{% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </div>
+          </details>
+
+          <dl class="pcl-detail-list">
+            <div>
+              <dt>Cases discovered</dt>
+              <dd>{{ discovered_total }}</dd>
+            </div>
+            <div>
+              <dt>Judge-filtered matches</dt>
+              <dd>{{ discovered_count }}</dd>
+            </div>
+            <div>
+              <dt>Segments processed</dt>
+              <dd>
+                {{ segment_complete }} / {{ segment_total }}
+                ({{ segment_statuses.get('completed', 0) }} completed, {{ segment_statuses.get('failed', 0) }} failed{% if segment_statuses.get('cancelled', 0) %}, {{ segment_statuses.get('cancelled', 0) }} cancelled{% endif %})
+              </dd>
+            </div>
+            <div>
+              <dt>Run state</dt>
+              <dd>{% if is_complete %}ready to review{% else %}collecting{% endif %}</dd>
+            </div>
+          </dl>
+
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ segment_percent }}">
+            <div class="progress-bar" style="width: {{ segment_percent }}%"></div>
+          </div>
+          <div class="progress-meta small">
+            <span>{{ segment_percent }}%</span>
+            <span>{{ segment_complete }} / {{ segment_total }} segments</span>
+          </div>
+
+          {% if discovered_total and not discovered_with_judge %}
+            <p class="small">
+              Note: cases were discovered, but the batch payload did not include judge metadata. If matches stay at 0,
+              you will need to confirm assignment via docket headers during docket enrichment.
+            </p>
+          {% endif %}
+
+          <div class="wizard-actions">
+            <a
+              class="pill"
+              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=1, tick=1) }}"
+            >
+              Refresh now
+            </a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">Start new search</a>
+            {% if not is_complete %}
+              <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_cancel', batch_request_id=batch_request_id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="next" value="{{ request.full_path }}">
-                <button class="pill" type="submit">Cleanup Remote PCL Reports</button>
+                <input type="hidden" name="judge_id" value="{{ judge_id }}">
+                <input type="hidden" name="max_cases" value="{{ max_cases }}">
+                <input type="hidden" name="case_scope" value="{{ case_scope }}">
+                <button class="pill muted" type="submit">Cancel search</button>
+              </form>
+            {% elif segment_statuses.get('failed', 0) %}
+              <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_retry', batch_request_id=batch_request_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="judge_id" value="{{ judge_id }}">
+                <input type="hidden" name="max_cases" value="{{ max_cases }}">
+                <input type="hidden" name="case_scope" value="{{ case_scope }}">
+                <button class="pill" type="submit">Retry failed segments</button>
               </form>
             {% endif %}
-          {% endif %}
-          <div class="small mt-8">
-            Click “Refresh now” below (refresh = reload this page) to run another worker tick.
-          </div>
-        </div>
-      {% endif %}
-
-      {% if segment_statuses.get('failed', 0) %}
-        {% set top_failure = (failure_reasons[0].message if failure_reasons else '')|lower %}
-        <div class="flash error">
-          <strong>Some segments failed.</strong>
-          {% if failure_reasons %}
-            <div class="small mt-8">
-              <strong>Top failure reasons:</strong>
-              <ul class="small">
-                {% for reason in failure_reasons %}
-                  <li>{{ reason.count }}: {{ reason.message }}</li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endif %}
-          <div class="small mt-8">
-            Troubleshooting:
-            {% if 'authorization' in top_failure or 'authorisation' in top_failure or 'token' in top_failure or 'expired' in top_failure %}
-              re-authenticate under
-              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">Get PACER Data</a>,
-              then run a new judge search.
-            {% elif 'court id' in top_failure and 'not recognized' in top_failure %}
-              this usually means the PCL court catalog is not seeded yet.
-              Check
-              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>
-              and then run a new judge search.
-            {% elif 'mismatch' in top_failure %}
-              check PACER environment alignment under
-              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>,
-              then run a new judge search.
-            {% else %}
-              check
-              <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>
-              (token + environment), then run a new judge search.
+            {% if is_complete %}
+              <a
+                class="primary"
+                href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=2) }}"
+              >
+                Continue to review cases
+              </a>
             {% endif %}
           </div>
-        </div>
-      {% endif %}
 
-      <details class="pacer-status-summary">
-        <summary>
-          <div class="pacer-status-summary__row">
-            <span>Debug</span>
-            <span class="pacer-status-summary__text">
-              Global slots: {{ global_slot_status['in_flight_count'] }} / {{ remote_slot_limit }}
-              {% if tick_processed is not none %} · last tick processed {{ tick_processed }} segment(s){% endif %}
-            </span>
-            <span class="pacer-status-summary__hint">expand</span>
-          </div>
-        </summary>
-        <div class="pacer-status-details small">
-          <div><strong>Global in-flight:</strong> {{ global_slot_status['in_flight_count'] }} / {{ remote_slot_limit }}</div>
-          <div><strong>Global next poll (UTC):</strong> {% if global_slot_status['next_poll_at'] %}{{ global_slot_status['next_poll_at'].isoformat() }}{% else %}—{% endif %}</div>
-          <div><strong>This page tick:</strong> {% if tick_processed is not none %}processed {{ tick_processed }} segment(s){% else %}not run (missing tick=1){% endif %}</div>
-          {% if global_slot_status['segments'] %}
-            <div class="mt-8"><strong>Sample in-flight segments:</strong></div>
-            <ul class="small">
-              {% for seg in global_slot_status['segments'] %}
-                <li>
-                  run #{{ seg['batch_request_id'] }} · {{ (seg['court_id'] or '')|upper }} · {{ seg['status'] }}
-                  · {{ seg['date_filed_from'] }} to {{ seg['date_filed_to'] }}
-                  {% if seg['next_poll_at'] %}· next poll {{ seg['next_poll_at'].isoformat() }}{% endif %}
-                </li>
-              {% endfor %}
-            </ul>
+          {% if not is_complete %}
+            <script>
+              const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=1, tick=1) | tojson }};
+              setTimeout(() => {
+                window.location.assign(refreshUrl);
+              }, 12000);
+            </script>
           {% endif %}
-        </div>
-      </details>
+        </section>
+      {% elif active_step == 2 %}
+        <section class="wizard-step stack">
+          <h3>Step 2: Review cases ({% if case_scope == 'all' %}all discovered{% else %}judge-filtered matches{% endif %})</h3>
+          <p class="small">Showing {{ display_rows|length }} case(s). This list is ordered newest-to-oldest.</p>
 
-      <dl class="pcl-detail-list">
-        <div>
-          <dt>Total cases discovered</dt>
-          <dd>{{ discovered_total }}</dd>
-        </div>
-      <div>
-        <dt>Discovered matches</dt>
-        <dd>{{ discovered_count }}</dd>
-      </div>
-      <div>
-        <dt>Judge metadata present</dt>
-        <dd>{{ discovered_with_judge }}</dd>
-      </div>
-      <div>
-        <dt>Discovery cap</dt>
-        <dd>{% if max_cases > 0 %}Limited to {{ max_cases }}{% else %}Full search requested{% endif %}</dd>
-      </div>
-      <div>
-        <dt>Segments finished</dt>
-        <dd>
-          {{ segment_complete }} / {{ segment_total }}
-          ({{ segment_statuses.get('completed', 0) }} completed, {{ segment_statuses.get('failed', 0) }} failed{% if segment_statuses.get('cancelled', 0) %}, {{ segment_statuses.get('cancelled', 0) }} cancelled{% endif %})
-        </dd>
-      </div>
-      <div>
-        <dt>Segments queued</dt>
-        <dd>{{ segment_statuses.get('queued', 0) }}</dd>
-      </div>
-      <div>
-        <dt>Segments in flight</dt>
-        <dd>{{ segments_in_flight }}</dd>
-      </div>
-      <div>
-        <dt>Next poll (UTC)</dt>
-        <dd>{% if next_poll_at %}{{ next_poll_at.isoformat() }}{% else %}—{% endif %}</dd>
-      </div>
-      <div>
-        <dt>Run state</dt>
-        <dd>{% if is_complete %}search complete{% else %}still collecting results{% endif %}</dd>
-      </div>
-    </dl>
+          <div class="actions">
+            <a
+              class="pill {% if case_scope != 'all' %}is-current{% endif %}"
+              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='matched', step=2) }}"
+            >
+              Show matches
+            </a>
+            <a
+              class="pill {% if case_scope == 'all' %}is-current{% endif %}"
+              href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='all', step=2) }}"
+            >
+              Show all discovered
+            </a>
+          </div>
 
-    {% set segment_percent = 0 %}
-    {% if segment_total > 0 %}
-      {% set segment_percent = (segment_complete * 100) // segment_total %}
-    {% endif %}
-    <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ segment_percent }}">
-      <div class="progress-bar" style="width: {{ segment_percent }}%"></div>
-    </div>
-    <div class="progress-meta small">
-      <span>{{ segment_percent }}%</span>
-      <span>{{ segment_complete }} / {{ segment_total }} segments</span>
-    </div>
+          {% if display_rows %}
+            <div class="table-wrap">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>Case</th>
+                    <th>Jurisdiction</th>
+                    <th>Type</th>
+                    <th>Date filed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for case in display_rows %}
+                    <tr>
+                      <td>
+                        <a class="pacer-text-link" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">
+                          {{ case.case_number_full or case.case_number }}
+                        </a>
+                        <div class="small">{{ case.short_title or case.case_title or "Untitled case" }}</div>
+                      </td>
+                      <td>{{ case.court_id }}</td>
+                      <td>{{ case.case_type or "—" }}</td>
+                      <td>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            {% if case_scope == 'all' %}
+              <p class="small">No cases discovered for this run.</p>
+            {% else %}
+              <p class="small">No judge-filtered matches. If cases were discovered, try “Show all discovered”.</p>
+            {% endif %}
+          {% endif %}
 
-    {% if discovered_total and not discovered_with_judge %}
-      <p class="small">
-        Note: this run discovered cases, but the batch case payload did not include judge metadata. If matches stay at 0,
-        you will need to confirm assignment via docket headers (Assigned to: ...) during docket enrichment.
-      </p>
-    {% endif %}
-
-    <div class="actions mt-12">
-      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, tick=1) }}">
-        Refresh now
-      </a>
-      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">
-        Start new judge search
-      </a>
-      {% if not is_complete %}
-        <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_cancel', batch_request_id=batch_request_id) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="judge_id" value="{{ judge_id }}">
-          <input type="hidden" name="max_cases" value="{{ max_cases }}">
-          <input type="hidden" name="case_scope" value="{{ case_scope }}">
-          <button class="pill muted" type="submit">Cancel search</button>
-        </form>
-      {% elif segment_statuses.get('failed', 0) %}
-        <form method="post" action="{{ url_for('admin_federal_data_dashboard_judge_search_retry', batch_request_id=batch_request_id) }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <input type="hidden" name="judge_id" value="{{ judge_id }}">
-          <input type="hidden" name="max_cases" value="{{ max_cases }}">
-          <input type="hidden" name="case_scope" value="{{ case_scope }}">
-          <button class="pill" type="submit">Retry failed segments</button>
-        </form>
-      {% endif %}
-    </div>
-  </section>
-
-  <section class="card stack">
-    <h3>Step 2: Review cases ({% if case_scope == 'all' %}all discovered{% else %}judge-filtered matches{% endif %})</h3>
-    <p class="small">
-      Showing {{ display_rows|length }} case(s). This list is ordered newest-to-oldest.
-    </p>
-
-    <div class="actions">
-      <a
-        class="pill {% if case_scope != 'all' %}is-current{% endif %}"
-        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='matched', tick=1) }}"
-      >
-        Show matches
-      </a>
-      <a
-        class="pill {% if case_scope == 'all' %}is-current{% endif %}"
-        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='all', tick=1) }}"
-      >
-        Show all discovered
-      </a>
-    </div>
-
-    {% if not is_complete %}
-      <p class="small">Background search is active. This page auto-refreshes every 12 seconds.</p>
-      <script>
-        const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, tick=1) | tojson }};
-        setTimeout(() => {
-          window.location.assign(refreshUrl);
-        }, 12000);
-      </script>
-    {% endif %}
-
-    {% if display_rows %}
-      <div class="table-wrap">
-        <table class="admin-table">
-          <thead>
-            <tr>
-              <th>Case</th>
-              <th>Jurisdiction</th>
-              <th>Type</th>
-              <th>Date filed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for case in display_rows %}
-              <tr>
-                <td>
-                  <a class="pacer-text-link" href="{{ url_for('admin_pcl_case_detail', case_id=case.id) }}">
-                    {{ case.case_number_full or case.case_number }}
-                  </a>
-                  <div class="small">{{ case.short_title or case.case_title or "Untitled case" }}</div>
-                </td>
-                <td>{{ case.court_id }}</td>
-                <td>{{ case.case_type or "—" }}</td>
-                <td>{{ case.date_filed.isoformat() if case.date_filed else "—" }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      {% if case_scope == 'all' %}
-        <p class="small">No cases discovered yet. If the run is still in progress, refresh for updates.</p>
+          <div class="wizard-actions">
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=1) }}">Back</a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=2, tick=1) }}">Refresh</a>
+            {% if display_rows %}
+              <a class="primary" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=3) }}">Continue to queue dockets</a>
+            {% endif %}
+          </div>
+        </section>
       {% else %}
-        <p class="small">No judge-filtered matches yet. If cases were discovered, try “Show all discovered”.</p>
-      {% endif %}
-    {% endif %}
-  </section>
+        <section class="wizard-step stack">
+          <h3>Step 3: Pull docket histories</h3>
+          {% if display_rows %}
+            <p class="small">
+              Queue these cases for docket enrichment. Leave “Include docket text” checked unless you are minimizing cost.
+            </p>
+            <form
+              method="post"
+              action="{{ url_for('admin_federal_data_dashboard_judge_search_queue', batch_request_id=batch_request_id) }}"
+              class="stack"
+            >
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="judge_id" value="{{ judge_id }}">
+              <input type="hidden" name="max_cases" value="{{ max_cases }}">
+              <input type="hidden" name="case_scope" value="{{ case_scope }}">
+              <label>
+                <input type="checkbox" name="include_docket_text" value="1" checked>
+                Include docket text when queueing
+              </label>
+              <label>
+                <input type="checkbox" name="start_docket_worker" value="1">
+                Start docket worker now (runs one batch)
+              </label>
+              <label>
+                Docket worker batch size
+                <input type="number" name="max_docket_jobs" min="1" max="200" value="50">
+              </label>
+              <button class="primary" type="submit">
+                {% if case_scope == 'all' %}Add discovered cases to docket queue{% else %}Add matched cases to docket queue{% endif %}
+              </button>
+            </form>
+          {% else %}
+            {% if case_scope == 'all' %}
+              <p class="small">This step unlocks once discovered cases appear in Step 2.</p>
+            {% else %}
+              <p class="small">This step unlocks once judge-filtered matches appear in Step 2.</p>
+            {% endif %}
+          {% endif %}
 
-  <section class="card stack">
-    <h3>Step 3: Pull docket histories</h3>
-    {% if display_rows %}
-      <p class="small">
-        When ready, queue these cases for docket enrichment. You can leave “Include docket text” checked.
-      </p>
-      <form
-        method="post"
-        action="{{ url_for('admin_federal_data_dashboard_judge_search_queue', batch_request_id=batch_request_id) }}"
-        class="stack"
-      >
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <input type="hidden" name="judge_id" value="{{ judge_id }}">
-        <input type="hidden" name="max_cases" value="{{ max_cases }}">
-        <input type="hidden" name="case_scope" value="{{ case_scope }}">
-        <label>
-          <input type="checkbox" name="include_docket_text" value="1" checked>
-          Include docket text when queueing
-        </label>
-        <label>
-          <input type="checkbox" name="start_docket_worker" value="1">
-          Start docket worker now (runs one batch)
-        </label>
-        <label>
-          Docket worker batch size
-          <input type="number" name="max_docket_jobs" min="1" max="200" value="50">
-        </label>
-        <button class="primary" type="submit">
-          {% if case_scope == 'all' %}Add discovered cases to docket queue{% else %}Add matched cases to docket queue{% endif %}
-        </button>
-      </form>
-    {% else %}
-      {% if case_scope == 'all' %}
-        <p class="small">This step unlocks once discovered cases appear above.</p>
-      {% else %}
-        <p class="small">This step unlocks once judge-filtered matches appear above. If cases were discovered, try “Show all discovered”.</p>
+          <div class="wizard-actions">
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=2) }}">Back</a>
+            <a class="pill" href="{{ url_for('admin_docket_enrichment_dashboard') }}">Open docket queue</a>
+            <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, step=3, tick=1) }}">Refresh</a>
+          </div>
+        </section>
       {% endif %}
-    {% endif %}
+    </div>
   </section>
 {% endblock %}

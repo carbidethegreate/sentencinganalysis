@@ -8647,39 +8647,72 @@ def create_app() -> Flask:
             "segments": [dict(row) for row in sample_rows],
         }
 
+    def _summarize_batch_segment_message(message: Any) -> str:
+        cleaned = str(message or "").strip()
+        if not cleaned:
+            return ""
+        lower = cleaned.lower()
+
+        if lower.startswith("worker exception:"):
+            cleaned = cleaned[len("worker exception:") :].strip()
+            lower = cleaned.lower()
+
+        if "uq_pcl_cases_court_case_number_full" in lower:
+            return "Duplicate case already exists (uq_pcl_cases_court_case_number_full)."
+        if "uq_pcl_cases_court_case_id" in lower:
+            return "Duplicate case already exists (uq_pcl_cases_court_case_id)."
+        if (
+            "exceeded maximum batch jobs running concurrently" in lower
+            or "maximum batch jobs running concurrently" in lower
+            or "error - 429" in lower
+            or "status 429" in lower
+            or "too many requests" in lower
+        ):
+            return "PCL throttled batch submissions (429: too many concurrent batch jobs)."
+        if "token expired or invalid" in lower or "needs re authorization" in lower:
+            return "PACER token expired/invalid. Re-authorize under Get PACER Data."
+        if "environment mismatch" in lower:
+            return "PACER/PCL environment mismatch. Check Health Checks."
+        if "court id is not recognized" in lower:
+            return "Court ID not recognized. Select a valid district court."
+        if "pcl rejected the request parameters" in lower or "invalid field" in lower:
+            return "PCL rejected the request parameters."
+
+        # Strip common SQLAlchemy/driver noise to keep the UI readable.
+        for needle in ("[sql:", "[parameters:", "(background on this error", "background on this error"):
+            idx = lower.find(needle)
+            if idx > 0:
+                cleaned = cleaned[:idx].strip()
+                lower = cleaned.lower()
+
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        if len(cleaned) > 220:
+            cleaned = cleaned[:217] + "..."
+        return cleaned
+
     def _load_batch_segment_failure_reasons(
         batch_request_id: int, *, limit: int = 5
     ) -> List[Dict[str, Any]]:
         batch_segments = pcl_tables["pcl_batch_segments"]
-        message_expr = func.trim(
-            func.coalesce(batch_segments.c.error_message, batch_segments.c.remote_status_message, "")
-        )
         stmt = (
-            select(
-                message_expr.label("message"),
-                func.count().label("failure_count"),
-            )
+            select(batch_segments.c.error_message, batch_segments.c.remote_status_message)
             .where(batch_segments.c.batch_request_id == batch_request_id)
             .where(batch_segments.c.status == "failed")
-            .where(message_expr != "")
-            .group_by(message_expr)
-            .order_by(func.count().desc())
-            .limit(max(1, int(limit)))
         )
         with engine.begin() as conn:
             rows = conn.execute(stmt).mappings().all()
-        reasons: List[Dict[str, Any]] = []
+        counts: Dict[str, int] = {}
         for row in rows:
-            message = str(row.get("message") or "").strip()
-            if not message:
+            raw = row.get("error_message") or row.get("remote_status_message") or ""
+            summarized = _summarize_batch_segment_message(raw)
+            if not summarized:
                 continue
-            reasons.append(
-                {
-                    "message": message,
-                    "count": int(row.get("failure_count") or 0),
-                }
-            )
-        return reasons
+            counts[summarized] = counts.get(summarized, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+        return [
+            {"message": message, "count": int(count)}
+            for message, count in ranked[: max(1, int(limit))]
+        ]
 
     def _estimate_kearney_docket_runs(*, include_docket_text: bool) -> Dict[str, Any]:
         filters = _build_kearney_docket_filters()
@@ -10408,6 +10441,8 @@ def create_app() -> Flask:
                     batch_request_id,
                 )
 
+        requested_step = _parse_optional_int(request.args.get("step") or None)
+
         max_cases = _parse_optional_int(request.args.get("max_cases") or None)
         if max_cases is None:
             max_cases = 0
@@ -10452,6 +10487,9 @@ def create_app() -> Flask:
         active_statuses = ("queued", "submitted", "running", "processing")
         segment_active = sum(segment_statuses.get(status, 0) for status in active_statuses)
         segment_complete = max(0, segment_total - segment_active)
+        active_step = requested_step if requested_step in {1, 2, 3} else (1 if not is_complete else 2)
+        if not is_complete and active_step != 1:
+            active_step = 1
         return render_template(
             "admin_judge_search_results.html",
             active_page="federal_data_dashboard",
@@ -10460,6 +10498,7 @@ def create_app() -> Flask:
             judge_id=judge_id,
             batch_request=batch_request,
             batch_request_id=batch_request_id,
+            active_step=active_step,
             segment_statuses=segment_statuses,
             discovered_count=discovered_count,
             discovered_total=discovered_total,
@@ -10635,6 +10674,7 @@ def create_app() -> Flask:
                     judge_id=judge_id,
                     max_cases=max_cases or 0,
                     case_scope=case_scope,
+                    step=2,
                 )
             )
 
@@ -10673,6 +10713,7 @@ def create_app() -> Flask:
                 judge_id=judge_id,
                 max_cases=max_cases or 0,
                 case_scope=case_scope,
+                step=3,
             )
         )
 

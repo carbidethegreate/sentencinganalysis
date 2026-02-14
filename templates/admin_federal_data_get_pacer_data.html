@@ -5,15 +5,18 @@
     <div class="card pacer-status-card">
       <div class="pacer-status-card__header">
         <div>
-          <p class="pacer-eyebrow">PACER environments</p>
-          <h2 class="pacer-status-card__title">Environment: {{ pcl_env_label }}</h2>
+          <p class="pacer-eyebrow">Workflow</p>
+          <h2 class="pacer-status-card__title">Specific Judge Workflow</h2>
           <p class="small pacer-status-card__lead">
-            PACER Auth: {{ pacer_auth_env_label }} · PCL: {{ pcl_env_label }} · Billable searches: {{ pacer_env_billable_label }}
+            Pick a district -> select a date range -> set thresholds -> pull a search -> save results to Case Cards
+            -> filter by judge -> pull dockets -> view results.
           </p>
           <p class="small pacer-status-card__meta">
-            PACER_AUTH_BASE_URL host: {{ pacer_auth_host }}<br>
-            PCL_BASE_URL host: {{ pcl_host }}
+            Need token/environment status? Check <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_health_checks') }}">Health Checks</a>.
           </p>
+        </div>
+        <div class="actions">
+          <a class="primary" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">Start workflow</a>
         </div>
       </div>
       {% if pacer_env_mismatch and pacer_env_mismatch_reason %}
@@ -21,20 +24,6 @@
           <strong>Environment mismatch:</strong> {{ pacer_env_mismatch_reason }}
         </div>
       {% endif %}
-    </div>
-    <div class="card pacer-status-card">
-      <div class="pacer-status-card__header">
-        <div>
-          <p class="pacer-eyebrow">Judicial workflow</p>
-          <h2 class="pacer-status-card__title">Search PACER for a Specific Judge</h2>
-          <p class="small pacer-status-card__lead">
-            Start from this workflow to find cases assigned to a judge (including MAK), set a date range, then queue dockets.
-          </p>
-        </div>
-        <div class="actions">
-          <a class="primary" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">Go to Judge Search</a>
-        </div>
-      </div>
     </div>
     {% if pacer_authenticated %}
       <div class="card pacer-status-card">

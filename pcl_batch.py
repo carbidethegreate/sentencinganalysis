@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from sqlalchemy import Table, case, func, insert, select, update
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from pacer_http import PacerEnvironmentMismatch, TokenExpired
@@ -18,6 +19,52 @@ from pcl_client import PclApiError, PclClient
 
 CRIMINAL_CASE_TYPES = {"cr", "crim", "ncrim", "dcrim"}
 PCL_BATCH_CAP = 108000
+
+
+def _compact_error_text(value: Any, *, limit: int = 260) -> str:
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        return ""
+    lowered = cleaned.lower()
+    for needle in ("[sql:", "[parameters:", "(background on this error", "background on this error"):
+        idx = lowered.find(needle)
+        if idx > 0:
+            cleaned = cleaned[:idx].strip()
+            lowered = cleaned.lower()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if len(cleaned) > limit:
+        return cleaned[: limit - 3] + "..."
+    return cleaned
+
+
+def _extract_unique_constraint_name(exc: IntegrityError) -> Optional[str]:
+    """Best-effort extraction of the Postgres unique constraint/index name."""
+
+    orig = getattr(exc, "orig", None)
+    diag = getattr(orig, "diag", None)
+    constraint = getattr(diag, "constraint_name", None) if diag is not None else None
+    if constraint:
+        return str(constraint)
+    rendered = str(orig or exc)
+    match = re.search(r'unique constraint\\s+\"([^\"]+)\"', rendered, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _format_worker_exception(exc: Exception) -> str:
+    if isinstance(exc, IntegrityError):
+        constraint = _extract_unique_constraint_name(exc)
+        if constraint:
+            return f"worker exception: IntegrityError: duplicate key ({constraint})"
+        details = _compact_error_text(getattr(exc, "orig", None) or exc)
+        if details:
+            return f"worker exception: IntegrityError: {details}"
+        return "worker exception: IntegrityError"
+    rendered = _compact_error_text(exc)
+    if rendered:
+        return f"worker exception: {type(exc).__name__}: {rendered}"
+    return f"worker exception: {type(exc).__name__}"
 
 
 @lru_cache(maxsize=1)
@@ -206,7 +253,7 @@ class PclBatchWorker:
                 self._process_segment(segment)
             except Exception as exc:
                 # Never strand a claimed segment in "processing" due to an unexpected error.
-                message = f"worker exception: {type(exc).__name__}: {exc}"
+                message = _format_worker_exception(exc)
                 if self._logger:
                     self._logger.exception(
                         "Unexpected error while processing PCL batch segment %s",
@@ -526,69 +573,109 @@ class PclBatchWorker:
     def _upsert_case(self, conn, normalized: Dict[str, Any]) -> None:
         case_table = self._tables["pcl_cases"]
         if conn.dialect.name == "postgresql":
-            stmt = pg_insert(case_table).values(**normalized)
-            if normalized.get("case_id"):
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["court_id", "case_id"],
-                    index_where=case_table.c.case_id.isnot(None),
-                    set_={
-                        "case_number": stmt.excluded.case_number,
-                        "case_number_full": stmt.excluded.case_number_full,
-                        "case_type": stmt.excluded.case_type,
-                        "date_filed": stmt.excluded.date_filed,
-                        "date_closed": stmt.excluded.date_closed,
-                        "effective_date_closed": stmt.excluded.effective_date_closed,
-                        "short_title": stmt.excluded.short_title,
-                        "case_title": stmt.excluded.case_title,
-                        "case_link": stmt.excluded.case_link,
-                        "case_year": stmt.excluded.case_year,
-                        "case_office": stmt.excluded.case_office,
-                        "judge_last_name": stmt.excluded.judge_last_name,
-                        "source_last_seen_at": stmt.excluded.source_last_seen_at,
-                        "record_hash": stmt.excluded.record_hash,
-                        "last_segment_id": stmt.excluded.last_segment_id,
-                        "data_json": stmt.excluded.data_json,
-                        "updated_at": datetime.utcnow(),
-                    },
+            insert_stmt = pg_insert(case_table).values(**normalized)
+            set_common = {
+                "case_number": insert_stmt.excluded.case_number,
+                "case_number_full": insert_stmt.excluded.case_number_full,
+                "case_type": insert_stmt.excluded.case_type,
+                "date_filed": insert_stmt.excluded.date_filed,
+                "date_closed": insert_stmt.excluded.date_closed,
+                "effective_date_closed": insert_stmt.excluded.effective_date_closed,
+                "short_title": insert_stmt.excluded.short_title,
+                "case_title": insert_stmt.excluded.case_title,
+                "case_link": insert_stmt.excluded.case_link,
+                "case_year": insert_stmt.excluded.case_year,
+                "case_office": insert_stmt.excluded.case_office,
+                "judge_last_name": insert_stmt.excluded.judge_last_name,
+                "source_last_seen_at": insert_stmt.excluded.source_last_seen_at,
+                "record_hash": insert_stmt.excluded.record_hash,
+                "last_segment_id": insert_stmt.excluded.last_segment_id,
+                "data_json": insert_stmt.excluded.data_json,
+                "updated_at": datetime.utcnow(),
+            }
+
+            def _upsert_by_case_id() -> None:
+                try:
+                    conn.execute(
+                        insert_stmt.on_conflict_do_update(
+                            index_elements=["court_id", "case_id"],
+                            index_where=case_table.c.case_id.isnot(None),
+                            set_=set_common,
+                        )
+                    )
+                except ProgrammingError:
+                    # Some environments use a non-partial unique constraint/index.
+                    conn.execute(
+                        insert_stmt.on_conflict_do_update(
+                            index_elements=["court_id", "case_id"],
+                            set_=set_common,
+                        )
+                    )
+
+            def _upsert_by_case_number_full() -> None:
+                # Never blank-out an existing case_id when the incoming record is missing it.
+                set_with_case_id = dict(
+                    set_common,
+                    case_id=func.coalesce(insert_stmt.excluded.case_id, case_table.c.case_id),
                 )
-            else:
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["court_id", "case_number_full"],
-                    index_where=case_table.c.case_number_full.isnot(None),
-                    set_={
-                        "case_number": stmt.excluded.case_number,
-                        "case_number_full": stmt.excluded.case_number_full,
-                        "case_type": stmt.excluded.case_type,
-                        "date_filed": stmt.excluded.date_filed,
-                        "date_closed": stmt.excluded.date_closed,
-                        "effective_date_closed": stmt.excluded.effective_date_closed,
-                        "short_title": stmt.excluded.short_title,
-                        "case_title": stmt.excluded.case_title,
-                        "case_link": stmt.excluded.case_link,
-                        "case_year": stmt.excluded.case_year,
-                        "case_office": stmt.excluded.case_office,
-                        "judge_last_name": stmt.excluded.judge_last_name,
-                        "case_id": stmt.excluded.case_id,
-                        "source_last_seen_at": stmt.excluded.source_last_seen_at,
-                        "record_hash": stmt.excluded.record_hash,
-                        "last_segment_id": stmt.excluded.last_segment_id,
-                        "data_json": stmt.excluded.data_json,
-                        "updated_at": datetime.utcnow(),
-                    },
-                )
-            conn.execute(stmt)
+                try:
+                    conn.execute(
+                        insert_stmt.on_conflict_do_update(
+                            index_elements=["court_id", "case_number_full"],
+                            index_where=case_table.c.case_number_full.isnot(None),
+                            set_=set_with_case_id,
+                        )
+                    )
+                except ProgrammingError:
+                    # Some environments use a full unique constraint (non-partial).
+                    conn.execute(
+                        insert_stmt.on_conflict_do_update(
+                            index_elements=["court_id", "case_number_full"],
+                            set_=set_with_case_id,
+                        )
+                    )
+
+            case_id = normalized.get("case_id")
+            try:
+                if case_id:
+                    _upsert_by_case_id()
+                else:
+                    _upsert_by_case_number_full()
+            except IntegrityError as exc:
+                constraint = _extract_unique_constraint_name(exc)
+                # We can receive a different unique constraint violation than the conflict target.
+                # Retry using the alternate unique key to merge the record.
+                if constraint == "uq_pcl_cases_court_case_number_full":
+                    _upsert_by_case_number_full()
+                    return
+                if constraint == "uq_pcl_cases_court_case_id" and case_id:
+                    _upsert_by_case_id()
+                    return
+                raise
             return
-        lookup_filters = [case_table.c.court_id == normalized["court_id"]]
-        if normalized.get("case_id"):
-            lookup_filters.append(case_table.c.case_id == normalized["case_id"])
-        else:
-            lookup_filters.append(
-                case_table.c.case_number_full == normalized["case_number_full"]
-            )
-        existing = conn.execute(
-            select(case_table.c.id).where(*lookup_filters)
-        ).fetchone()
+
+        court_id = normalized["court_id"]
+        case_id = normalized.get("case_id")
+        case_number_full = normalized.get("case_number_full")
+
+        existing = None
+        if case_id:
+            existing = conn.execute(
+                select(case_table.c.id).where(
+                    case_table.c.court_id == court_id, case_table.c.case_id == case_id
+                )
+            ).fetchone()
+        if existing is None and case_number_full:
+            existing = conn.execute(
+                select(case_table.c.id).where(
+                    case_table.c.court_id == court_id,
+                    case_table.c.case_number_full == case_number_full,
+                )
+            ).fetchone()
         if existing:
+            case_id_value = (
+                case_id if case_id is not None else case_table.c.case_id
+            )
             conn.execute(
                 update(case_table)
                 .where(case_table.c.id == existing.id)
@@ -605,7 +692,7 @@ class PclBatchWorker:
                     judge_last_name=normalized["judge_last_name"],
                     case_number=normalized["case_number"],
                     case_number_full=normalized["case_number_full"],
-                    case_id=normalized["case_id"],
+                    case_id=case_id_value,
                     source_last_seen_at=normalized["source_last_seen_at"],
                     record_hash=normalized["record_hash"],
                     last_segment_id=normalized["last_segment_id"],
@@ -613,8 +700,53 @@ class PclBatchWorker:
                     updated_at=datetime.utcnow(),
                 )
             )
-        else:
+            return
+
+        try:
             conn.execute(insert(case_table).values(**normalized))
+        except IntegrityError:
+            # Another worker inserted concurrently. Retry as an update.
+            existing = None
+            if case_number_full:
+                existing = conn.execute(
+                    select(case_table.c.id).where(
+                        case_table.c.court_id == court_id,
+                        case_table.c.case_number_full == case_number_full,
+                    )
+                ).fetchone()
+            if existing is None and case_id:
+                existing = conn.execute(
+                    select(case_table.c.id).where(
+                        case_table.c.court_id == court_id, case_table.c.case_id == case_id
+                    )
+                ).fetchone()
+            if not existing:
+                raise
+            case_id_value = case_id if case_id is not None else case_table.c.case_id
+            conn.execute(
+                update(case_table)
+                .where(case_table.c.id == existing.id)
+                .values(
+                    case_type=normalized["case_type"],
+                    date_filed=normalized["date_filed"],
+                    date_closed=normalized["date_closed"],
+                    effective_date_closed=normalized["effective_date_closed"],
+                    short_title=normalized["short_title"],
+                    case_title=normalized["case_title"],
+                    case_link=normalized["case_link"],
+                    case_year=normalized["case_year"],
+                    case_office=normalized["case_office"],
+                    judge_last_name=normalized["judge_last_name"],
+                    case_number=normalized["case_number"],
+                    case_number_full=normalized["case_number_full"],
+                    case_id=case_id_value,
+                    source_last_seen_at=normalized["source_last_seen_at"],
+                    record_hash=normalized["record_hash"],
+                    last_segment_id=normalized["last_segment_id"],
+                    data_json=normalized["data_json"],
+                    updated_at=datetime.utcnow(),
+                )
+            )
 
     def _persist_receipt(
         self, segment: Dict[str, Any], report_id: str, receipt: Dict[str, Any]
