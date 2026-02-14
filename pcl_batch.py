@@ -5,7 +5,7 @@ import json
 import random
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -19,6 +19,14 @@ from pcl_client import PclApiError, PclClient
 
 CRIMINAL_CASE_TYPES = {"cr", "crim", "ncrim", "dcrim"}
 PCL_BATCH_CAP = 108000
+
+
+def _to_naive_utc(value: Any) -> Any:
+    if not isinstance(value, datetime):
+        return value
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _compact_error_text(value: Any, *, limit: int = 260) -> str:
@@ -267,7 +275,7 @@ class PclBatchWorker:
         self, max_segments: int, *, batch_request_id: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         segment_table = self._tables["pcl_batch_segments"]
-        now = self._now()
+        now = _to_naive_utc(self._now())
         pollable = segment_table.c.status.in_(["submitted", "running"]) & (
             (segment_table.c.next_poll_at.is_(None))
             | (segment_table.c.next_poll_at <= now)
@@ -439,8 +447,9 @@ class PclBatchWorker:
         return True
 
     def _poll_segment(self, segment: Dict[str, Any]) -> None:
-        now = self._now()
+        now = _to_naive_utc(self._now())
         next_poll_at = segment.get("next_poll_at")
+        next_poll_at = _to_naive_utc(next_poll_at)
         if next_poll_at and isinstance(next_poll_at, datetime) and next_poll_at > now:
             # This segment was claimed too early (or time drifted). Put it back so it can be
             # claimed again when it is actually due.

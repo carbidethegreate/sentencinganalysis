@@ -9264,18 +9264,57 @@ def create_app() -> Flask:
                 processed_total += processed
 
                 if max_case_limit is not None and max_case_limit > 0:
-                    discovered = _count_judge_search_discovered_cases(
-                        batch_request_id,
-                        judge_last_name=judge_last_name,
-                        judge_initials=judge_initials,
-                    )
-                    if discovered >= max_case_limit:
+                    discovered_total = _count_cases_in_batch_segments(batch_request_id)
+                    if discovered_total >= max_case_limit:
                         app.logger.info(
                             "Judge search reached requested case cap: batch_request_id=%s, found=%s, cap=%s",
                             batch_request_id,
-                            discovered,
+                            discovered_total,
                             max_case_limit,
                         )
+                        # Mark remaining segments cancelled so the UI can advance to the next step.
+                        reason = f"cancelled: discovery cap reached ({discovered_total} >= {max_case_limit})"
+                        batch_segments = pcl_tables["pcl_batch_segments"]
+                        cancellable = {"queued", "submitted", "running", "processing"}
+                        with engine.begin() as conn:
+                            segments = (
+                                conn.execute(
+                                    select(batch_segments.c.id, batch_segments.c.report_id)
+                                    .where(batch_segments.c.batch_request_id == batch_request_id)
+                                    .where(batch_segments.c.status.in_(sorted(cancellable)))
+                                )
+                                .mappings()
+                                .all()
+                            )
+
+                        # Best-effort cleanup: delete any remote reports we no longer need.
+                        for seg in segments:
+                            report_id = (seg.get("report_id") or "").strip()
+                            if not report_id:
+                                continue
+                            try:
+                                pcl_background_client.delete_case_report(report_id)
+                            except Exception:
+                                app.logger.info(
+                                    "Failed to delete remote PCL case report during cap cleanup: report_id=%s",
+                                    report_id,
+                                )
+
+                        with engine.begin() as conn:
+                            conn.execute(
+                                update(batch_segments)
+                                .where(batch_segments.c.batch_request_id == batch_request_id)
+                                .where(batch_segments.c.status.in_(sorted(cancellable)))
+                                .values(
+                                    status="cancelled",
+                                    remote_status="cancelled",
+                                    error_message=reason,
+                                    remote_status_message=reason,
+                                    next_poll_at=None,
+                                    completed_at=func.now(),
+                                    updated_at=func.now(),
+                                )
+                            )
                         break
 
             app.logger.info(
