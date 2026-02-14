@@ -1204,8 +1204,12 @@ def create_app() -> Flask:
         token_refresher=_refresh_pacer_token_background,
     )
     pcl_client = PclClient(pcl_http_client, pcl_base_url, logger=app.logger)
+    pcl_background_client = PclClient(
+        pcl_background_http_client, pcl_base_url, logger=app.logger
+    )
     app.pcl_client = pcl_client
     app.pcl_background_http_client = pcl_background_http_client
+    app.pcl_background_client = pcl_background_client
 
     # -----------------
     # Helpers
@@ -7977,6 +7981,11 @@ def create_app() -> Flask:
         env_config = app.config.get("PACER_ENV_CONFIG") or {}
         pacer_env_ok = not bool(app.config.get("PACER_ENV_MISMATCH"))
         pacer_env_reason = app.config.get("PACER_ENV_MISMATCH_REASON")
+        build_info = {
+            "render_git_commit": os.environ.get("RENDER_GIT_COMMIT") or "",
+            "render_git_branch": os.environ.get("RENDER_GIT_BRANCH") or "",
+            "server_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
         pcl_courts_count = None
         pcl_courts_error = None
         try:
@@ -8008,6 +8017,7 @@ def create_app() -> Flask:
             pcl_courts_count=pcl_courts_count,
             pcl_courts_error=pcl_courts_error,
             service_token_status=service_token_status,
+            build_info=build_info,
         )
 
     @app.get("/admin/federal-data-dashboard/configure-ask-loulou")
@@ -8126,7 +8136,7 @@ def create_app() -> Flask:
             worker = PclBatchWorker(
                 engine,
                 pcl_tables,
-                pcl_client,
+                pcl_background_client,
                 logger=app.logger,
                 sleep_fn=time.sleep,
             )
@@ -8838,7 +8848,7 @@ def create_app() -> Flask:
         batch_worker = PclBatchWorker(
             engine,
             pcl_tables,
-            pcl_client,
+            pcl_background_client,
             logger=app.logger,
             sleep_fn=time.sleep,
         )
@@ -8941,7 +8951,7 @@ def create_app() -> Flask:
         worker = PclBatchWorker(
             engine,
             pcl_tables,
-            pcl_client,
+            pcl_background_client,
             logger=app.logger,
             sleep_fn=time.sleep,
         )

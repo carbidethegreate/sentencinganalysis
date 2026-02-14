@@ -73,5 +73,13 @@
         </p>
       </article>
     </div>
+
+    {% if build_info %}
+      <p class="small mt-12">
+        Build: {{ build_info.render_git_commit[:7] if build_info.render_git_commit else "unknown" }}
+        {% if build_info.render_git_branch %} ({{ build_info.render_git_branch }}){% endif %}
+        · Server UTC: {{ build_info.server_utc }}
+      </p>
+    {% endif %}
   </section>
 {% endblock %}
