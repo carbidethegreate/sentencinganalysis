@@ -16,8 +16,16 @@
     <h3>Search status</h3>
     <dl class="pcl-detail-list">
       <div>
+        <dt>Total cases discovered</dt>
+        <dd>{{ discovered_total }}</dd>
+      </div>
+      <div>
         <dt>Discovered matches</dt>
         <dd>{{ discovered_count }}</dd>
+      </div>
+      <div>
+        <dt>Judge metadata present</dt>
+        <dd>{{ discovered_with_judge }}</dd>
       </div>
       <div>
         <dt>Discovery cap</dt>
@@ -34,6 +42,13 @@
         <dd>{% if is_complete %}search complete{% else %}still collecting results{% endif %}</dd>
       </div>
     </dl>
+
+    {% if discovered_total and not discovered_with_judge %}
+      <p class="small">
+        Note: this run discovered cases, but the batch case payload did not include judge metadata. If matches stay at 0,
+        you will need to confirm assignment via docket headers (Assigned to: ...) during docket enrichment.
+      </p>
+    {% endif %}
 
     <div class="actions mt-12">
       <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases) }}">

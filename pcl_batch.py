@@ -712,6 +712,12 @@ def _normalize_judge_last_name(value: Any) -> Optional[str]:
     cleaned = value.strip()
     if not cleaned:
         return None
+    # Handle "Last, First ..." formats.
+    if "," in cleaned:
+        left = cleaned.split(",", 1)[0].strip()
+        left = left.strip(",.")
+        if left:
+            return left
     tokens = [token for token in re.split(r"\s+", cleaned) if token]
     if not tokens:
         return None

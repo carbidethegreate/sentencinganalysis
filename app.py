@@ -8142,8 +8142,13 @@ def create_app() -> Flask:
         clauses: List[Any] = []
         normalized_last_name = (judge_last_name or "").strip().lower()
         if normalized_last_name:
+            # Batch case downloads do not always normalize judge fields consistently.
+            # Use a contains match to tolerate "Last, First" and other variants.
+            like_pattern = f"%{normalized_last_name}%"
             clauses.append(
-                func.lower(func.coalesce(pcl_cases.c.judge_last_name, "")) == normalized_last_name
+                func.lower(func.trim(func.coalesce(pcl_cases.c.judge_last_name, ""))).like(
+                    like_pattern
+                )
             )
         normalized_initials = (judge_initials or "").strip().lower()
         if normalized_initials:
@@ -8159,6 +8164,42 @@ def create_app() -> Flask:
                 )
             )
         return clauses
+
+    def _count_cases_in_batch_segments(batch_request_id: int) -> int:
+        pcl_cases = pcl_tables["pcl_cases"]
+        segment_ids = [
+            row["id"]
+            for row in _load_batch_segments_for_request(batch_request_id)
+            if row.get("id") is not None
+        ]
+        if not segment_ids:
+            return 0
+        stmt = (
+            select(func.count())
+            .select_from(pcl_cases)
+            .where(pcl_cases.c.last_segment_id.in_(segment_ids))
+        )
+        with engine.begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
+
+    def _count_cases_with_judge_metadata_in_batch_segments(batch_request_id: int) -> int:
+        pcl_cases = pcl_tables["pcl_cases"]
+        segment_ids = [
+            row["id"]
+            for row in _load_batch_segments_for_request(batch_request_id)
+            if row.get("id") is not None
+        ]
+        if not segment_ids:
+            return 0
+        judge_value = func.trim(func.coalesce(pcl_cases.c.judge_last_name, ""))
+        stmt = (
+            select(func.count())
+            .select_from(pcl_cases)
+            .where(pcl_cases.c.last_segment_id.in_(segment_ids))
+            .where(judge_value != "")
+        )
+        with engine.begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
 
     def _load_batch_request(batch_request_id: int) -> Optional[Dict[str, Any]]:
         batch_requests = pcl_tables["pcl_batch_requests"]
@@ -9825,6 +9866,10 @@ def create_app() -> Flask:
             judge_last_name=preset["judge_last_name"],
             judge_initials=preset["judge_initials"],
         )
+        discovered_total = _count_cases_in_batch_segments(batch_request_id)
+        discovered_with_judge = _count_cases_with_judge_metadata_in_batch_segments(
+            batch_request_id
+        )
         is_complete = _is_batch_request_complete(batch_request_id)
         segment_total = sum(segment_statuses.values())
         segment_complete = segment_statuses.get("completed", 0) + segment_statuses.get(
@@ -9840,6 +9885,8 @@ def create_app() -> Flask:
             batch_request_id=batch_request_id,
             segment_statuses=segment_statuses,
             discovered_count=discovered_count,
+            discovered_total=discovered_total,
+            discovered_with_judge=discovered_with_judge,
             segment_total=segment_total,
             segment_complete=segment_complete,
             display_rows=display_rows["rows"],
