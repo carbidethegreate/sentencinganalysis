@@ -8711,6 +8711,8 @@ def create_app() -> Flask:
             return "Duplicate case already exists (uq_pcl_cases_court_case_number_full)."
         if "uq_pcl_cases_court_case_id" in lower:
             return "Duplicate case already exists (uq_pcl_cases_court_case_id)."
+        if "infailledsqltransaction" in lower or "current transaction is aborted" in lower:
+            return "Database transaction aborted (Postgres). Retry failed segments."
         if (
             "exceeded maximum batch jobs running concurrently" in lower
             or "maximum batch jobs running concurrently" in lower
