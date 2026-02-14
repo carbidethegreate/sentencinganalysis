@@ -81,6 +81,18 @@
         </dd>
       </div>
       <div>
+        <dt>Segments queued</dt>
+        <dd>{{ segment_statuses.get('queued', 0) }}</dd>
+      </div>
+      <div>
+        <dt>Segments in flight</dt>
+        <dd>{{ segment_statuses.get('submitted', 0) + segment_statuses.get('running', 0) + segment_statuses.get('processing', 0) }}</dd>
+      </div>
+      <div>
+        <dt>Next poll (UTC)</dt>
+        <dd>{% if next_poll_at %}{{ next_poll_at.isoformat() }}{% else %}—{% endif %}</dd>
+      </div>
+      <div>
         <dt>Run state</dt>
         <dd>{% if is_complete %}search complete{% else %}still collecting results{% endif %}</dd>
       </div>
@@ -106,7 +118,7 @@
     {% endif %}
 
     <div class="actions mt-12">
-      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope) }}">
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, tick=1) }}">
         Refresh now
       </a>
       <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search') }}">
@@ -141,13 +153,13 @@
     <div class="actions">
       <a
         class="pill {% if case_scope != 'all' %}is-current{% endif %}"
-        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='matched') }}"
+        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='matched', tick=1) }}"
       >
         Show matches
       </a>
       <a
         class="pill {% if case_scope == 'all' %}is-current{% endif %}"
-        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='all') }}"
+        href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope='all', tick=1) }}"
       >
         Show all discovered
       </a>
@@ -156,7 +168,7 @@
     {% if not is_complete %}
       <p class="small">Background search is active. This page auto-refreshes every 12 seconds.</p>
       <script>
-        const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope) | tojson }};
+        const refreshUrl = {{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_id=judge_id, max_cases=max_cases, case_scope=case_scope, tick=1) | tojson }};
         setTimeout(() => {
           window.location.assign(refreshUrl);
         }, 12000);

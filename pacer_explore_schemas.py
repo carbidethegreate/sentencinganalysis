@@ -52,9 +52,8 @@ EXPLORE_PACER_PCL_FIELDS: Dict[str, Set[str]] = {
         "exactNameMatch",
         "firstName",
         "ssn",
-        "courtId",
-        "dateFiledFrom",
-        "dateFiledTo",
+        # Case constraints for party searches (court/date/etc.) must be nested under `courtCase`.
+        "courtCase",
     },
 }
 
@@ -145,11 +144,14 @@ def build_party_search_payload(
     if ui_inputs.get("ssn"):
         body["ssn"] = ui_inputs.get("ssn")
     court_value = ui_inputs.get("court_id") or ui_inputs.get("region_code")
+    court_case: Dict[str, Any] = {}
     if court_value:
-        body["courtId"] = [court_value]
+        court_case["courtId"] = [court_value]
     if include_date_range:
-        body["dateFiledFrom"] = ui_inputs.get("date_filed_from")
-        body["dateFiledTo"] = ui_inputs.get("date_filed_to")
+        court_case["dateFiledFrom"] = ui_inputs.get("date_filed_from")
+        court_case["dateFiledTo"] = ui_inputs.get("date_filed_to")
+    if court_case:
+        body["courtCase"] = court_case
     return body
 
 

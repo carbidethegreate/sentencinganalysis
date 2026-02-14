@@ -393,6 +393,12 @@
         renderCourtSuggestions(queryLower, matches.length);
         syncActiveCourtOption();
 
+        // If the user hasn't explicitly clicked a court yet, allow "Continue" when
+        // there's at least one match (we'll auto-pick the top match on continue).
+        if (courtContinue && !getSelectedCourt()) {
+          courtContinue.disabled = matches.length === 0;
+        }
+
         if (courtMeta) {
           const showing = Math.min(MAX_COURT_RESULTS, matches.length);
           courtMeta.textContent = matches.length
@@ -403,6 +409,8 @@
         if (courtQuery && activeCourtMatchIndex >= 0) {
           courtQuery.setAttribute("aria-activedescendant", `court-option-${activeCourtMatchIndex}`);
         }
+
+        renderSelectedCourt();
       };
 
       const setSelectedCourt = (court) => {
@@ -421,13 +429,17 @@
 
       const renderSelectedCourt = () => {
         const label = activeCourtLabel();
+        const query = (courtQuery && (courtQuery.value || "").trim()) || "";
+        const hasMatches = !label && query && courtMatches.length;
         if (courtSelected) {
           courtSelected.textContent = label
             ? `Selected court: ${label}`
+            : hasMatches
+              ? `Press Continue to select the top match: ${(courtMatches[0].label || courtMatches[0].name || courtMatches[0].id)}`
             : "No court selected yet. Type a court name above and choose a match.";
         }
         if (courtContinue) {
-          courtContinue.disabled = !label;
+          courtContinue.disabled = !(label || hasMatches);
         }
       };
 
@@ -519,6 +531,15 @@
       const validateStep = (step) => {
         if (step === 1) {
           if (!courtHidden || !courtHidden.value) {
+            const query = (courtQuery && (courtQuery.value || "").trim()) || "";
+            if (query && courtMatches.length) {
+              const idx = activeCourtMatchIndex >= 0 ? activeCourtMatchIndex : 0;
+              const court = courtMatches[idx] || courtMatches[0];
+              if (court) {
+                setSelectedCourt(court);
+                return true;
+              }
+            }
             setError(1, "Select a court to continue.");
             return false;
           }

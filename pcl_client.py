@@ -152,12 +152,14 @@ class PclClient:
     def _handle_http_error(self, exc: urllib.error.HTTPError) -> PclJsonResponse:
         body = exc.read()
         details = _safe_json_loads(body) if body else {}
-        message = (
-            str(details.get("message"))
-            or str(details.get("error"))
-            or str(details.get("detail"))
-            or exc.reason
+        message = _first_non_empty_string(
+            details.get("message"),
+            details.get("error"),
+            details.get("detail"),
+            getattr(exc, "reason", None),
         )
+        if not message:
+            message = f"HTTP {exc.code}"
         if self._logger:
             self._logger.warning("PCL API error %s: %s", exc.code, message)
         raise PclApiError(exc.code, message, details=details)
@@ -184,3 +186,28 @@ def _build_path_with_params(
         return path
     query = urlencode(params, doseq=True)
     return f"{path}?{query}"
+
+
+def _first_non_empty_string(*values: Any) -> str:
+    """Return the first value that can be rendered as a non-empty string.
+
+    Guards against the common `str(None) == "None"` pitfall when parsing API errors.
+    """
+
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (dict, list)):
+            try:
+                rendered = json.dumps(value, sort_keys=True, default=str)
+            except Exception:
+                rendered = str(value)
+        else:
+            rendered = str(value)
+        rendered = rendered.strip()
+        if not rendered:
+            continue
+        if rendered.lower() == "none":
+            continue
+        return rendered
+    return ""

@@ -6323,14 +6323,17 @@ def create_app() -> Flask:
                         "caseType": request_body.get("caseType", []),
                     }
                 else:
+                    court_case = request_body.get("courtCase")
+                    if not isinstance(court_case, dict):
+                        court_case = {}
                     request_summary = {
-                        "courtId": request_body.get("courtId"),
+                        "courtId": court_case.get("courtId"),
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "ssn": request_body.get("ssn"),
-                        "dateFiledFrom": request_body.get("dateFiledFrom"),
-                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "dateFiledFrom": court_case.get("dateFiledFrom"),
+                        "dateFiledTo": court_case.get("dateFiledTo"),
                     }
                 logs.append(
                     {
@@ -6358,14 +6361,17 @@ def create_app() -> Flask:
                         "caseType": request_body.get("caseType", []),
                     }
                 else:
+                    court_case = request_body.get("courtCase")
+                    if not isinstance(court_case, dict):
+                        court_case = {}
                     request_summary = {
-                        "courtId": request_body.get("courtId"),
+                        "courtId": court_case.get("courtId"),
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "ssn": request_body.get("ssn"),
-                        "dateFiledFrom": request_body.get("dateFiledFrom"),
-                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "dateFiledFrom": court_case.get("dateFiledFrom"),
+                        "dateFiledTo": court_case.get("dateFiledTo"),
                     }
                 logs.append(
                     {
@@ -6428,14 +6434,17 @@ def create_app() -> Flask:
                         "caseType": request_body.get("caseType", []),
                     }
                 else:
+                    court_case = request_body.get("courtCase")
+                    if not isinstance(court_case, dict):
+                        court_case = {}
                     request_summary = {
-                        "courtId": request_body.get("courtId"),
+                        "courtId": court_case.get("courtId"),
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "ssn": request_body.get("ssn"),
-                        "dateFiledFrom": request_body.get("dateFiledFrom"),
-                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "dateFiledFrom": court_case.get("dateFiledFrom"),
+                        "dateFiledTo": court_case.get("dateFiledTo"),
                     }
                 logs.append(
                     {
@@ -6464,14 +6473,17 @@ def create_app() -> Flask:
                         "caseType": request_body.get("caseType", []),
                     }
                 else:
+                    court_case = request_body.get("courtCase")
+                    if not isinstance(court_case, dict):
+                        court_case = {}
                     request_summary = {
-                        "courtId": request_body.get("courtId"),
+                        "courtId": court_case.get("courtId"),
                         "lastName": request_body.get("lastName"),
                         "exactNameMatch": request_body.get("exactNameMatch"),
                         "firstName": request_body.get("firstName"),
                         "ssn": request_body.get("ssn"),
-                        "dateFiledFrom": request_body.get("dateFiledFrom"),
-                        "dateFiledTo": request_body.get("dateFiledTo"),
+                        "dateFiledFrom": court_case.get("dateFiledFrom"),
+                        "dateFiledTo": court_case.get("dateFiledTo"),
                     }
                 logs.append(
                     {
@@ -8402,6 +8414,18 @@ def create_app() -> Flask:
                 status_counts[str(row["status"])] = int(row["segment_count"])
         return status_counts
 
+    def _load_batch_next_poll_at(batch_request_id: int) -> Optional[datetime]:
+        batch_segments = pcl_tables["pcl_batch_segments"]
+        stmt = (
+            select(func.min(batch_segments.c.next_poll_at).label("next_poll_at"))
+            .where(batch_segments.c.batch_request_id == batch_request_id)
+            .where(batch_segments.c.status.in_(["submitted", "running"]))
+            .where(batch_segments.c.next_poll_at.isnot(None))
+        )
+        with engine.begin() as conn:
+            value = conn.execute(stmt).scalar_one_or_none()
+        return value if isinstance(value, datetime) else None
+
     def _load_batch_segment_failure_reasons(
         batch_request_id: int, *, limit: int = 5
     ) -> List[Dict[str, Any]]:
@@ -8948,38 +8972,69 @@ def create_app() -> Flask:
         max_case_limit: Optional[int],
         max_batch_iterations: int,
     ) -> None:
-        worker = PclBatchWorker(
-            engine,
-            pcl_tables,
-            pcl_background_client,
-            logger=app.logger,
-            sleep_fn=time.sleep,
-        )
-        max_batch_iterations = max(1, min(3000, int(max_batch_iterations)))
-        for _ in range(max_batch_iterations):
-            processed = worker.run_once(max_segments=5, batch_request_id=batch_request_id)
-            if processed == 0:
-                break
-            if max_case_limit is not None and max_case_limit > 0:
-                discovered = _count_judge_search_discovered_cases(
-                    batch_request_id,
-                    judge_last_name=judge_last_name,
-                    judge_initials=judge_initials,
-                )
-                if discovered >= max_case_limit:
-                    app.logger.info(
-                        "Judge search reached requested case cap: batch_request_id=%s, found=%s, cap=%s",
-                        batch_request_id,
-                        discovered,
-                        max_case_limit,
-                    )
-                    break
+        try:
+            worker = PclBatchWorker(
+                engine,
+                pcl_tables,
+                pcl_background_client,
+                logger=app.logger,
+                sleep_fn=time.sleep,
+            )
 
-        app.logger.info(
-            "Judge search worker finished: batch_request_id=%s, cap=%s",
-            batch_request_id,
-            max_case_limit,
-        )
+            max_batch_iterations = max(1, min(3000, int(max_batch_iterations)))
+            processed_total = 0
+            idle_loops = 0
+
+            # Keep the background runner alive long enough to submit + poll segments.
+            # Even when nothing is ready (e.g., waiting for `next_poll_at`), we should
+            # pause and retry instead of exiting immediately.
+            while processed_total < max_batch_iterations:
+                processed = worker.run_once(
+                    max_segments=5, batch_request_id=batch_request_id
+                )
+
+                if processed == 0:
+                    if _is_batch_request_complete(batch_request_id):
+                        break
+                    idle_loops += 1
+                    if idle_loops >= 600:
+                        app.logger.info(
+                            "Judge search worker idle too long; stopping background loop: batch_request_id=%s",
+                            batch_request_id,
+                        )
+                        break
+                    time.sleep(2)
+                    continue
+
+                idle_loops = 0
+                processed_total += processed
+
+                if max_case_limit is not None and max_case_limit > 0:
+                    discovered = _count_judge_search_discovered_cases(
+                        batch_request_id,
+                        judge_last_name=judge_last_name,
+                        judge_initials=judge_initials,
+                    )
+                    if discovered >= max_case_limit:
+                        app.logger.info(
+                            "Judge search reached requested case cap: batch_request_id=%s, found=%s, cap=%s",
+                            batch_request_id,
+                            discovered,
+                            max_case_limit,
+                        )
+                        break
+
+            app.logger.info(
+                "Judge search worker finished: batch_request_id=%s, cap=%s, processed=%s",
+                batch_request_id,
+                max_case_limit,
+                processed_total,
+            )
+        except Exception:
+            app.logger.exception(
+                "Error while running judge search worker: batch_request_id=%s",
+                batch_request_id,
+            )
 
     def _is_batch_request_complete(batch_request_id: int) -> bool:
         status_counts = _load_batch_segment_status_summary(batch_request_id)
@@ -10091,6 +10146,7 @@ def create_app() -> Flask:
                 batch_request_id=batch_request_id,
                 judge_id=judge_id,
                 max_cases=max_case_limit or 0,
+                tick=1,
             )
         )
 
@@ -10106,12 +10162,31 @@ def create_app() -> Flask:
         if not batch_request:
             abort(404)
 
+        tick = (request.args.get("tick") or "").strip().lower() in {"1", "true", "yes"}
+        if tick:
+            try:
+                worker = PclBatchWorker(
+                    engine,
+                    pcl_tables,
+                    pcl_background_client,
+                    logger=app.logger,
+                    sleep_fn=(lambda _: None),
+                )
+                # Keep request latency bounded: run a single small worker tick.
+                worker.run_once(max_segments=3, batch_request_id=batch_request_id)
+            except Exception:
+                app.logger.exception(
+                    "Judge search tick failed: batch_request_id=%s",
+                    batch_request_id,
+                )
+
         max_cases = _parse_optional_int(request.args.get("max_cases") or None)
         if max_cases is None:
             max_cases = 0
         max_cases = max(0, max_cases)
 
         segment_statuses = _load_batch_segment_status_summary(batch_request_id)
+        next_poll_at = _load_batch_next_poll_at(batch_request_id)
         failure_reasons: List[Dict[str, Any]] = []
         if segment_statuses.get("failed", 0) > 0:
             failure_reasons = _load_batch_segment_failure_reasons(batch_request_id, limit=6)
@@ -10157,6 +10232,7 @@ def create_app() -> Flask:
             segment_total=segment_total,
             segment_complete=segment_complete,
             failure_reasons=failure_reasons,
+            next_poll_at=next_poll_at,
             display_rows=display_rows["rows"],
             max_cases=max_cases,
             case_scope=case_scope,
@@ -10202,6 +10278,7 @@ def create_app() -> Flask:
                 judge_id=judge_id,
                 max_cases=max_cases or 0,
                 case_scope=case_scope,
+                tick=1,
             )
         )
 
@@ -10271,6 +10348,7 @@ def create_app() -> Flask:
                 judge_id=judge_id,
                 max_cases=max_cases or 0,
                 case_scope=case_scope,
+                tick=1,
             )
         )
 

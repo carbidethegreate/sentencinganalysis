@@ -10,7 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from sqlalchemy import Table, insert, select, update
+from sqlalchemy import Table, case, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from pacer_http import PacerEnvironmentMismatch, TokenExpired
@@ -188,7 +188,17 @@ class PclBatchWorker:
         processed = 0
         segments = self._load_segments(max_segments, batch_request_id=batch_request_id)
         for segment in segments:
-            self._process_segment(segment)
+            try:
+                self._process_segment(segment)
+            except Exception as exc:
+                # Never strand a claimed segment in "processing" due to an unexpected error.
+                message = f"worker exception: {type(exc).__name__}: {exc}"
+                if self._logger:
+                    self._logger.exception(
+                        "Unexpected error while processing PCL batch segment %s",
+                        segment.get("id"),
+                    )
+                self._mark_failed(segment, message)
             processed += 1
         return processed
 
@@ -197,9 +207,35 @@ class PclBatchWorker:
     ) -> List[Dict[str, Any]]:
         segment_table = self._tables["pcl_batch_segments"]
         now = self._now()
-        where_clause = segment_table.c.status.in_(["queued", "submitted", "running"])
+        pollable = segment_table.c.status.in_(["submitted", "running"]) & (
+            (segment_table.c.next_poll_at.is_(None))
+            | (segment_table.c.next_poll_at <= now)
+        )
+        allow_submit_new = True
+
+        # If scoped to a batch request, keep the number of in-flight remote jobs bounded
+        # to the worker tick size so we don't submit all segments at once.
+        if batch_request_id is not None:
+            in_flight_statuses = ["submitted", "running", "processing"]
+            with self._engine.begin() as conn:
+                in_flight = conn.execute(
+                    select(segment_table.c.id)
+                    .where(segment_table.c.batch_request_id == batch_request_id)
+                    .where(segment_table.c.status.in_(in_flight_statuses))
+                    .where(segment_table.c.report_id.isnot(None))
+                    .limit(max(1, int(max_segments)))
+                ).all()
+            if len(in_flight) >= max(1, int(max_segments)):
+                allow_submit_new = False  # only poll existing jobs until the in-flight count drops
+
+        where_clause = pollable
+        if allow_submit_new:
+            where_clause = where_clause | (segment_table.c.status == "queued")
         if batch_request_id is not None:
             where_clause = where_clause & (segment_table.c.batch_request_id == batch_request_id)
+        # Poll due segments before submitting new queued segments.
+        status_priority = case((segment_table.c.status == "queued", 1), else_=0)
+
         with self._engine.begin() as conn:
             if conn.dialect.name == "postgresql":
                 stale_cutoff = now - timedelta(minutes=self._claim_timeout_minutes)
@@ -218,7 +254,7 @@ class PclBatchWorker:
                     conn.execute(
                         select(segment_table)
                         .where(claimable | reclaimable)
-                        .order_by(segment_table.c.created_at.asc())
+                        .order_by(status_priority.asc(), segment_table.c.created_at.asc())
                         .limit(max_segments)
                         .with_for_update(skip_locked=True)
                     )
@@ -230,7 +266,7 @@ class PclBatchWorker:
                     conn.execute(
                         select(segment_table)
                         .where(where_clause)
-                        .order_by(segment_table.c.created_at.asc())
+                        .order_by(status_priority.asc(), segment_table.c.created_at.asc())
                         .limit(max_segments)
                     )
                     .mappings()
@@ -324,6 +360,9 @@ class PclBatchWorker:
         now = self._now()
         next_poll_at = segment.get("next_poll_at")
         if next_poll_at and isinstance(next_poll_at, datetime) and next_poll_at > now:
+            # This segment was claimed too early (or time drifted). Put it back so it can be
+            # claimed again when it is actually due.
+            self._update_segment(segment["id"], {"status": segment["status"], "updated_at": now})
             return
 
         report_id = segment.get("report_id")
@@ -371,7 +410,7 @@ class PclBatchWorker:
                 "next_poll_at": now + timedelta(seconds=delay),
             },
         )
-        self._sleep(delay)
+        # Do not sleep here: the scheduler/runner will pick this segment up again after `next_poll_at`.
 
     def _download_and_ingest(self, segment: Dict[str, Any]) -> None:
         report_id = segment["report_id"]
@@ -614,12 +653,17 @@ class PclBatchWorker:
         return str(status).strip().lower()
 
     def _extract_status_message(self, payload: Dict[str, Any]) -> str:
-        return (
-            str(payload.get("message"))
-            or str(payload.get("error"))
-            or str(payload.get("statusMessage"))
-            or "unknown error"
-        )
+        for key in ("message", "error", "statusMessage"):
+            value = payload.get(key)
+            if value is None:
+                continue
+            rendered = str(value).strip()
+            if not rendered:
+                continue
+            if rendered.lower() == "none":
+                continue
+            return rendered
+        return "unknown error"
 
 
 def _extract_case_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
