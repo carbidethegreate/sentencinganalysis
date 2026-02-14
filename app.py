@@ -7269,6 +7269,16 @@ def create_app() -> Flask:
         if not next_url.startswith("/"):
             next_url = url_for("admin_federal_data_dashboard_health_checks")
 
+        request_batch_request_id = _parse_optional_int(request.form.get("batch_request_id") or None)
+        if not request_batch_request_id:
+            # Best effort: parse judge-search results URLs like `/admin/.../results/<id>`.
+            match = re.search(r"/judge-search/results/(\\d+)", next_url)
+            if match:
+                try:
+                    request_batch_request_id = int(match.group(1))
+                except ValueError:
+                    request_batch_request_id = None
+
         def _extract_report_ids(payload: Any) -> List[str]:
             if not isinstance(payload, dict):
                 return []
@@ -7325,6 +7335,45 @@ def create_app() -> Flask:
             flash(f"PCL report cleanup failed: {exc}", "error")
             return redirect(next_url)
 
+        # If the user initiated cleanup from a specific judge-search run, clear the local
+        # throttling backoff so a refresh can submit immediately after remote cleanup.
+        segments_reset = 0
+        if request_batch_request_id:
+            batch_segments = pcl_tables.get("pcl_batch_segments")
+            if batch_segments is not None:
+                def _throttle_filter(col) -> Any:
+                    value = func.lower(func.coalesce(col, ""))
+                    return (
+                        value.like("%429%")
+                        | value.like("%maximum batch%")
+                        | value.like("%concurrent%")
+                    )
+
+                throttle_match = (
+                    _throttle_filter(batch_segments.c.error_message)
+                    | _throttle_filter(batch_segments.c.last_error)
+                    | _throttle_filter(batch_segments.c.remote_status_message)
+                )
+                with engine.begin() as conn:
+                    result = conn.execute(
+                        update(batch_segments)
+                        .where(batch_segments.c.batch_request_id == request_batch_request_id)
+                        .where(batch_segments.c.status == "queued")
+                        .where(throttle_match)
+                        .values(
+                            next_poll_at=None,
+                            attempt_count=0,
+                            error_message=None,
+                            last_error=None,
+                            remote_status_message=None,
+                            updated_at=func.now(),
+                        )
+                    )
+                    try:
+                        segments_reset = int(result.rowcount or 0)
+                    except Exception:
+                        segments_reset = 0
+
         flash(
             (
                 "Remote PCL report cleanup complete. "
@@ -7332,6 +7381,7 @@ def create_app() -> Flask:
                 f"(listed {case_stats['listed']}). "
                 f"Parties: {party_stats['deleted']} deleted, {party_stats['failed']} failed "
                 f"(listed {party_stats['listed']})."
+                + (f" Reset {segments_reset} queued segment(s) for this run." if segments_reset else "")
             ),
             "success",
         )

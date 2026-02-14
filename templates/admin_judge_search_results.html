@@ -84,13 +84,14 @@
                   <div class="small mt-8">
                     PCL is throttling new batch submissions. This often happens when too many remote batch reports exist.
                   </div>
-                  <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_reports_cleanup') }}" class="mt-8">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="next" value="{{ request.full_path }}">
-                    <button class="pill" type="submit">Cleanup Remote PCL Reports</button>
-                  </form>
-                {% endif %}
-              {% endif %}
+              <form method="post" action="{{ url_for('admin_federal_data_dashboard_pcl_reports_cleanup') }}" class="mt-8">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="next" value="{{ request.full_path }}">
+                <input type="hidden" name="batch_request_id" value="{{ batch_request_id }}">
+                <button class="pill" type="submit">Cleanup Remote PCL Reports</button>
+              </form>
+            {% endif %}
+          {% endif %}
             </div>
           {% endif %}
 
