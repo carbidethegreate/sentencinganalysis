@@ -603,23 +603,27 @@ class PclBatchWorker:
                 "updated_at": datetime.utcnow(),
             }
 
+            def _exec_with_savepoint(stmt) -> None:
+                # Postgres aborts the entire transaction on any statement error.
+                # A savepoint lets us recover and retry with an alternate conflict target.
+                with conn.begin_nested():
+                    conn.execute(stmt)
+
             def _upsert_by_case_id() -> None:
+                stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=["court_id", "case_id"],
+                    index_where=case_table.c.case_id.isnot(None),
+                    set_=set_common,
+                )
                 try:
-                    conn.execute(
-                        insert_stmt.on_conflict_do_update(
-                            index_elements=["court_id", "case_id"],
-                            index_where=case_table.c.case_id.isnot(None),
-                            set_=set_common,
-                        )
-                    )
+                    _exec_with_savepoint(stmt)
                 except ProgrammingError:
                     # Some environments use a non-partial unique constraint/index.
-                    conn.execute(
-                        insert_stmt.on_conflict_do_update(
-                            index_elements=["court_id", "case_id"],
-                            set_=set_common,
-                        )
+                    stmt = insert_stmt.on_conflict_do_update(
+                        index_elements=["court_id", "case_id"],
+                        set_=set_common,
                     )
+                    _exec_with_savepoint(stmt)
 
             def _upsert_by_case_number_full() -> None:
                 # Never blank-out an existing case_id when the incoming record is missing it.
@@ -627,22 +631,20 @@ class PclBatchWorker:
                     set_common,
                     case_id=func.coalesce(insert_stmt.excluded.case_id, case_table.c.case_id),
                 )
+                stmt = insert_stmt.on_conflict_do_update(
+                    index_elements=["court_id", "case_number_full"],
+                    index_where=case_table.c.case_number_full.isnot(None),
+                    set_=set_with_case_id,
+                )
                 try:
-                    conn.execute(
-                        insert_stmt.on_conflict_do_update(
-                            index_elements=["court_id", "case_number_full"],
-                            index_where=case_table.c.case_number_full.isnot(None),
-                            set_=set_with_case_id,
-                        )
-                    )
+                    _exec_with_savepoint(stmt)
                 except ProgrammingError:
                     # Some environments use a full unique constraint (non-partial).
-                    conn.execute(
-                        insert_stmt.on_conflict_do_update(
-                            index_elements=["court_id", "case_number_full"],
-                            set_=set_with_case_id,
-                        )
+                    stmt = insert_stmt.on_conflict_do_update(
+                        index_elements=["court_id", "case_number_full"],
+                        set_=set_with_case_id,
                     )
+                    _exec_with_savepoint(stmt)
 
             case_id = normalized.get("case_id")
             try:
