@@ -1,0 +1,89 @@
+Title: SOW Intake Prompt (Stakeholder Questions)
+Audience: Admin users, attorneys, and internal dev/ops stakeholders
+
+Context
+Today, the admin UI has three different places that look like "case lists":
+- Case Cards: /admin/federal-data-dashboard/case-cards
+- Indexed Cases: /admin/pcl/cases
+- Case Reports (Case Data One): /admin/case-data-one
+
+As a result, users do not know which page to use, and the UX feels fragmented.
+
+Proposed SOW (draft)
+We will deliver ONE canonical "Cases" experience (final name TBD) that:
+1) Combines the capabilities of Case Cards + Indexed Cases (same underlying PACER/PCL dataset).
+2) Includes the Case Reports dataset in a clearly labeled way (or deprecates/hides it if it is no longer required).
+3) Preserves all existing functionality, data, and existing endpoints (either kept or redirected safely).
+4) Is attorney-friendly by default (simple, clear guidance, minimal noise), with advanced operations available via progressive disclosure.
+
+Questions (please answer with short bullets)
+1) Primary user
+- Who is the primary "Cases" user?
+  - Attorney (default)
+  - Admin ops (default)
+  - Both, with role-based UI
+
+2) Dataset decisions
+- Do we still need the imported "Case Data One" dataset in day-to-day work?
+  - Yes (critical)
+  - Yes (rare/legacy)
+  - No (can remove from nav; keep only for archival)
+
+3) Canonical naming
+- What should the single destination be called?
+  - Cases
+  - Case Cards
+  - Case Workspace
+  - Something else
+
+4) Default view
+- When a user clicks the canonical destination, what should they see first?
+  - Card grid optimized for attorneys
+  - Ops/triage view (bulk actions, provenance, saved searches)
+  - A small chooser ("Browse" vs "Operations")
+
+5) Must-keep features (rank top 10)
+- From Indexed Cases (/admin/pcl/cases):
+  - Bulk queue docket enrichment
+  - Saved searches + run history panels
+  - Segment provenance + status
+  - Advanced filters (field contains, status flags)
+  - Copy case number
+  - Other: ______
+- From Case Cards (/admin/federal-data-dashboard/case-cards):
+  - Simpler filter form
+  - Minimal card layout
+  - Other: ______
+- From Case Reports (/admin/case-data-one):
+  - Card view search for parties/judges
+  - Upload/import status
+  - Error report + OpenAI "error prompt" helper
+  - Other: ______
+
+6) Attorney-friendly card content
+- What fields must appear on each card (the "front" of the card)?
+  - Example options: court, case number, caption, judge, filed date, parties/counsel, enrichment status, sentencing flags, last updated, tags.
+- What actions must be one click away?
+  - Example options: open docket, open case detail, pull docket, download documents, add notes, export.
+
+7) Permissions
+- Should attorneys see the same admin-only tools (run saved searches, view receipts, debug fields)?
+  - Yes
+  - No (hide behind admin toggle)
+  - Separate role-based nav
+
+8) Backwards compatibility
+- Can we redirect old URLs to the new canonical destination?
+  - Yes (preferred)
+  - No (must keep old pages as-is, but we can add strong guidance and cross-links)
+
+9) Performance expectations
+- Typical case volume and acceptable load time:
+  - 0-5k cases / < 1s
+  - 5k-100k / < 2s
+  - 100k+ / < 3s
+
+10) Success criteria
+- What does "done" look like (measurable)?
+  - Example: "No duplicate 'case list' nav items; attorneys can find a case and open docket in < 3 clicks; no regressions in docket queue."
+

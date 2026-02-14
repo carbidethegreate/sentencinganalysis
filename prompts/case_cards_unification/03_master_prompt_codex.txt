@@ -1,0 +1,95 @@
+Title: Master Prompt (Unify Case Cards + Indexed Cases + Case Reports)
+Model: OpenAI Codex v0.98.0 | gpt-5.3-codex | xhigh
+
+Role
+You are a senior full-stack engineer (Flask + Jinja + vanilla JS) with PACER/PCL domain knowledge and an attorney-first UX mindset.
+
+Goal
+Deliver ONE canonical "Cases" experience in the admin UI that replaces the need for:
+- /admin/federal-data-dashboard/case-cards (Case Cards)
+- /admin/pcl/cases (Indexed Cases)
+- /admin/case-data-one (Case Reports)
+
+The final product must:
+- Not lose any functionality or data.
+- Not break other components.
+- Preserve existing endpoints (keep or redirect safely).
+- Be attorney-friendly by default and avoid "developer garble" in the primary flow.
+
+Repo context (do not assume anything else)
+- Flask app: app.py (single app factory, no blueprints)
+- Templates: templates/
+- PACER/PCL queries: pcl_queries.py
+- Legacy imported dataset: case_data_one table defined in app.py, UI in templates/admin_case_data_one_list.html
+- Audit doc: docs/case_surfaces_audit.md (ground truth on current surfaces)
+
+Hard constraints
+- No schema drops.
+- No destructive git commands (no reset --hard).
+- Keep backwards compatibility: old routes must keep working or 302 to the canonical page.
+- Keep copy clear and attorney-friendly. No AI-flavored filler.
+- If you need to change navigation labels, update all user-facing copy that references the old names.
+
+Work plan (execute in this order)
+1) Re-audit the current routes/templates
+   - Confirm the three endpoints and their templates.
+   - Confirm all internal links to these endpoints (rg search).
+
+2) Decide the canonical name and URL
+   - Default choice unless told otherwise: label "Cases" and route /admin/federal-data-dashboard/cases
+   - Keep "Case Cards" as an internal concept only, not a nav label.
+
+3) Implement UI consolidation without duplicating code
+   - Create template partials for the two datasets:
+     - PACER/PCL cases view: extract the body of templates/admin_pcl_cases.html into templates/partials/pcl_cases_view.html
+     - Imported case_data_one view: extract the body of templates/admin_case_data_one_list.html into templates/partials/case_data_one_view.html
+   - Make the original templates thin wrappers that extend the base layout and include the partial.
+
+4) Add the canonical "Cases" page
+   - Add GET route: /admin/federal-data-dashboard/cases
+   - Provide a dataset toggle (two tabs/pills):
+     - "PACER Cases" (pcl_cases) (default)
+     - "Imported Cases (Legacy)" (case_data_one)
+   - When source=pacer:
+     - Render the PACER partial with all existing Indexed Cases functionality (filters, bulk queue, saved searches, run history).
+   - When source=imported:
+     - Render the imported partial and include a clear button to upload: /admin/case-data-one/upload
+
+5) Redirect old pages into the canonical page (backwards compatibility)
+   - /admin/federal-data-dashboard/case-cards -> /admin/federal-data-dashboard/cases?source=pacer (+ preserve query params)
+   - /admin/pcl/cases -> /admin/federal-data-dashboard/cases?source=pacer (+ preserve query params)
+   - /admin/case-data-one -> /admin/federal-data-dashboard/cases?source=imported
+   - Keep all downstream endpoints (case detail, docket queue actions, case-data-one upload/data APIs) unchanged.
+
+6) Update navigation to remove ambiguity
+   - Federal Data Dashboard subnav: replace "Indexed Cases" and "Case Cards" with a single "Cases" entry.
+   - Top admin nav (templates/base.html):
+     - Remove "Case Reports" link (since it is now inside Cases).
+     - Optionally rename "Add Data" to "Import Case Data" (legacy) OR keep it but ensure it is not read as the primary case browser.
+
+7) Update copy where it references old destinations
+   - templates/admin_pacer_explore.html: replace "Case Cards and Indexed Cases" with "Cases"
+   - templates/admin_federal_data_get_pacer_data.html: update workflow text ("save results to Cases")
+   - templates/admin_judge_search_results.html: change "Open Case Cards" to "Open Cases"
+   - templates/admin_federal_data_dashboard.html: update the overview card title to "Cases"
+
+8) Testing + feedback loop
+   - Add a simple smoke-test script (no pytest dependency) that:
+     - Creates the app with a temp sqlite DB
+     - Sets an admin session
+     - Requests:
+       - /admin/federal-data-dashboard/cases (source=pacer)
+       - /admin/federal-data-dashboard/cases?source=imported
+       - old URLs and confirms they redirect (302) to the canonical page
+   - Ensure failures are actionable:
+     - If a smoke test fails, print which route and status code.
+
+9) Run checks
+   - python3 -m py_compile app.py
+   - run the smoke-test script
+
+Output expectations
+- Make the code changes directly in the repo.
+- Add or update docs explaining the new canonical "Cases" page and where legacy imports live.
+- Provide a concise change summary and a short manual verification checklist.
+

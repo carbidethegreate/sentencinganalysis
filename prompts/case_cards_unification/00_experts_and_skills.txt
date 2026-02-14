@@ -1,0 +1,69 @@
+Title: Expert Roster + Skill Set (Case Cards Unification)
+Target model: OpenAI Codex v0.98.0 | gpt-5.3-codex | xhigh
+
+Objective
+Unify "Case Cards" (/admin/federal-data-dashboard/case-cards), "Indexed Cases" (/admin/pcl/cases), and "Case Reports" (/admin/case-data-one) into one canonical "Cases" (name TBD) experience without losing functionality or breaking other components. The end result should be attorney-friendly by default and still support admin/ops workflows via progressive disclosure.
+
+Experts (the perspectives we need to satisfy)
+1) Attorney SME (litigation workflow)
+- What they need in the first 30 seconds: court, case number, caption/title, judge, filed/terminated, parties/counsel, procedural posture, key filings, deadlines, and a direct path to the docket.
+- Preferred language: plain English, minimal jargon, no "developer speak," no AI-flavored filler.
+
+2) Product + UX / Information Architecture
+- One entry point. Clear next step. Progressive disclosure. Predictable navigation.
+- Eliminate duplicate destinations that look like "different ways to do the same thing."
+
+3) PACER/PCL domain expert
+- Token/session lifecycle, billable vs non-billable flags, throttling (429s), batch report limits, PCL remote job cleanup.
+- Docket retrieval edge cases (login redirects, docket form vs docket report, XML/HTML differences).
+
+4) Backend engineer (Flask + SQLAlchemy)
+- Routes, redirects, and keeping URL compatibility stable.
+- Query performance and correctness.
+- Avoid transaction poisoning (aborted transactions), safe upserts, savepoints.
+
+5) Frontend engineer (Jinja + CSS + vanilla JS)
+- Reusable template partials, consistent components, accessibility (labels, aria-live), mobile responsiveness.
+- Avoid bulky pages by default; use <details> for advanced sections.
+
+6) Data engineer
+- Understand that `pcl_cases` and `case_data_one` are different schemas/datasets.
+- Avoid premature schema merges; design safe linking strategy if matching is needed.
+
+7) QA / Test engineer
+- Regression checks for:
+  - navigation links
+  - case filtering
+  - pagination
+  - docket queue actions
+  - imported-case browsing
+- Smoke test script that does not require pytest (since pytest may not be installed).
+
+8) Security + privacy
+- Ensure PACER credentials/tokens never leak into UI or logs.
+- Redaction and safe display of receipts/debug info.
+
+9) DevOps / Render.com
+- Background workers (cron vs request-driven), environment variables, deploy sequencing.
+- Confirm that redirects and route changes do not break gunicorn startup or worker scripts.
+
+10) GitHub / release engineering
+- Small, reviewable commits.
+- Keep backwards compatibility and document deprecations.
+- Provide rollback plan (easy to revert a redirect or nav change).
+
+11) Technical writer
+- Microcopy that is direct, attorney-friendly, and not AI-sounding.
+
+12) Project manager
+- Scope control, milestones, risk register, and a clear definition of "done."
+
+Skills (what the implementation needs to demonstrate)
+- Requirements elicitation (ask the right questions before merging features).
+- System mapping (routes -> templates -> queries -> tables).
+- UI consolidation with backwards-compatible redirects.
+- Template refactoring (partials/includes) to avoid duplicate code.
+- Data-source labeling ("PACER indexed" vs "Imported legacy") to prevent user confusion.
+- Progressive disclosure (simple-by-default with an "Advanced" section).
+- Testing plan and a feedback loop for errors (logs, a "report a problem" path, or at least a reproducible error capture).
+

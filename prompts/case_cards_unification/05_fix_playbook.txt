@@ -1,0 +1,35 @@
+Title: Fix Playbook (If Consolidation Breaks Something)
+
+Principles
+- Prefer small, reversible changes.
+- Keep old endpoints alive (redirects are safer than removals).
+- When in doubt, restore functionality first, then refine UX.
+
+Common breakpoints and fixes
+1) CSRF failures on docket queue buttons
+- Confirm csrf_token is injected via context_processor (app.py) and included in forms.
+- Ensure canonical template includes the same hidden csrf field.
+
+2) Redirect loops
+- Make sure only the old endpoints redirect to the canonical route.
+- The canonical route must never redirect back to the old endpoints.
+
+3) Missing template variables after partial refactor
+- Verify the canonical route passes every variable used by the included partial:
+  - cases, pagination, filters, page_url, available_* lists, csrf_token, etc.
+- If a partial needs a variable only in one mode, guard with {% if var is defined %}.
+
+4) Imported cases JS not running in the canonical page
+- Ensure the <script> block is included (partial contains it).
+- Ensure the url_for endpoints referenced inside the script exist and are correct.
+- Check that IDs used by the script exist in the DOM.
+
+5) Users still confused about datasets
+- Add a short explanation above the dataset tabs:
+  - PACER Cases: "Pulled from PACER/PCL and enriched here."
+  - Imported Cases (Legacy): "Uploaded dataset. Not automatically synced with PACER."
+
+Rollback strategy
+- If necessary, keep the canonical route but re-enable the old nav items temporarily.
+- Redirects can be removed quickly if they block a workflow.
+

@@ -531,7 +531,7 @@
           <div class="wizard-actions">
             <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=3) }}">Back</a>
             <a class="pill" href="{{ url_for('admin_federal_data_dashboard_judge_search_results', batch_request_id=batch_request_id, judge_last_name=judge_last_name or None, judge_initials=judge_initials or None, max_cases=max_cases, case_scope=case_scope, step=4, tick=1) }}">Refresh</a>
-            <a class="pill" href="{{ case_cards_url }}">Open Case Cards</a>
+            <a class="pill" href="{{ case_cards_url }}">Open Cases</a>
           </div>
         </section>
       {% endif %}

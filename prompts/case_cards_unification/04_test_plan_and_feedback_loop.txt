@@ -1,0 +1,36 @@
+Title: Test Plan + Error Feedback Loop (Cases Unification)
+
+Testing goals
+1) No route breaks: old endpoints still respond (or redirect) and core actions still work.
+2) No UX regressions: attorneys can find a case and open details quickly.
+3) No silent failures: when something fails (token expired, throttled), the user sees a clear next step and logs capture context.
+
+Minimum automated checks (no pytest required)
+- Smoke script using Flask test_client:
+  - GET /admin/federal-data-dashboard/cases (default pacer)
+  - GET /admin/federal-data-dashboard/cases?source=imported
+  - GET old endpoints and assert 302 -> canonical:
+    - /admin/federal-data-dashboard/case-cards
+    - /admin/pcl/cases
+    - /admin/case-data-one
+
+Manual regression checklist
+- Navigation
+  - Federal Data Dashboard subnav has one "Cases" entry.
+  - No duplicate "case list" destinations remain in nav.
+- PACER cases flow
+  - Filters apply and pagination works.
+  - Per-case action "Pull docket" queues a job (no CSRF errors).
+  - Bulk queue docket still works from the ops view.
+  - Case detail page still loads.
+- Imported cases flow (legacy)
+  - Cards load (JS fetch succeeds).
+  - Filters work.
+  - Upload page reachable and import status displays.
+
+Error feedback loop requirements
+- When a request fails, it must be diagnosable:
+  - User-facing: show a short, plain-English message and one recommended next step.
+  - Developer-facing: log route + key identifiers (case_id, court_id) but never log tokens/credentials.
+- Provide a "Logs" link near failures (Federal Data Dashboard Logs page).
+

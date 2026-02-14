@@ -8061,22 +8061,78 @@ def create_app() -> Flask:
             "docket_enrichment_receipts": docket_enrichment_receipts_data,
         }
 
-    @app.get("/admin/federal-data-dashboard/case-cards")
+    @app.get("/admin/federal-data-dashboard/cases")
     @admin_required
-    def admin_federal_data_dashboard_case_cards():
+    def admin_federal_data_dashboard_cases():
+        source = (request.args.get("source") or "pacer").strip().lower()
+        if source in {"imported", "legacy", "case_data_one", "case-data-one", "reports"}:
+            return render_template(
+                "admin_cases.html",
+                active_page="federal_data_dashboard",
+                active_subnav="cases",
+                source="imported",
+                columns=CASE_DATA_ONE_CARD_FIELDS,
+            )
+
+        view = (request.args.get("view") or "cards").strip().lower()
+        if view not in {"cards", "ops"}:
+            view = "cards"
+
         filters, page, page_size = parse_filters(request.args.to_dict(flat=True))
-        result = list_case_cards(engine, pcl_tables, filters, page=page, page_size=page_size)
         params = request.args.to_dict(flat=True)
+        params.pop("source", None)
+        params.pop("view", None)
+
+        if view == "ops":
+            result = list_cases(engine, pcl_tables, filters, page=page, page_size=page_size)
+
+            def page_url(target_page: int) -> str:
+                next_params = dict(params)
+                next_params["page"] = target_page
+                return url_for(
+                    "admin_federal_data_dashboard_cases",
+                    source="pacer",
+                    view="ops",
+                    **next_params,
+                )
+
+            return render_template(
+                "admin_cases.html",
+                active_page="federal_data_dashboard",
+                active_subnav="cases",
+                source="pacer",
+                view="ops",
+                csrf_token=get_csrf_token(),
+                cases=result.rows,
+                pagination=result.pagination,
+                filters=filters,
+                page_url=page_url,
+                available_courts=result.available_courts,
+                available_case_types=result.available_case_types,
+                case_field_choices=_load_case_field_choices(),
+                saved_searches=_load_pacer_saved_searches(limit=6),
+                search_run_history=_load_pacer_search_runs(limit=6),
+            )
+
+        result = list_case_cards(engine, pcl_tables, filters, page=page, page_size=page_size)
 
         def page_url(target_page: int) -> str:
             next_params = dict(params)
             next_params["page"] = target_page
-            return url_for("admin_federal_data_dashboard_case_cards", **next_params)
+            return url_for(
+                "admin_federal_data_dashboard_cases",
+                source="pacer",
+                view="cards",
+                **next_params,
+            )
 
         return render_template(
-            "admin_federal_data_case_cards.html",
+            "admin_cases.html",
             active_page="federal_data_dashboard",
-            active_subnav="case_cards",
+            active_subnav="cases",
+            source="pacer",
+            view="cards",
+            csrf_token=get_csrf_token(),
             cases=result.rows,
             pagination=result.pagination,
             filters=filters,
@@ -8084,6 +8140,20 @@ def create_app() -> Flask:
             court_choices=_load_court_choices(),
             case_type_choices=_load_case_type_choices(),
             case_field_choices=_load_case_field_choices(),
+        )
+
+    @app.get("/admin/federal-data-dashboard/case-cards")
+    @admin_required
+    def admin_federal_data_dashboard_case_cards():
+        params = request.args.to_dict(flat=True)
+        params.pop("source", None)
+        return redirect(
+            url_for(
+                "admin_federal_data_dashboard_cases",
+                source="pacer",
+                view="cards",
+                **params,
+            )
         )
 
     @app.get("/admin/federal-data-dashboard/logs")
@@ -9730,30 +9800,16 @@ def create_app() -> Flask:
     @app.get("/admin/pcl/cases")
     @admin_required
     def admin_pcl_cases():
-        filters, page, page_size = parse_filters(request.args.to_dict(flat=True))
-        result = list_cases(engine, pcl_tables, filters, page=page, page_size=page_size)
-
         params = request.args.to_dict(flat=True)
-
-        def page_url(target_page: int) -> str:
-            next_params = dict(params)
-            next_params["page"] = target_page
-            return url_for("admin_pcl_cases", **next_params)
-
-        return render_template(
-            "admin_pcl_cases.html",
-            active_page="federal_data_dashboard",
-            active_subnav="pcl_cases",
-            csrf_token=get_csrf_token(),
-            cases=result.rows,
-            pagination=result.pagination,
-            filters=filters,
-            page_url=page_url,
-            available_courts=result.available_courts,
-            available_case_types=result.available_case_types,
-            case_field_choices=_load_case_field_choices(),
-            saved_searches=_load_pacer_saved_searches(limit=6),
-            search_run_history=_load_pacer_search_runs(limit=6),
+        params.pop("source", None)
+        params.pop("view", None)
+        return redirect(
+            url_for(
+                "admin_federal_data_dashboard_cases",
+                source="pacer",
+                view="ops",
+                **params,
+            )
         )
 
     @app.get("/admin/pcl/attorneys")
@@ -9930,7 +9986,7 @@ def create_app() -> Flask:
         return render_template(
             "admin_pcl_case_detail.html",
             active_page="federal_data_dashboard",
-            active_subnav="pcl_cases",
+            active_subnav="cases",
             csrf_token=get_csrf_token(),
             case_detail=detail,
         )
@@ -10706,7 +10762,12 @@ def create_app() -> Flask:
             case_cards_params["case_type"] = batch_case_types[0]
         if judge_last_name:
             case_cards_params["judge_last_name"] = judge_last_name
-        case_cards_url = url_for("admin_federal_data_dashboard_case_cards", **case_cards_params)
+        case_cards_url = url_for(
+            "admin_federal_data_dashboard_cases",
+            source="pacer",
+            view="cards",
+            **case_cards_params,
+        )
 
         docket_case_rows: List[Dict[str, Any]] = []
         docket_summary: Dict[str, Any] = {"total_cases": 0, "status_counts": {}, "top_errors": []}
@@ -11228,8 +11289,10 @@ def create_app() -> Flask:
     @app.get("/admin/case-data-one")
     @admin_required
     def admin_case_data_one_list():
-        return render_template(
-            "admin_case_data_one_list.html", columns=CASE_DATA_ONE_CARD_FIELDS
+        params = request.args.to_dict(flat=True)
+        params.pop("source", None)
+        return redirect(
+            url_for("admin_federal_data_dashboard_cases", source="imported", **params)
         )
 
     @app.get("/admin/case-data-one/data")

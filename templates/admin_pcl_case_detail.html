@@ -11,7 +11,7 @@
         <p class="small">Court {{ case_detail.court_id }}{% if case_detail.case_type %} • Type {{ case_detail.case_type }}{% endif %}</p>
       </div>
       <div class="actions">
-        <a class="pill" href="{{ url_for('admin_pcl_cases') }}">Back to cases</a>
+        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_cases') }}">Back to cases</a>
         <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case_detail.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button class="secondary" type="submit">Expand data</button>

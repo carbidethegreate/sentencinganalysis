@@ -1,0 +1,38 @@
+Title: SOW Refinement Prompt (After Stakeholder Answers)
+Target model: OpenAI Codex v0.98.0 | gpt-5.3-codex | xhigh
+
+Instructions
+You will be given:
+1) The stakeholder answers to "01_sow_intake_questions.txt"
+2) The repo context (Flask app in app.py, templates in templates/, queries in pcl_queries.py)
+
+Task
+Write an improved Scope of Work (SOW) for unifying the case experiences into ONE canonical "Cases" destination.
+
+Constraints
+- Do not remove data or drop tables.
+- Do not break existing endpoints; use redirects if approved.
+- Keep attorney-friendly language and microcopy (no AI-sounding filler).
+- Prefer UI consolidation first; avoid schema merges unless explicitly required.
+
+Output format (single document)
+1) Project summary (1 paragraph)
+2) Personas and primary workflow
+3) In-scope deliverables (explicit list)
+4) Out-of-scope (explicit list)
+5) UX decisions (naming, default view, progressive disclosure plan)
+6) Technical plan (routes/templates/queries; redirects/back-compat)
+7) Data considerations (pcl_cases vs case_data_one; matching strategy if any)
+8) Testing plan (smoke tests; regression checklist)
+9) Rollout plan (deploy steps; rollback steps)
+10) Acceptance criteria (measurable)
+11) Risks and mitigations
+
+Placeholders to fill using stakeholder answers
+- Canonical name: <<CANONICAL_NAME>>
+- Primary user: <<PRIMARY_USER>>
+- Default view: <<DEFAULT_VIEW>>
+- Case Data One decision: <<CASE_DATA_ONE_DECISION>>
+- Redirect approval: <<REDIRECT_OK>>
+- Must-keep features: <<MUST_KEEP_FEATURES>>
+
