@@ -15,6 +15,10 @@
 
 * { box-sizing: border-box; }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -3863,6 +3867,18 @@ input[type="submit"].danger:disabled {
   padding: 6px;
 }
 
+.court-picker mark {
+  background: rgba(217, 203, 186, 0.75);
+  color: inherit;
+  padding: 0 3px;
+  border-radius: 6px;
+}
+
+.court-picker__empty {
+  padding: 12px 12px;
+  color: var(--muted);
+}
+
 .court-picker__option {
   width: 100%;
   border: 0;
@@ -3880,6 +3896,11 @@ input[type="submit"].danger:disabled {
 
 .court-picker__option:hover {
   background: rgba(217, 203, 186, 0.35);
+}
+
+.court-picker__option.is-active {
+  background: rgba(217, 203, 186, 0.25);
+  outline: 2px solid rgba(89, 81, 77, 0.22);
 }
 
 .court-picker__option.is-selected {

@@ -46,51 +46,39 @@
         <input type="hidden" name="court_id" id="court-id" value="{{ selected_court_id }}">
         <input type="hidden" name="max_batch_iterations" value="300">
 
-        <section class="wizard-step" data-wizard-step="1">
-          <h3>Step 1 of 4: Choose the district court</h3>
-          <p class="small">Start by selecting where the case was filed.</p>
+	        <section class="wizard-step" data-wizard-step="1">
+	          <h3>Step 1 of 4: Choose the district court</h3>
+	          <p class="small">Start by selecting where the case was filed.</p>
 
-          <div class="court-picker">
-            <label for="court-query">Search district courts</label>
-            <input
-              id="court-query"
-              type="search"
-              placeholder="Type a court name (example: Pennsylvania Eastern)"
-              autocomplete="off"
-              spellcheck="false"
-            >
+	          <div class="court-picker">
+	            <label for="court-query">District court</label>
+	            <input
+	              id="court-query"
+	              type="search"
+	              placeholder="Start typing a court name (example: Pennsylvania Eastern)"
+	              autocomplete="off"
+	              spellcheck="false"
+	              role="combobox"
+	              aria-autocomplete="list"
+	              aria-expanded="false"
+	              aria-controls="court-results"
+	              aria-haspopup="listbox"
+	            >
 
-            <div class="actions">
-              <button type="button" class="pill muted" id="court-browse-all">Browse all courts</button>
-              <button type="button" class="pill" id="court-clear">Clear</button>
-            </div>
+	            <div class="small court-picker__meta" id="court-meta" aria-live="polite">
+	              Start typing to search {{ court_choices|length }} district courts.
+	            </div>
 
-            <div class="small court-picker__meta" id="court-meta" aria-live="polite"></div>
+	            <div class="court-picker__results" id="court-results" role="listbox" aria-label="Court suggestions" hidden></div>
 
-            <div class="court-picker__results" id="court-results" role="listbox" aria-label="District courts">
-              {% for court in court_choices %}
-                <button
-                  type="button"
-                  class="court-picker__option"
-                  role="option"
-                  data-court-id="{{ court.id }}"
-                  data-court-name="{{ court.name }}"
-                  data-court-label="{{ court.label }}"
-                >
-                  <span class="court-picker__name">{{ court.name }}</span>
-                  <span class="court-picker__id">{{ court.id }}</span>
-                </button>
-              {% endfor %}
-            </div>
+	            <div class="wizard-selected small" id="court-selected" aria-live="polite"></div>
+	            <div class="wizard-error small" id="wizard-error-1" aria-live="polite"></div>
+	          </div>
 
-            <div class="wizard-selected small" id="court-selected" aria-live="polite"></div>
-            <div class="wizard-error small" id="wizard-error-1" aria-live="polite"></div>
-          </div>
-
-          <div class="wizard-actions">
-            <button type="button" class="primary" data-wizard-next>Continue</button>
-          </div>
-        </section>
+	          <div class="wizard-actions">
+	            <button type="button" class="primary" data-wizard-next id="wizard-next-1" {% if not selected_court_id %}disabled{% endif %}>Continue</button>
+	          </div>
+	        </section>
 
         <section class="wizard-step" data-wizard-step="2" hidden>
           <h3>Step 2 of 4: Choose the date range</h3>
@@ -212,9 +200,8 @@
       const courtMeta = document.getElementById("court-meta");
       const courtResults = document.getElementById("court-results");
       const courtSelected = document.getElementById("court-selected");
-      const courtClear = document.getElementById("court-clear");
-      const courtBrowseAll = document.getElementById("court-browse-all");
-      const courtOptions = Array.from(document.querySelectorAll(".court-picker__option"));
+      const courtContinue = document.getElementById("wizard-next-1");
+      const courtChoices = {{ court_choices | tojson }};
 
       const dateFrom = document.getElementById("date-from");
       const dateTo = document.getElementById("date-to");
@@ -231,8 +218,6 @@
       let currentStep = Number({{ initial_step|default(1)|int }}) || 1;
       if (currentStep < 1 || currentStep > 4) currentStep = 1;
 
-      let showAllCourts = false;
-
       const setError = (step, message) => {
         const el = errorByStep[step];
         if (!el) return;
@@ -244,128 +229,265 @@
         }
       };
 
+      const normalize = (value) => (value || "").toString().trim().toLowerCase();
+
+      const courtIdToChoice = new Map();
+      if (Array.isArray(courtChoices)) {
+        for (const court of courtChoices) {
+          if (!court || !court.id) continue;
+          courtIdToChoice.set(normalize(court.id), court);
+        }
+      }
+
+      const getSelectedCourt = () => {
+        const selectedId = normalize(courtHidden && courtHidden.value);
+        if (!selectedId) return null;
+        return courtIdToChoice.get(selectedId) || null;
+      };
+
       const activeCourtLabel = () => {
-        const id = (courtHidden && courtHidden.value || "").toLowerCase();
-        if (!id) return "";
-        const match = courtOptions.find((opt) => (opt.dataset.courtId || "").toLowerCase() === id);
-        return match ? (match.dataset.courtLabel || match.dataset.courtName || match.dataset.courtId) : id;
+        const court = getSelectedCourt();
+        if (!court) return "";
+        return court.label || court.name || court.id;
+      };
+
+      let courtMatches = [];
+      let activeCourtMatchIndex = -1;
+      const MAX_COURT_RESULTS = 8;
+
+      const closeCourtSuggestions = () => {
+        if (courtResults) {
+          courtResults.hidden = true;
+          courtResults.innerHTML = "";
+        }
+        if (courtQuery) {
+          courtQuery.setAttribute("aria-expanded", "false");
+          courtQuery.removeAttribute("aria-activedescendant");
+        }
+        activeCourtMatchIndex = -1;
+      };
+
+      const openCourtSuggestions = () => {
+        if (courtResults) {
+          courtResults.hidden = false;
+        }
+        if (courtQuery) {
+          courtQuery.setAttribute("aria-expanded", "true");
+        }
+      };
+
+      const syncActiveCourtOption = () => {
+        if (!courtResults) return;
+        const options = Array.from(courtResults.querySelectorAll(".court-picker__option"));
+        for (let i = 0; i < options.length; i += 1) {
+          options[i].classList.toggle("is-active", i === activeCourtMatchIndex);
+        }
+      };
+
+      const renderHighlightedText = (text, q) => {
+        const frag = document.createDocumentFragment();
+        const lower = (text || "").toLowerCase();
+        const idx = q ? lower.indexOf(q) : -1;
+        if (idx < 0 || !q) {
+          frag.append(document.createTextNode(text));
+          return frag;
+        }
+        const before = text.slice(0, idx);
+        const match = text.slice(idx, idx + q.length);
+        const after = text.slice(idx + q.length);
+        if (before) frag.append(document.createTextNode(before));
+        const mark = document.createElement("mark");
+        mark.textContent = match;
+        frag.append(mark);
+        if (after) frag.append(document.createTextNode(after));
+        return frag;
+      };
+
+      const renderCourtSuggestions = (queryLower, totalMatches) => {
+        if (!courtResults) return;
+        courtResults.innerHTML = "";
+
+        if (!totalMatches) {
+          const empty = document.createElement("div");
+          empty.className = "court-picker__empty small";
+          empty.textContent = "No matching courts. Try a shorter search (example: \"Pennsylvania\").";
+          courtResults.append(empty);
+          return;
+        }
+
+        const display = courtMatches.slice(0, MAX_COURT_RESULTS);
+        for (let i = 0; i < display.length; i += 1) {
+          const court = display[i];
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "court-picker__option";
+          btn.id = `court-option-${i}`;
+          btn.setAttribute("role", "option");
+          btn.dataset.courtId = court.id;
+
+          const nameEl = document.createElement("span");
+          nameEl.className = "court-picker__name";
+          nameEl.append(renderHighlightedText(court.name || court.label || court.id, queryLower));
+
+          const idEl = document.createElement("span");
+          idEl.className = "court-picker__id";
+          idEl.textContent = court.id;
+
+          btn.append(nameEl, idEl);
+
+          btn.addEventListener("click", () => {
+            setSelectedCourt(court);
+          });
+
+          courtResults.append(btn);
+        }
+        syncActiveCourtOption();
+      };
+
+      const scoreCourt = (court, queryLower) => {
+        const name = normalize(court && (court.name || court.label || ""));
+        const id = normalize(court && court.id);
+        if (!queryLower) return 9999;
+        if (name.startsWith(queryLower)) return 0;
+        if (id.startsWith(queryLower)) return 1;
+        if (name.includes(queryLower)) return 2;
+        if (id.includes(queryLower)) return 3;
+        return 50;
+      };
+
+      const updateCourtSuggestions = () => {
+        if (!courtQuery || !Array.isArray(courtChoices)) return;
+        const queryRaw = (courtQuery.value || "").trim();
+        const queryLower = queryRaw.toLowerCase();
+
+        if (!queryLower) {
+          closeCourtSuggestions();
+          if (courtMeta) {
+            const selectedLabel = activeCourtLabel();
+            courtMeta.textContent = selectedLabel
+              ? `Selected: ${selectedLabel}. Type to change the court.`
+              : `Start typing to search ${courtChoices.length} district courts.`;
+          }
+          return;
+        }
+
+        const matches = [];
+        for (const court of courtChoices) {
+          if (!court) continue;
+          const haystack = `${court.name || ""} ${court.label || ""} ${court.id || ""}`.toLowerCase();
+          if (haystack.includes(queryLower)) {
+            matches.push(court);
+          }
+        }
+
+        matches.sort((a, b) => {
+          const scoreA = scoreCourt(a, queryLower);
+          const scoreB = scoreCourt(b, queryLower);
+          if (scoreA !== scoreB) return scoreA - scoreB;
+          return normalize(a.name).localeCompare(normalize(b.name));
+        });
+
+        courtMatches = matches;
+        activeCourtMatchIndex = matches.length ? 0 : -1;
+        openCourtSuggestions();
+        renderCourtSuggestions(queryLower, matches.length);
+        syncActiveCourtOption();
+
+        if (courtMeta) {
+          const showing = Math.min(MAX_COURT_RESULTS, matches.length);
+          courtMeta.textContent = matches.length
+            ? `${matches.length} match(es). Showing ${showing}. Press Enter to select the top match.`
+            : "No matches.";
+        }
+
+        if (courtQuery && activeCourtMatchIndex >= 0) {
+          courtQuery.setAttribute("aria-activedescendant", `court-option-${activeCourtMatchIndex}`);
+        }
+      };
+
+      const setSelectedCourt = (court) => {
+        if (!courtHidden || !court || !court.id) return;
+        courtHidden.value = normalize(court.id);
+        if (courtQuery) {
+          courtQuery.value = court.name || court.label || court.id;
+        }
+        setError(1, "");
+        renderSelectedCourt();
+        closeCourtSuggestions();
+        if (currentStep === 1) {
+          showStep(2);
+        }
       };
 
       const renderSelectedCourt = () => {
         const label = activeCourtLabel();
-        if (!courtSelected) return;
-        if (label) {
-          courtSelected.textContent = `Selected court: ${label}`;
-        } else {
-          courtSelected.textContent = "No court selected yet. Search above and click a court to select it.";
+        if (courtSelected) {
+          courtSelected.textContent = label
+            ? `Selected court: ${label}`
+            : "No court selected yet. Type a court name above and choose a match.";
         }
-
-        const selectedId = (courtHidden && courtHidden.value || "").toLowerCase();
-        for (const opt of courtOptions) {
-          const isSelected = (opt.dataset.courtId || "").toLowerCase() === selectedId;
-          opt.classList.toggle("is-selected", isSelected);
-          if (isSelected) {
-            opt.setAttribute("aria-selected", "true");
-          } else {
-            opt.removeAttribute("aria-selected");
-          }
+        if (courtContinue) {
+          courtContinue.disabled = !label;
         }
       };
-
-      const filterCourts = () => {
-        if (!courtOptions.length) return;
-
-        const q = (courtQuery && courtQuery.value || "").trim().toLowerCase();
-        const selectedId = (courtHidden && courtHidden.value || "").toLowerCase();
-
-        let visible = 0;
-        let total = 0;
-        for (const opt of courtOptions) {
-          total += 1;
-          const haystack = `${opt.dataset.courtName || ""} ${opt.dataset.courtLabel || ""} ${opt.dataset.courtId || ""}`.toLowerCase();
-          const match = !q ? showAllCourts : haystack.includes(q);
-          opt.hidden = !match;
-          if (match) visible += 1;
-        }
-
-        // If we are not showing all courts and the query is empty, reveal a short list
-        // so the user isn't forced to type to make progress.
-        if (!q && !showAllCourts) {
-          let revealed = 0;
-          for (const opt of courtOptions) {
-            const isSelected = (opt.dataset.courtId || "").toLowerCase() === selectedId;
-            if (isSelected) {
-              opt.hidden = false;
-              continue;
-            }
-            if (revealed < 12) {
-              opt.hidden = false;
-              revealed += 1;
-              continue;
-            }
-            opt.hidden = true;
-          }
-          visible = revealed + (selectedId ? 1 : 0);
-        }
-
-        if (courtMeta) {
-          if (q) {
-            courtMeta.textContent = `Matches: ${visible} court(s)`;
-          } else if (showAllCourts) {
-            courtMeta.textContent = `Showing all ${total} courts`;
-          } else {
-            courtMeta.textContent = `Showing ${visible} courts. Type to filter or click “Browse all courts”.`;
-          }
-        }
-        renderSelectedCourt();
-      };
-
-      const setCourt = (courtId) => {
-        if (!courtHidden) return;
-        courtHidden.value = (courtId || "").trim().toLowerCase();
-        setError(1, "");
-        filterCourts();
-      };
-
-      if (courtOptions.length) {
-        for (const opt of courtOptions) {
-          opt.addEventListener("click", () => {
-            setCourt(opt.dataset.courtId || "");
-          });
-        }
-      }
 
       if (courtQuery) {
         courtQuery.addEventListener("input", () => {
-          showAllCourts = false;
-          filterCourts();
+          updateCourtSuggestions();
         });
+
+        courtQuery.addEventListener("focus", () => {
+          if ((courtQuery.value || "").trim()) {
+            updateCourtSuggestions();
+          }
+        });
+
         courtQuery.addEventListener("keydown", (event) => {
           if (event.key === "Escape") {
-            courtQuery.value = "";
-            showAllCourts = false;
-            filterCourts();
+            closeCourtSuggestions();
+            return;
+          }
+
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            if (!courtMatches.length) return;
+            event.preventDefault();
+            openCourtSuggestions();
+
+            const delta = event.key === "ArrowDown" ? 1 : -1;
+            const maxIndex = Math.min(MAX_COURT_RESULTS, courtMatches.length) - 1;
+            let nextIndex = activeCourtMatchIndex + delta;
+            if (nextIndex < 0) nextIndex = maxIndex;
+            if (nextIndex > maxIndex) nextIndex = 0;
+            activeCourtMatchIndex = nextIndex;
+
+            courtQuery.setAttribute("aria-activedescendant", `court-option-${activeCourtMatchIndex}`);
+            syncActiveCourtOption();
+            const activeEl = document.getElementById(`court-option-${activeCourtMatchIndex}`);
+            if (activeEl && courtResults) {
+              activeEl.scrollIntoView({ block: "nearest" });
+            }
+            return;
+          }
+
+          if (event.key === "Enter") {
+            if (!courtMatches.length) return;
+            event.preventDefault();
+            const idx = activeCourtMatchIndex >= 0 ? activeCourtMatchIndex : 0;
+            const court = courtMatches[idx];
+            if (court) setSelectedCourt(court);
           }
         });
       }
 
-      if (courtClear) {
-        courtClear.addEventListener("click", () => {
-          if (courtQuery) courtQuery.value = "";
-          setCourt("");
-          showAllCourts = false;
-          filterCourts();
-        });
-      }
-
-      if (courtBrowseAll) {
-        courtBrowseAll.addEventListener("click", () => {
-          showAllCourts = true;
-          if (courtQuery) courtQuery.value = "";
-          filterCourts();
-          if (courtResults) courtResults.scrollTop = 0;
-        });
-      }
+      // Clicking outside the court picker closes suggestions.
+      document.addEventListener("click", (event) => {
+        if (!courtResults || !courtQuery) return;
+        const picker = courtQuery.closest(".court-picker");
+        if (!picker) return;
+        if (!picker.contains(event.target)) {
+          closeCourtSuggestions();
+        }
+      });
 
       const syncMaxCasesEnabled = () => {
         if (!maxCasesInput || !scopeLimited) return;
@@ -494,9 +616,15 @@
       }
 
       syncMaxCasesEnabled();
-      filterCourts();
+      renderSelectedCourt();
+      if (courtMeta) {
+        const selectedLabel = activeCourtLabel();
+        courtMeta.textContent = selectedLabel
+          ? `Selected: ${selectedLabel}. Type to change the court.`
+          : `Start typing to search ${Array.isArray(courtChoices) ? courtChoices.length : 0} district courts.`;
+      }
+      closeCourtSuggestions();
       showStep(currentStep);
     })();
   </script>
 {% endblock %}
-
