@@ -694,6 +694,75 @@ def _estimate_docket_cost(conn, tables, detail: Dict[str, Any]) -> Dict[str, Any
     }
 
 
+def estimate_docket_cost_for_filters(
+    engine,
+    tables,
+    filters: PclCaseFilters,
+    *,
+    include_docket_text: bool,
+) -> Dict[str, Any]:
+    """Estimate docket-run cost for cases matching provided filters.
+
+    The estimator prefers receipts from jobs within the same filter set, then
+    falls back to the same case type and finally all historical docket jobs.
+    """
+    pcl_cases = tables["pcl_cases"]
+    docket_jobs = tables["docket_enrichment_jobs"]
+    docket_receipts = tables["docket_enrichment_receipts"]
+
+    where_clauses = _build_where_clauses(pcl_cases, filters, case_fields=None)
+    case_type = filters.case_type
+
+    candidate_ids_stmt = select(pcl_cases.c.id).where(and_(*where_clauses))
+
+    def _count_cases() -> int:
+        stmt = select(func.count()).select_from(pcl_cases).where(and_(*where_clauses))
+        with engine.begin() as conn:
+            return int(conn.execute(stmt).scalar_one())
+
+    def _run_estimate(where: Sequence[Any]) -> Dict[str, Any]:
+        join_stmt = docket_jobs.join(
+            docket_receipts, docket_receipts.c.job_id == docket_jobs.c.id
+        ).join(pcl_cases, pcl_cases.c.id == docket_jobs.c.case_id)
+        stmt = (
+            select(
+                func.count(docket_receipts.c.id).label("receipt_count"),
+                func.avg(docket_receipts.c.fee).label("avg_fee"),
+                func.avg(docket_receipts.c.billable_pages).label("avg_pages"),
+            )
+            .select_from(join_stmt)
+            .where(and_(docket_jobs.c.include_docket_text.is_(include_docket_text), *where))
+        )
+        with engine.begin() as conn:
+            row = conn.execute(stmt).mappings().one()
+        receipt_count = int(row["receipt_count"] or 0)
+        return {
+            "receipt_count": receipt_count,
+            "avg_fee": float(row["avg_fee"]) if row["avg_fee"] is not None else None,
+            "avg_billable_pages": (
+                float(row["avg_pages"]) if row["avg_pages"] is not None else None
+            ),
+        }
+
+    scoped_match = _run_estimate([pcl_cases.c.id.in_(candidate_ids_stmt)])
+
+    if scoped_match["receipt_count"] <= 0 and case_type:
+        scoped_match = _run_estimate([pcl_cases.c.case_type == case_type])
+        scoped_match["fallback"] = "case_type"
+    elif scoped_match["receipt_count"] <= 0:
+        scoped_match["fallback"] = "global"
+
+    scoped_match.setdefault("fallback", "filter")
+    candidate_count = _count_cases()
+    avg_fee = scoped_match["avg_fee"]
+    scoped_match["candidate_count"] = candidate_count
+    scoped_match["estimated_total_fee"] = (
+        avg_fee * candidate_count if avg_fee is not None else None
+    )
+    scoped_match["include_docket_text"] = include_docket_text
+    return scoped_match
+
+
 def _load_distinct(conn, column) -> List[str]:
     stmt = select(column).where(column.is_not(None)).group_by(column).order_by(column.asc())
     return [row[0] for row in conn.execute(stmt).all() if row[0]]

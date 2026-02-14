@@ -7,7 +7,11 @@ from sqlalchemy import insert, text as sa_text
 
 from app import create_app
 from docket_enrichment import DocketEnrichmentWorker, TERMINAL_FAILURE_MESSAGE
-from pcl_queries import PclCaseFilters, list_cases
+from pcl_queries import (
+    PclCaseFilters,
+    estimate_docket_cost_for_filters,
+    list_cases,
+)
 
 
 class AdminPclCasesTests(unittest.TestCase):
@@ -38,6 +42,7 @@ class AdminPclCasesTests(unittest.TestCase):
         receipts = self.tables["pcl_batch_receipts"]
         docket_jobs = self.tables["docket_enrichment_jobs"]
         docket_receipts = self.tables["docket_enrichment_receipts"]
+        case_fields = self.tables["pcl_case_fields"]
         with self.engine.begin() as conn:
             request_result = conn.execute(
                 insert(requests).values(
@@ -123,6 +128,34 @@ class AdminPclCasesTests(unittest.TestCase):
                         "last_segment_id": segment_id,
                         "data_json": "{}",
                     },
+                    {
+                        "court_id": "edpa",
+                        "case_number": "5:10-cr-00101",
+                        "case_number_full": "5:10-cr-00101",
+                        "case_type": "cr",
+                        "date_filed": date(2024, 2, 2),
+                        "date_closed": None,
+                        "short_title": "United States v. Kearney",
+                        "case_title": None,
+                        "judge_last_name": "Kearney",
+                        "record_hash": "hash-k-1",
+                        "last_segment_id": segment_id,
+                        "data_json": "{}",
+                    },
+                    {
+                        "court_id": "edpa",
+                        "case_number": "3:10-cr-00202",
+                        "case_number_full": "3:10-cr-00202",
+                        "case_type": "cr",
+                        "date_filed": date(2024, 3, 11),
+                        "date_closed": None,
+                        "short_title": "United States v. Cooper",
+                        "case_title": None,
+                        "judge_last_name": "Kearney",
+                        "record_hash": "hash-k-2",
+                        "last_segment_id": segment_id,
+                        "data_json": "{}",
+                    },
                 ],
             )
 
@@ -193,6 +226,61 @@ class AdminPclCasesTests(unittest.TestCase):
                     report_id="r-1",
                     receipt_json='{"itemCount": 2}',
                 )
+            )
+
+            kearney_case_id = int(
+                conn.execute(
+                    sa_text(
+                        "SELECT id FROM pcl_cases WHERE case_number = :case_number"
+                    ),
+                    {"case_number": "5:10-cr-00101"},
+                ).scalar_one()
+            )
+            kearney_case_id_2 = int(
+                conn.execute(
+                    sa_text(
+                        "SELECT id FROM pcl_cases WHERE case_number = :case_number"
+                    ),
+                    {"case_number": "3:10-cr-00202"},
+                ).scalar_one()
+            )
+            conn.execute(
+                insert(case_fields),
+                [
+                    {
+                        "case_id": kearney_case_id,
+                        "field_name": "docket_entries",
+                        "field_value_json": [
+                            {
+                                "documentNumber": "1",
+                                "description": "Motion for 5K1.1 departure",
+                                "documentLinks": [
+                                    {"href": "https://pacers.example/doc1.pdf"},
+                                ],
+                            },
+                            {
+                                "documentNumber": "2",
+                                "description": "Plea agreement",
+                                "documentLinks": [
+                                    {"href": "https://pacers.example/doc2.pdf"},
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "case_id": kearney_case_id_2,
+                        "field_name": "docket_entries",
+                        "field_value_json": [
+                            {
+                                "documentNumber": "3",
+                                "description": "Final judgment order",
+                                "documentLinks": [
+                                    {"href": "https://pacers.example/doc3.pdf"},
+                                ],
+                            }
+                        ],
+                    },
+                ],
             )
 
     def _admin_session(self):
@@ -292,6 +380,116 @@ class AdminPclCasesTests(unittest.TestCase):
         self.assertIn(b"Docket enrichment queue", response.data)
         self.assertIn(b"Run worker", response.data)
         self.assertIn(b"1:24-cr-00999", response.data)
+
+    def test_estimate_docket_cost_for_kearney_filter_has_fallback(self):
+        filters = PclCaseFilters(
+            court_id="edpa",
+            case_type="cr",
+            judge_last_name="kearney",
+            date_filed_from=date(2010, 1, 1),
+            date_filed_to=date(2030, 1, 1),
+        )
+        with_text = estimate_docket_cost_for_filters(
+            self.engine, self.tables, filters, include_docket_text=True
+        )
+        without_text = estimate_docket_cost_for_filters(
+            self.engine, self.tables, filters, include_docket_text=False
+        )
+        self.assertEqual(with_text["candidate_count"], 2)
+        self.assertEqual(without_text["candidate_count"], 2)
+        self.assertEqual(with_text["fallback"], "case_type")
+        self.assertEqual(without_text["fallback"], "case_type")
+        self.assertEqual(with_text["receipt_count"], 1)
+        self.assertEqual(without_text["receipt_count"], 1)
+
+    def test_admin_kearney_queue_route_with_keyword_documents(self):
+        self._admin_session()
+        with self.engine.begin() as conn:
+            existing_case_id = int(
+                conn.execute(
+                    sa_text(
+                        "SELECT id FROM pcl_cases WHERE case_number = :case_number"
+                    ),
+                    {"case_number": "5:10-cr-00101"},
+                ).scalar_one()
+            )
+            second_case_id = int(
+                conn.execute(
+                    sa_text(
+                        "SELECT id FROM pcl_cases WHERE case_number = :case_number"
+                    ),
+                    {"case_number": "3:10-cr-00202"},
+                ).scalar_one()
+            )
+            conn.execute(
+                sa_text(
+                    """
+                    INSERT INTO docket_enrichment_jobs
+                    (case_id, include_docket_text, status, attempts, started_at, finished_at, created_at, updated_at)
+                    VALUES (:case_id, 1, 'queued', 0, :started_at, :finished_at, :created_at, :updated_at)
+                    """
+                ),
+                {
+                    "case_id": existing_case_id,
+                    "started_at": datetime(2024, 6, 1),
+                    "finished_at": datetime(2024, 6, 1),
+                    "created_at": datetime(2024, 6, 1),
+                    "updated_at": datetime(2024, 6, 1),
+                },
+            )
+
+        response = self.client.post(
+            "/admin/docket-enrichment/queue-kearney",
+            data={
+                "csrf_token": "test-token",
+                "include_docket_text": "1",
+                "queue_documents": "1",
+                "document_keywords": "5K1.1, cooperation",
+                "max_cases": "500",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 302)
+
+        with self.engine.begin() as conn:
+            cases = conn.execute(
+                sa_text(
+                    "SELECT case_id, status, include_docket_text "
+                    "FROM docket_enrichment_jobs "
+                    "WHERE case_id IN (:case_a, :case_b)"
+                ),
+                {"case_a": existing_case_id, "case_b": second_case_id},
+            ).mappings().all()
+            cases_seen = {row["case_id"] for row in cases}
+            self.assertEqual(cases_seen, {existing_case_id, second_case_id})
+            docket_jobs = len(
+                [
+                    row
+                    for row in cases
+                    if row["status"] == "queued"
+                    and row["include_docket_text"] in {"1", 1, True}
+                ]
+            )
+            self.assertEqual(docket_jobs, 2)
+
+            queued_doc_jobs = conn.execute(
+                sa_text(
+                    "SELECT COUNT(*) AS doc_jobs "
+                    "FROM docket_document_jobs "
+                    "WHERE case_id IN (:case_a, :case_b)"
+                ),
+                {"case_a": existing_case_id, "case_b": second_case_id},
+            ).scalar_one()
+            self.assertEqual(queued_doc_jobs, 1)
+
+            doc_job_cases = conn.execute(
+                sa_text(
+                    "SELECT case_id FROM docket_document_jobs "
+                    "WHERE case_id IN (:case_a, :case_b)"
+                ),
+                {"case_a": existing_case_id, "case_b": second_case_id},
+            ).fetchall()
+            self.assertEqual({row[0] for row in doc_job_cases}, {existing_case_id})
 
 
 if __name__ == "__main__":

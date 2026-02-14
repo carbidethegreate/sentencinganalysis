@@ -38,6 +38,49 @@
           <button class="primary" type="submit">Run worker</button>
         </form>
       </article>
+
+      <article class="pcl-detail-card">
+        {% set k_with_text = kearney_estimate_with_text %}
+        {% set k_without_text = kearney_estimate_without_text %}
+        <h3>Mark A. Kearney backfill</h3>
+        <p class="small">Queue all EDPA criminal cases for Judge Kearney (2010-01-01 to today).</p>
+        <p class="small">
+          {{ kearney_candidate_count }} matching cases.
+          {% if k_with_text and k_with_text.avg_fee is not none %}
+            Est. with text per case: ${{ '%.2f'|format(k_with_text.avg_fee) }}.
+            Est. total: ${{ '%.2f'|format(k_with_text.estimated_total_fee) }}.
+          {% else %}
+            With-text estimate: unknown.
+          {% endif %}
+          {% if k_without_text and k_without_text.avg_fee is not none %}
+            Without-text: ${{ '%.2f'|format(k_without_text.avg_fee) }}.
+          {% else %}
+            Without-text estimate: unknown.
+          {% endif %}
+          History source: {{ k_with_text.fallback }}.
+        </p>
+
+        <form method="post" action="{{ url_for('admin_docket_enrichment_queue_kearney') }}" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label>
+            Max cases
+            <input type="number" name="max_cases" min="1" max="5000" value="500">
+          </label>
+          <label>
+            <input type="checkbox" name="include_docket_text" value="1" checked>
+            Include docket text
+          </label>
+          <label>
+            <input type="checkbox" name="queue_documents" value="1">
+            Queue docket document downloads
+          </label>
+          <label>
+            Document keywords (optional)
+            <input type="text" name="document_keywords" placeholder="5K1.1, cooperation, downward departure">
+          </label>
+          <button class="primary" type="submit">Queue Mark A. Kearney cases</button>
+        </form>
+      </article>
     </div>
 
     <article class="card">
@@ -61,6 +104,15 @@
             <datalist id="docket-case-type-options">
               {% for case_type in filter_choices.case_types %}
                 <option value="{{ case_type }}">{{ case_type }}</option>
+              {% endfor %}
+            </datalist>
+          </div>
+          <div>
+            <label for="docket-judge">Judge</label>
+            <input id="docket-judge" name="judge_last_name" list="docket-judge-options" value="{{ docket_filters.judge_last_name }}" placeholder="Judge last name">
+            <datalist id="docket-judge-options">
+              {% for judge in filter_choices.judges %}
+                <option value="{{ judge }}">{{ judge }}</option>
               {% endfor %}
             </datalist>
           </div>
@@ -115,6 +167,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="court_id" value="{{ docket_filters.court_id }}">
         <input type="hidden" name="case_type" value="{{ docket_filters.case_type }}">
+        <input type="hidden" name="judge_last_name" value="{{ docket_filters.judge_last_name }}">
         <input type="hidden" name="date_filed_from" value="{{ docket_filters.date_filed_from.isoformat() if docket_filters.date_filed_from else '' }}">
         <input type="hidden" name="date_filed_to" value="{{ docket_filters.date_filed_to.isoformat() if docket_filters.date_filed_to else '' }}">
         <input type="hidden" name="q" value="{{ docket_filters.search_text }}">

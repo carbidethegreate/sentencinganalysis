@@ -130,7 +130,9 @@ from pcl_queries import (
     list_attorneys,
     list_case_cards,
     list_cases,
+    PclCaseFilters,
     parse_filters,
+    estimate_docket_cost_for_filters,
 )
 from sentencing_queries import list_sentencing_events_by_judge, parse_sentencing_filters
 from federal_courts_sync import (
@@ -2267,6 +2269,7 @@ def create_app() -> Flask:
         case_fields: List[Dict[str, Any]],
         *,
         allowed_numbers: Optional[Set[str]] = None,
+        keyword_filters: Optional[Sequence[str]] = None,
     ) -> List[Dict[str, Any]]:
         entries = []
         for field in case_fields or []:
@@ -2274,11 +2277,14 @@ def create_app() -> Flask:
                 if isinstance(field["field_value_json"], list):
                     entries = field["field_value_json"]
                 break
+        normalized_keywords = _normalize_search_terms(keyword_filters)
         items: List[Dict[str, Any]] = []
         seen = set()
         for entry in entries or []:
             doc_number = entry.get("documentNumber")
             if allowed_numbers and not _matches_document_number(doc_number, allowed_numbers):
+                continue
+            if normalized_keywords and not _entry_matches_document_keywords(entry, normalized_keywords):
                 continue
             links = entry.get("documentLinks") or []
             for link in links:
@@ -2307,6 +2313,44 @@ def create_app() -> Flask:
                 )
         return items
 
+    def _normalize_search_terms(
+        values: Optional[Sequence[str]],
+    ) -> List[str]:
+        if not values:
+            return []
+        terms: List[str] = []
+        for value in values:
+            if not value:
+                continue
+            for term in re.split(r"[,\n;]+", str(value)):
+                cleaned = term.strip().lower()
+                if cleaned:
+                    terms.append(cleaned)
+        return sorted(set(terms))
+
+    def _entry_matches_document_keywords(
+        entry: Dict[str, Any], terms: Sequence[str]
+    ) -> bool:
+        if not entry or not terms:
+            return False if terms else True
+        haystack_parts: List[str] = []
+        for key in (
+            "description",
+            "documentDescription",
+            "document_description",
+            "linkText",
+            "text",
+            "eventText",
+            "entryText",
+        ):
+            value = entry.get(key)
+            if isinstance(value, str):
+                haystack_parts.append(value)
+        if not haystack_parts:
+            return False
+        haystack = " ".join(haystack_parts).lower()
+        return any(term in haystack for term in terms)
+
     def _parse_document_numbers(raw: Optional[str]) -> Optional[Set[str]]:
         if not raw:
             return None
@@ -2326,9 +2370,12 @@ def create_app() -> Flask:
                     if start <= end:
                         for value in range(start, end + 1):
                             numbers.add(str(value))
-                        continue
+                    continue
             numbers.add(token)
         return numbers or None
+
+    def _parse_document_keywords(raw: Optional[str]) -> List[str]:
+        return _normalize_search_terms((raw or "").replace("|", ",").replace("\n", ",").split(","))
 
     def _matches_document_number(doc_number: Optional[str], allowed: Set[str]) -> bool:
         if not doc_number:
@@ -2339,6 +2386,64 @@ def create_app() -> Flask:
         if digits and digits in allowed:
             return True
         return False
+
+    def _coerce_json_value(value: Any) -> Any:
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return None
+            try:
+                return json.loads(cleaned)
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def _latest_job_status(
+        conn: Any,
+        jobs_table: Any,
+        *,
+        case_id: int,
+    ) -> Optional[str]:
+        row = (
+            conn.execute(
+                select(jobs_table.c.status)
+                .where(jobs_table.c.case_id == case_id)
+                .order_by(
+                    jobs_table.c.created_at.desc(), jobs_table.c.id.desc()
+                )
+                .limit(1)
+            )
+            .scalar()
+        )
+        return str(row) if row is not None else None
+
+    def _load_case_docket_entries(conn: Any, case_id: int) -> List[Dict[str, Any]]:
+        pcl_case_fields = pcl_tables.get("pcl_case_fields")
+        if pcl_case_fields is None:
+            return []
+        row = (
+            conn.execute(
+                select(pcl_case_fields.c.field_value_json)
+                .where(
+                    pcl_case_fields.c.case_id == case_id,
+                    pcl_case_fields.c.field_name == "docket_entries",
+                )
+                .order_by(pcl_case_fields.c.created_at.desc(), pcl_case_fields.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            return []
+        value = _coerce_json_value(row["field_value_json"])
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+        return []
 
     def _queue_document_job(
         conn: Any, case_id: int, items: List[Dict[str, Any]]
@@ -8000,6 +8105,24 @@ def create_app() -> Flask:
             )
         return int(result.inserted_primary_key[0])
 
+    def _build_kearney_docket_filters() -> PclCaseFilters:
+        return PclCaseFilters(
+            court_id="edpa",
+            case_type="cr",
+            judge_last_name="kearney",
+            date_filed_from=datetime(2010, 1, 1).date(),
+            date_filed_to=datetime.utcnow().date(),
+        )
+
+    def _estimate_kearney_docket_runs(*, include_docket_text: bool) -> Dict[str, Any]:
+        filters = _build_kearney_docket_filters()
+        return estimate_docket_cost_for_filters(
+            engine,
+            pcl_tables,
+            filters,
+            include_docket_text=include_docket_text,
+        )
+
     def _load_docket_dashboard_rows(limit: int = 200) -> List[Dict[str, Any]]:
         job_table = pcl_tables["docket_enrichment_jobs"]
         receipt_table = pcl_tables["docket_enrichment_receipts"]
@@ -8065,15 +8188,25 @@ def create_app() -> Flask:
             .distinct()
             .order_by(pcl_cases.c.case_type.asc())
         )
+        judges_stmt = (
+            select(pcl_cases.c.judge_last_name)
+            .where(pcl_cases.c.judge_last_name.is_not(None))
+            .distinct()
+            .order_by(pcl_cases.c.judge_last_name.asc())
+        )
         with engine.begin() as conn:
             courts = [row[0] for row in conn.execute(courts_stmt) if row[0]]
             case_types = [row[0] for row in conn.execute(case_types_stmt) if row[0]]
-        return {"courts": courts, "case_types": case_types}
+            judges = [
+                row[0] for row in conn.execute(judges_stmt) if row[0]
+            ]
+        return {"courts": courts, "case_types": case_types, "judges": judges}
 
     def _parse_docket_filters(args: Dict[str, str]) -> Dict[str, Any]:
         court_id = (args.get("court_id") or "").strip().lower()
         case_type = (args.get("case_type") or "").strip().lower()
         search_text = (args.get("q") or "").strip()
+        judge_last_name = (args.get("judge_last_name") or "").strip()
         docket_status = (args.get("docket_status") or "any").strip().lower()
         docket_text = (args.get("docket_text") or "any").strip().lower()
         sort = (args.get("sort") or "date_filed_desc").strip().lower()
@@ -8086,6 +8219,7 @@ def create_app() -> Flask:
         return {
             "court_id": court_id,
             "case_type": case_type,
+            "judge_last_name": judge_last_name,
             "search_text": search_text,
             "docket_status": docket_status,
             "docket_text": docket_text,
@@ -8127,6 +8261,10 @@ def create_app() -> Flask:
             clauses.append(pcl_cases.c.court_id == filters["court_id"])
         if filters["case_type"]:
             clauses.append(pcl_cases.c.case_type == filters["case_type"])
+        if filters.get("judge_last_name"):
+            clauses.append(
+                func.lower(func.coalesce(pcl_cases.c.judge_last_name, "")) == filters["judge_last_name"].lower()
+            )
         if filters["date_filed_from"]:
             clauses.append(pcl_cases.c.date_filed >= filters["date_filed_from"])
         if filters["date_filed_to"]:
@@ -8692,6 +8830,13 @@ def create_app() -> Flask:
         filter_choices = _load_docket_filter_choices()
         filters = _parse_docket_filters(request.args.to_dict(flat=True))
         candidates = _load_docket_case_candidates(filters)
+        kearney_estimate_with_text = _estimate_kearney_docket_runs(
+            include_docket_text=True
+        )
+        kearney_estimate_without_text = _estimate_kearney_docket_runs(
+            include_docket_text=False
+        )
+        kearney_candidates = kearney_estimate_with_text.get("candidate_count", 0)
         service_record = pacer_service_token_store.get_token(
             expected_environment=pacer_env_config.pcl_env
         )
@@ -8723,6 +8868,9 @@ def create_app() -> Flask:
             candidate_page_size=candidates["page_size"],
             candidate_page_url=page_url,
             docket_filters=filters,
+            kearney_estimate_with_text=kearney_estimate_with_text,
+            kearney_estimate_without_text=kearney_estimate_without_text,
+            kearney_candidate_count=kearney_candidates,
             csrf_token=get_csrf_token(),
         )
 
@@ -8785,6 +8933,102 @@ def create_app() -> Flask:
             "success",
         )
         return redirect(url_for("admin_docket_enrichment_dashboard", **request.form.to_dict(flat=True)))
+
+    @app.post("/admin/docket-enrichment/queue-kearney")
+    @admin_required
+    def admin_docket_enrichment_queue_kearney():
+        require_csrf()
+        include_docket_text = _parse_include_docket_text(
+            request.form.get("include_docket_text")
+        )
+        max_cases = request.form.get("max_cases", "500").strip()
+        try:
+            max_cases_int = max(1, min(5000, int(max_cases)))
+        except ValueError:
+            max_cases_int = 500
+
+        queue_documents = _parse_include_docket_text(
+            request.form.get("queue_documents")
+        )
+        document_keywords = _parse_document_keywords(request.form.get("document_keywords"))
+
+        filters = _build_kearney_docket_filters()
+        candidate_filters = {
+            "court_id": filters.court_id,
+            "case_type": filters.case_type,
+            "judge_last_name": filters.judge_last_name,
+            "search_text": "",
+            "docket_status": "any",
+            "docket_text": "any",
+            "sort": "date_filed_desc",
+            "page": 1,
+            "page_size": max_cases_int,
+            "date_filed_from": filters.date_filed_from,
+            "date_filed_to": filters.date_filed_to,
+        }
+        candidates = _load_docket_case_candidates(candidate_filters)
+
+        docket_jobs_queued = 0
+        docket_jobs_skipped = 0
+        document_jobs_queued = 0
+        document_jobs_skipped = 0
+        document_no_matches = 0
+
+        document_jobs_table = pcl_tables.get("docket_document_jobs")
+
+        with engine.begin() as conn:
+            for row in candidates["rows"]:
+                case_id = int(row["id"])
+
+                if row.get("last_job_status") in {"queued", "running"}:
+                    docket_jobs_skipped += 1
+                else:
+                    _enqueue_docket_enrichment(case_id, include_docket_text)
+                    docket_jobs_queued += 1
+
+                if not queue_documents:
+                    continue
+                if document_jobs_table is None:
+                    continue
+                latest_doc_status = _latest_job_status(
+                    conn, document_jobs_table, case_id=case_id
+                )
+                if latest_doc_status in {"queued", "running"}:
+                    document_jobs_skipped += 1
+                    continue
+
+                entries = _load_case_docket_entries(conn, case_id)
+                items = _extract_document_links_from_case_fields(
+                    [{"field_name": "docket_entries", "field_value_json": entries}],
+                    keyword_filters=document_keywords or None,
+                )
+                if not items:
+                    document_no_matches += 1
+                    continue
+                _queue_document_job(conn, case_id, items)
+                document_jobs_queued += 1
+
+        message_parts = [
+            f"Queued {docket_jobs_queued} docket enrichment jobs for Mark A. Kearney",
+            f"skipped {docket_jobs_skipped} already queued/running",
+        ]
+        if queue_documents:
+            if document_keywords:
+                message_parts.append(
+                    f"Queued {document_jobs_queued} document jobs using {len(document_keywords)} keyword filter(s)"
+                )
+            else:
+                message_parts.append(f"Queued {document_jobs_queued} document jobs")
+            if document_jobs_skipped:
+                message_parts.append(
+                    f"skipped {document_jobs_skipped} document jobs already queued/running"
+                )
+            if document_no_matches:
+                message_parts.append(
+                    f"{document_no_matches} cases had no matching document links"
+                )
+        flash(". ".join(message_parts) + ".", "success")
+        return redirect(url_for("admin_docket_enrichment_dashboard"))
 
     @app.get("/admin/federal-data-dashboard/expand-existing")
     @admin_required
