@@ -1,15 +1,20 @@
 {% extends "base.html" %}
 
-{% block title %}Admin | Case Data One Upload{% endblock %}
+{% block title %}Admin | Import Case Data (Legacy){% endblock %}
 
 {% block content %}
   <div class="card upload-card">
     <div class="upload-header">
       <div>
-        <h1>Case Data One Upload</h1>
-        <p class="small">Upload the pipe-delimited Case Data One file (max 25MB).</p>
+        <h1>Import Case Data (Legacy)</h1>
+        <p class="small">Upload a pipe-delimited file (max 25MB) to the legacy imported-cases dataset.</p>
       </div>
       <span class="upload-badge">Admin upload</span>
+    </div>
+
+    <div class="actions mt-8">
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_cases', source='imported') }}">Back to imported cases</a>
+      <a class="pill" href="{{ url_for('admin_federal_data_dashboard_cases') }}">Go to cases</a>
     </div>
 
     <div class="upload-guidance">
@@ -32,7 +37,7 @@
         <input id="case-data-one-file" type="file" name="case_data_one_file" accept=".txt,.csv" required>
         <span id="case-data-one-file-label">Select file to upload</span>
       </label>
-      <button class="pill" type="submit">Upload case data one</button>
+      <button class="pill" type="submit">Upload file</button>
     </form>
     <div id="case-data-one-file-panel" class="file-panel" style="display: none;">
       <div class="file-meta">

@@ -619,7 +619,7 @@
                     <textarea name="store_payload" hidden>{{ run_result.store_payload | tojson }}</textarea>
                     <button class="primary" type="submit">Save to database</button>
                   </form>
-                  <a class="pill" href="{{ url_for('admin_federal_data_dashboard_case_cards') }}">View saved case cards</a>
+                  <a class="pill" href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='cards') }}">View saved cases</a>
                 </div>
               {% endif %}
             {% else %}
@@ -749,7 +749,7 @@
                     <textarea name="store_payload" hidden>{{ run_result.store_payload | tojson }}</textarea>
                     <button class="primary" type="submit">Save to database</button>
                   </form>
-                  <a class="pill" href="{{ url_for('admin_federal_data_dashboard_case_cards') }}">View saved case cards</a>
+                  <a class="pill" href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='cards') }}">View saved cases</a>
                 </div>
               {% endif %}
             {% else %}
