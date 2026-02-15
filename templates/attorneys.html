@@ -128,6 +128,19 @@
             </div>
           {% endif %}
 
+          {% if attorney.all_lines %}
+            <div class="attorney-docket-lines">
+              <p class="small"><strong>Full contact block (from docket)</strong></p>
+              <div class="attorney-docket-lines__body">
+                <ul class="attorney-contact-list">
+                  {% for line in attorney.all_lines %}
+                    <li>{{ line }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </div>
+          {% endif %}
+
           {% if attorney.organizations or attorney.designations or attorney.roles %}
             <div class="attorney-tags">
               {% for organization in attorney.organizations %}
@@ -192,13 +205,6 @@
                   </tbody>
                 </table>
               </div>
-            </details>
-          {% endif %}
-
-          {% if attorney.details or attorney.raw_lines %}
-            <details class="attorney-details">
-              <summary class="pcl-detail-summary">Show all contact/detail lines</summary>
-              <pre class="code-block">{% if attorney.raw_lines %}{{ attorney.raw_lines | join('\n') }}{% elif attorney.details %}{{ attorney.details | join('\n') }}{% endif %}</pre>
             </details>
           {% endif %}
         </article>

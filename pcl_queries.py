@@ -1392,6 +1392,17 @@ def _finalize_attorney_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
         details = sorted(bucket.get("detail_set") or [])
     if not raw_lines:
         raw_lines = sorted(bucket.get("raw_line_set") or [])
+    all_lines: List[str] = []
+    seen_lines: set[str] = set()
+    for item in list(raw_lines) + list(details):
+        cleaned = _clean_str(item)
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen_lines:
+            continue
+        seen_lines.add(key)
+        all_lines.append(cleaned)
     addresses = _extract_attorney_addresses(details, raw_lines, organizations)
     return {
         "name": bucket.get("name"),
@@ -1403,6 +1414,7 @@ def _finalize_attorney_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
         "designations": sorted(bucket.get("designation_set") or []),
         "roles": sorted(bucket.get("role_set") or []),
         "addresses": addresses,
+        "all_lines": all_lines,
         "details": details,
         "raw_lines": raw_lines,
         "case_count": len(case_rows),
