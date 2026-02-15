@@ -8153,11 +8153,21 @@ def create_app() -> Flask:
         result = list_case_cards(engine, pcl_tables, filters, page=page, page_size=page_size)
         total_pages = result.pagination.total_pages
         next_page = page + 1 if page < total_pages else None
+        next_params = request.args.to_dict(flat=True)
+        next_params.pop("source", None)
+        next_params.pop("view", None)
+        next_url = url_for(
+            "admin_federal_data_dashboard_cases",
+            source="pacer",
+            view="cards",
+            **next_params,
+        )
         html = render_template(
             "partials/pcl_case_cards_grid.html",
             cases=result.rows,
             csrf_token=get_csrf_token(),
             show_empty_state=False,
+            next_url=next_url,
         )
         return jsonify(
             {

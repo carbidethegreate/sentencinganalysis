@@ -35,6 +35,7 @@
 {% if fetch_disabled %}
   {% set fetch_label = "Fetching…" %}
 {% endif %}
+{% set return_url = next_url if next_url is defined else request.full_path %}
 
 <article class="card pcl-case-card" id="case-card-{{ case.get('id') }}">
   <header class="pcl-case-card__header">
@@ -147,7 +148,7 @@
     <form method="post" action="{{ url_for('admin_pcl_case_pull_docket_now', case_id=case.get('id')) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="include_docket_text" value="1">
-      <input type="hidden" name="next" value="{{ request.full_path }}#case-card-{{ case.get('id') }}">
+      <input type="hidden" name="next" value="{{ return_url }}#case-card-{{ case.get('id') }}">
       <button class="secondary" type="submit" {% if fetch_disabled %}disabled{% endif %}>{{ fetch_label }}</button>
     </form>
     <a class="primary" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">Open case</a>
