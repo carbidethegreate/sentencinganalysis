@@ -1,3 +1,4 @@
+import base64
 import csv
 import io
 import json
@@ -6,6 +7,7 @@ import math
 import os
 import re
 import secrets
+import struct
 import time
 import tempfile
 import threading
@@ -437,6 +439,95 @@ def get_configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
     return login_id, password
 
 
+def get_configured_pacer_client_code() -> Optional[str]:
+    value = _first_env_or_secret_file(
+        "pclient",
+        "pclientcode",
+        "PACER_CLIENT_CODE",
+        "PACER_CLIENTCODE",
+    )
+    return value.strip() if value and value.strip() else None
+
+
+def get_configured_pacer_otp_code() -> Optional[str]:
+    value = _first_env_or_secret_file(
+        "potp_code",
+        "pacer_otp_code",
+        "PACER_OTP_CODE",
+    )
+    value = (value or "").strip()
+    if not value:
+        return None
+    # PACER expects a 6-digit code; keep the guard loose to allow leading zeros.
+    return value
+
+
+def get_configured_pacer_otp_secret() -> Optional[str]:
+    """Return a base32-encoded TOTP secret, if configured.
+
+    This is the shared secret key shown when enrolling in MFA (Manage My Account).
+    """
+
+    value = _first_env_or_secret_file(
+        "potp_secret",
+        "pacer_otp_secret",
+        "PACER_OTP_SECRET",
+        "PACER_MFA_SECRET",
+        "PACER_TOTP_SECRET",
+    )
+    return value.strip() if value and value.strip() else None
+
+
+def _normalize_base32_secret(value: str) -> str:
+    # Strip whitespace and common separators, keep only base32 alphabet.
+    cleaned = re.sub(r"[^A-Za-z2-7]", "", value or "")
+    cleaned = cleaned.upper()
+    # Base32 strings may be missing padding.
+    pad_len = (-len(cleaned)) % 8
+    return cleaned + ("=" * pad_len)
+
+
+def _generate_totp_code(
+    base32_secret: str,
+    *,
+    digits: int = 6,
+    step_seconds: int = 30,
+    for_time: Optional[int] = None,
+) -> str:
+    """Generate an RFC 6238 TOTP code (HMAC-SHA1) from a base32 secret."""
+
+    secret = _normalize_base32_secret(base32_secret)
+    key = base64.b32decode(secret, casefold=True)
+    now = int(time.time()) if for_time is None else int(for_time)
+    counter = now // int(step_seconds)
+    msg = struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code_int = (
+        ((digest[offset] & 0x7F) << 24)
+        | ((digest[offset + 1] & 0xFF) << 16)
+        | ((digest[offset + 2] & 0xFF) << 8)
+        | (digest[offset + 3] & 0xFF)
+    )
+    code = code_int % (10**int(digits))
+    return f"{code:0{int(digits)}d}"
+
+
+def get_configured_pacer_otp_for_auth() -> Optional[str]:
+    """Return an OTP code for auth, either configured directly or generated from a secret."""
+
+    explicit = get_configured_pacer_otp_code()
+    if explicit:
+        return explicit
+    secret = get_configured_pacer_otp_secret()
+    if not secret:
+        return None
+    try:
+        return _generate_totp_code(secret)
+    except Exception:
+        return None
+
+
 def pacer_environment_label(base_url: str) -> str:
     return pacer_env_label(infer_pacer_env(base_url))
 
@@ -527,9 +618,21 @@ def interpret_pacer_auth_response(
     token_present = bool(login_result == "0" and token)
     search_disabled = False
     search_disabled_reason = None
-    can_proceed = bool(token_present and (search_disabled or not error_description))
+    if token_present and error_description:
+        lowered = error_description.lower()
+        # PACER may return a valid token but include an informational error_description
+        # when search privileges are unavailable (e.g., missing client code).
+        if "search privileges" in lowered or "will not have pacer search privileges" in lowered:
+            search_disabled = True
+            search_disabled_reason = error_description
+        elif "account has been disabled" in lowered or "activate your search privileges" in lowered:
+            search_disabled = True
+            search_disabled_reason = error_description
+
+    # Treat token presence as authorization; search may still be disabled.
+    can_proceed = bool(token_present)
     return PacerAuthResult(
-        token=token if can_proceed else "",
+        token=token if token_present else "",
         error_description=error_description,
         login_result=login_result,
         needs_otp=needs_otp,
@@ -1150,6 +1253,8 @@ def create_app() -> Flask:
         login_id, password = get_configured_pacer_credentials()
         if not login_id or not password:
             return None
+        client_code = get_configured_pacer_client_code()
+        otp_code = get_configured_pacer_otp_for_auth()
         session_key = session.get("pacer_session_key")
         if not session_key:
             session_key = secrets.token_urlsafe(16)
@@ -1159,6 +1264,8 @@ def create_app() -> Flask:
             result = pacer_auth_client.authenticate(
                 login_id,
                 password,
+                otp_code=otp_code,
+                client_code=client_code,
                 redact_flag=True,
             )
         except ValueError:
@@ -1177,16 +1284,30 @@ def create_app() -> Flask:
         login_id, password = get_configured_pacer_credentials()
         if not login_id or not password:
             return None
+        client_code = get_configured_pacer_client_code()
+        otp_code = get_configured_pacer_otp_for_auth()
         pacer_service_token_store.initialize_session(service_session_key)
         try:
             result = pacer_auth_client.authenticate(
                 login_id,
                 password,
+                otp_code=otp_code,
+                client_code=client_code,
                 redact_flag=True,
             )
         except ValueError:
             return None
         if not result.can_proceed or not result.token:
+            # Keep logs high-signal; avoid dumping full error bodies.
+            if app.logger:
+                app.logger.warning(
+                    "PACER background auth failed (loginResult=%s needsOtp=%s needsClientCode=%s needsRedactionAck=%s canProceed=%s).",
+                    result.login_result,
+                    bool(result.needs_otp),
+                    bool(result.needs_client_code),
+                    bool(result.needs_redaction_ack),
+                    bool(result.can_proceed),
+                )
             return None
         pacer_service_token_store.save_token(
             result.token,
@@ -1209,6 +1330,11 @@ def create_app() -> Flask:
         env_mismatch_reason=pacer_env_config.mismatch_reason if pacer_env_config.mismatch else None,
         token_refresher=_refresh_pacer_token_background,
     )
+    configured_client_code = get_configured_pacer_client_code()
+    if configured_client_code:
+        # Court-facing endpoints expect client code as a cookie when supplied.
+        pcl_http_client.set_cookie("PacerClientCode", configured_client_code)
+        pcl_background_http_client.set_cookie("PacerClientCode", configured_client_code)
     pcl_client = PclClient(pcl_http_client, pcl_base_url, logger=app.logger)
     pcl_background_client = PclClient(
         pcl_background_http_client, pcl_base_url, logger=app.logger
@@ -7723,6 +7849,16 @@ def create_app() -> Flask:
 
         if result.can_proceed:
             _set_pacer_session(result.token)
+            if client_code:
+                # Best-effort: keep the client code cookie available for court endpoints.
+                try:
+                    pcl_http_client.set_cookie("PacerClientCode", client_code)
+                except Exception:
+                    pass
+                try:
+                    pcl_background_http_client.set_cookie("PacerClientCode", client_code)
+                except Exception:
+                    pass
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = bool(result.needs_client_code)
             session["pacer_redaction_required"] = False
