@@ -442,6 +442,7 @@ class DocketEnrichmentWorker:
         force_store_html: bool = False,
         raw_html: Optional[str] = None,
     ) -> None:
+        pcl_cases = self._tables["pcl_cases"]
         pcl_case_fields = self._tables.get("pcl_case_fields")
         receipt_table = self._tables.get("docket_enrichment_receipts")
         now = self._now()
@@ -572,6 +573,52 @@ class DocketEnrichmentWorker:
                         field_value_json=header_fields,
                         now=now,
                     )
+                    judges = _extract_judge_display_list(header_fields)
+                    if judges:
+                        _upsert_case_field(
+                            conn,
+                            pcl_case_fields,
+                            case_row["id"],
+                            "docket_judges",
+                            field_value_text=" | ".join(judges),
+                            field_value_json=judges,
+                            now=now,
+                        )
+                        # Also backfill the normalized last name on the case record so the
+                        # primary "Judge last name" filter works in list views.
+                        existing_last = conn.execute(
+                            select(pcl_cases.c.judge_last_name).where(pcl_cases.c.id == case_row["id"])
+                        ).scalar_one_or_none()
+                        if not (existing_last or "").strip():
+                            last_name = _guess_last_name_from_judge_label(judges[0])
+                            if last_name:
+                                conn.execute(
+                                    update(pcl_cases)
+                                    .where(pcl_cases.c.id == case_row["id"])
+                                    .values(judge_last_name=last_name, updated_at=now)
+                                )
+                    party_count = header_fields.get("party_count") if isinstance(header_fields, dict) else None
+                    if isinstance(party_count, int):
+                        _upsert_case_field(
+                            conn,
+                            pcl_case_fields,
+                            case_row["id"],
+                            "docket_party_count",
+                            field_value_text=str(party_count),
+                            field_value_json=party_count,
+                            now=now,
+                        )
+                    attorney_count = header_fields.get("attorney_count") if isinstance(header_fields, dict) else None
+                    if isinstance(attorney_count, int):
+                        _upsert_case_field(
+                            conn,
+                            pcl_case_fields,
+                            case_row["id"],
+                            "docket_attorney_count",
+                            field_value_text=str(attorney_count),
+                            field_value_json=attorney_count,
+                            now=now,
+                        )
                 parties = (
                     header_fields.get("parties")
                     if isinstance(header_fields, dict)
@@ -1194,7 +1241,8 @@ def _extract_party_name_and_details(cell: Any) -> tuple[Optional[str], List[str]
 
 def _extract_attorneys_from_cell(cell: Any) -> List[Dict[str, Any]]:
     raw_html = lxml_html.tostring(cell, encoding="unicode")
-    segments = re.split(r"(?i)<b[^>]*>", raw_html)
+    # Use a word boundary so we don't treat <br> / <body> as <b>.
+    segments = re.split(r"(?i)<b\\b[^>]*>", raw_html)
     attorneys: List[Dict[str, Any]] = []
     for segment in segments[1:]:
         name_html, closing, body_html = segment.partition("</b>")
@@ -1203,7 +1251,9 @@ def _extract_attorneys_from_cell(cell: Any) -> List[Dict[str, Any]]:
         name = re.sub(r"\s+", " ", _strip_html(name_html)).strip()
         if not name:
             continue
-        lines = _split_nonempty_lines(_strip_html(body_html))
+        # `body_html` is often an HTML fragment beginning with `<br>`; wrap so we
+        # don't lose tail text when parsing with lxml.
+        lines = _split_nonempty_lines(_strip_html(f"<div>{body_html}</div>"))
         attorneys.append(_build_attorney_record(name, lines))
     line_attorneys = _extract_attorneys_from_lines(
         _split_nonempty_lines(_strip_html(raw_html))
@@ -1759,6 +1809,56 @@ def _flatten_header_fields(header_fields: Dict[str, Any]) -> str:
                     if disposition:
                         parts.append(str(disposition))
     return " | ".join(parts)
+
+
+def _extract_judge_display_list(header_fields: Dict[str, Any]) -> List[str]:
+    if not isinstance(header_fields, dict):
+        return []
+    values: List[str] = []
+    for key in ("assigned_to", "presiding_judge", "referred_to", "judges"):
+        raw = header_fields.get(key)
+        if isinstance(raw, list):
+            for item in raw:
+                cleaned = re.sub(r"\s+", " ", str(item or "")).strip()
+                if cleaned:
+                    values.append(cleaned)
+        elif raw:
+            cleaned = re.sub(r"\s+", " ", str(raw)).strip()
+            if cleaned:
+                values.append(cleaned)
+    seen = set()
+    deduped: List[str] = []
+    for value in values:
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value)
+    return deduped
+
+
+_JUDGE_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _guess_last_name_from_judge_label(value: str) -> str:
+    if not value:
+        return ""
+    cleaned = re.sub(r"\s+", " ", str(value)).strip()
+    cleaned = re.sub(r"\s*\\([^)]*\\)\\s*$", "", cleaned).strip()
+    cleaned = re.sub(
+        r"(?i)^(?:hon\\.?\\s+)?(?:chief\\s+)?(?:district|magistrate|bankruptcy)?\\s*judge\\s+",
+        "",
+        cleaned,
+    ).strip()
+    if not cleaned:
+        return ""
+    tokens = [token.strip(" ,.;:") for token in cleaned.split() if token.strip(" ,.;:")]
+    if len(tokens) < 1:
+        return ""
+    last = tokens[-1]
+    if last.lower().strip(".") in _JUDGE_SUFFIXES and len(tokens) >= 2:
+        last = tokens[-2]
+    return last.strip(" ,.;:")[:80]
 
 
 def _extract_attorneys_from_parties(parties: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

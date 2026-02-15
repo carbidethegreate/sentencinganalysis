@@ -2,7 +2,7 @@
     <p class="pacer-eyebrow">PACER cases</p>
     <h2>Cases</h2>
     <p class="small">
-      These are the cases you saved from PACER. Use the filters to find a case quickly.
+      These are the cases you saved from PACER. Open a case to see parties/counsel details, or pull the docket to refresh case metadata.
     </p>
 
     <form method="get" class="pcl-filter-form" aria-label="Filter cases">
@@ -47,21 +47,27 @@
           <label for="case-cards-search">Search title/number</label>
           <input id="case-cards-search" name="q" value="{{ filters.search_text }}" placeholder="Case number or title">
         </div>
-        <div>
-          <label for="case-cards-field-name">Field name</label>
-          <input id="case-cards-field-name" name="field_name" list="case-cards-field-name-list" value="{{ filters.field_name }}" placeholder="e.g., caseId">
-          <datalist id="case-cards-field-name-list">
-            {% for field_name in case_field_choices %}
-              <option value="{{ field_name }}"></option>
-            {% endfor %}
-          </datalist>
-          <p class="small">Search any PACER field captured for the case.</p>
-        </div>
-        <div>
-          <label for="case-cards-field-value">Field value contains</label>
-          <input id="case-cards-field-value" name="field_value" value="{{ filters.field_value }}" placeholder="e.g., 2025 or vidc">
-        </div>
       </div>
+
+      <details class="pcl-advanced-filters">
+        <summary class="pcl-detail-summary">Advanced filters</summary>
+        <div class="grid two mt-12">
+          <div>
+            <label for="case-cards-field-name">Field name</label>
+            <input id="case-cards-field-name" name="field_name" list="case-cards-field-name-list" value="{{ filters.field_name }}" placeholder="e.g., caseId">
+            <datalist id="case-cards-field-name-list">
+              {% for field_name in case_field_choices %}
+                <option value="{{ field_name }}"></option>
+              {% endfor %}
+            </datalist>
+            <p class="small">Search any saved PACER field for the case.</p>
+          </div>
+          <div>
+            <label for="case-cards-field-value">Field value contains</label>
+            <input id="case-cards-field-value" name="field_value" value="{{ filters.field_value }}" placeholder="e.g., 2025 or vidc">
+          </div>
+        </div>
+      </details>
 
       <div class="actions pcl-filter-actions">
         <button class="primary" type="submit">Apply filters</button>
@@ -73,6 +79,21 @@
   <section class="pcl-card-grid" aria-live="polite">
     {% if cases %}
       {% for case in cases %}
+        {% set docket_status = (case.get("enrichment_status") or "none") %}
+        {% set docket_badge_variant = "stub" %}
+        {% if docket_status == "completed" %}
+          {% set docket_badge_variant = "indexed" %}
+        {% elif docket_status in ["queued", "running"] %}
+          {% set docket_badge_variant = "warning" %}
+        {% elif docket_status == "failed" %}
+          {% set docket_badge_variant = "danger" %}
+        {% endif %}
+        {% set judge_display = case.get("judge_last_name") or "—" %}
+        {% if case.get("docket_judges") and (case.get("docket_judges")|length) > 0 %}
+          {% set judge_display = case.get("docket_judges")[0] %}
+        {% endif %}
+        {% set counsel_count = case.get("docket_attorney_count") %}
+        {% set party_count = case.get("docket_party_count") %}
         <article class="card pcl-case-card">
           <header class="pcl-case-card__header">
             <div>
@@ -81,8 +102,8 @@
             </div>
             <div class="pcl-case-card__badges">
               <span class="pcl-badge" data-variant="indexed">Saved</span>
-              <span class="pcl-badge" data-variant="stub">
-                Enrichment: {{ case.get("enrichment_status") or "none" }}
+              <span class="pcl-badge" data-variant="{{ docket_badge_variant }}">
+                Docket: {{ docket_status }}
               </span>
               <span class="pcl-badge" data-variant="{{ 'indexed' if case.get('has_sentencing') else 'stub' }}">
                 Sentencing: {{ "yes" if case.get("has_sentencing") else "no" }}
@@ -105,28 +126,39 @@
             </div>
             <div>
               <dt>Judge</dt>
-              <dd>{{ case.get("judge_last_name") or "—" }}</dd>
+              <dd>{{ judge_display }}</dd>
+            </div>
+            <div>
+              <dt>Parties</dt>
+              <dd>{{ party_count if party_count is not none else "—" }}</dd>
+            </div>
+            <div>
+              <dt>Counsel</dt>
+              <dd>{{ counsel_count if counsel_count is not none else "—" }}</dd>
             </div>
           </dl>
 
           <footer class="pcl-case-card__footer">
             <span class="small">
-              Last PACER run:
-              {% if case.get("last_search_run_id") %}
-                Run #{{ case.get("last_search_run_id") }}
-              {% endif %}
-              {% if case.get("last_search_run_at") %}
-                · {{ case.get("last_search_run_at").isoformat() }}
+              Docket updated:
+              {% if case.get("enrichment_updated_at") %}
+                {{ case.get("enrichment_updated_at").isoformat() }}
               {% else %}
-                · —
+                —
               {% endif %}
             </span>
             <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.get('id')) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="include_docket_text" value="1">
-              <button class="secondary" type="submit">Pull docket text</button>
+              <button class="secondary" type="submit">Pull docket</button>
             </form>
-            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">View details</a>
+            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">Open case</a>
+            <a
+              class="pill"
+              href="{{ url_for('admin_pcl_attorneys', q=(case.get('case_number_full') or case.get('case_number') or ''), court_id=(case.get('court_id') or ''), case_type=(case.get('case_type') or '')) }}"
+            >
+              Counsel
+            </a>
           </footer>
         </article>
       {% endfor %}

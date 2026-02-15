@@ -231,6 +231,35 @@ def list_case_cards(
             .label("enrichment_updated_at")
         )
 
+    docket_judges = literal(None).label("docket_judges")
+    docket_party_count = literal(None).label("docket_party_count")
+    docket_attorney_count = literal(None).label("docket_attorney_count")
+    if case_fields is not None:
+        docket_judges = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_judges")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_judges")
+        )
+        docket_party_count = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_party_count")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_party_count")
+        )
+        docket_attorney_count = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_attorney_count")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_attorney_count")
+        )
+
     has_sentencing = literal(False).label("has_sentencing")
     sentencing_events = _maybe_table(engine, tables, "sentencing_events")
     if sentencing_events is not None:
@@ -255,6 +284,9 @@ def list_case_cards(
             pcl_cases.c.last_search_run_at,
             enrichment_status,
             enrichment_updated_at,
+            docket_judges,
+            docket_party_count,
+            docket_attorney_count,
             has_sentencing,
         )
         .where(and_(*where_clauses))
