@@ -13,8 +13,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from sqlalchemy import MetaData, create_engine, func, inspect, select, update
+from sqlalchemy import MetaData, create_engine, select, update
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 # Ensure repo root is importable when running via `python3 scripts/...`.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +54,15 @@ def _hash_record(parts: Sequence[Any]) -> str:
         hashed.update(text.encode("utf-8"))
         hashed.update(b"|")
     return hashed.hexdigest()
+
+
+def _redact_database_url(url: str) -> str:
+    # Avoid printing or writing DB credentials into audit artifacts.
+    # Handles common patterns like postgresql://user:pass@host/db?sslmode=require
+    try:
+        return re.sub(r"://([^:/?#]+):([^@/?#]+)@", r"://\1:REDACTED@", url)
+    except Exception:
+        return "<redacted>"
 
 
 def _parse_mmddyyyy(value: str) -> Optional[date]:
@@ -291,6 +301,108 @@ def _upsert_cases_and_parties(
 
     now = datetime.now(timezone.utc)
 
+    # Postgres fast-path: use ON CONFLICT upserts and batch inserts to avoid
+    # thousands of round-trips over the network.
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            existing_numbers = set(
+                conn.execute(
+                    select(pcl_cases.c.case_number_full).where(pcl_cases.c.court_id == court_id)
+                ).scalars()
+            )
+
+            case_params: List[Dict[str, Any]] = []
+            for record in cases:
+                payload = dict(record)
+                payload["created_at"] = now
+                payload["updated_at"] = now
+                case_params.append(payload)
+
+            cases_inserted = sum(
+                1 for record in cases if str(record.get("case_number_full") or "") not in existing_numbers
+            )
+            cases_updated = len(cases) - cases_inserted
+
+            # Upsert all cases, returning PKs so we can attach parties.
+            base_stmt = pg_insert(pcl_cases)
+            excluded = base_stmt.excluded
+            set_cols = {
+                c.name: getattr(excluded, c.name)
+                for c in pcl_cases.c
+                if c.name not in ("id", "created_at")
+            }
+            stmt = (
+                base_stmt.on_conflict_do_update(
+                    index_elements=[pcl_cases.c.court_id, pcl_cases.c.case_number_full],
+                    set_=set_cols,
+                )
+                .returning(pcl_cases.c.id, pcl_cases.c.case_number_full)
+            )
+            returned = conn.execute(stmt, case_params).mappings().all() if case_params else []
+            case_pk_by_number: Dict[str, int] = {
+                str(row["case_number_full"]): int(row["id"]) for row in returned
+            }
+
+            # Insert parties with ON CONFLICT DO NOTHING on record_hash.
+            party_rows: List[Dict[str, Any]] = []
+            seen_hashes: set[str] = set()
+            for party in parties:
+                cn_full = str(party.get("case_number_full") or "")
+                case_pk = case_pk_by_number.get(cn_full)
+                if not case_pk:
+                    continue
+                party_name = party.get("party_name")
+                party_role = party.get("party_role")
+                record_hash = _hash_record(
+                    [
+                        case_pk,
+                        None,  # last_name
+                        None,  # first_name
+                        None,  # middle_name
+                        None,  # party_type
+                        party_role,
+                        party_name,
+                    ]
+                )
+                if record_hash in seen_hashes:
+                    continue
+                seen_hashes.add(record_hash)
+                party_rows.append(
+                    {
+                        "created_at": now,
+                        "updated_at": now,
+                        "case_id": case_pk,
+                        "last_name": None,
+                        "first_name": None,
+                        "middle_name": None,
+                        "party_type": None,
+                        "party_role": party_role,
+                        "party_name": party_name,
+                        "last_search_run_id": None,
+                        "last_search_run_at": None,
+                        "source_last_seen_at": now,
+                        "record_hash": record_hash,
+                        "data_json": json.dumps(party, sort_keys=True, default=str),
+                    }
+                )
+
+            parties_inserted = 0
+            if party_rows:
+                party_stmt = pg_insert(pcl_parties).on_conflict_do_nothing(
+                    index_elements=[pcl_parties.c.record_hash]
+                ).returning(pcl_parties.c.record_hash)
+                inserted_hashes = conn.execute(party_stmt, party_rows).scalars().all()
+                parties_inserted = len(inserted_hashes)
+            parties_skipped = len(party_rows) - parties_inserted
+
+        return {
+            "cases_inserted": int(cases_inserted),
+            "cases_updated": int(cases_updated),
+            "parties_inserted": int(parties_inserted),
+            "parties_skipped": int(parties_skipped),
+        }
+
+    # Generic fallback (sqlite/dev): row-by-row approach.
     # Build a lookup of existing cases for this court.
     with engine.begin() as conn:
         existing = {
@@ -304,7 +416,7 @@ def _upsert_cases_and_parties(
 
     inserted = 0
     updated = 0
-    case_pk_by_number: Dict[str, int] = {}
+    case_pk_by_number_fallback: Dict[str, int] = {}
 
     with engine.begin() as conn:
         for record in cases:
@@ -313,7 +425,7 @@ def _upsert_cases_and_parties(
             payload = {**record, "updated_at": now}
             if existing_id:
                 conn.execute(update(pcl_cases).where(pcl_cases.c.id == existing_id).values(**payload))
-                case_pk_by_number[cn_full] = existing_id
+                case_pk_by_number_fallback[cn_full] = existing_id
                 updated += 1
                 continue
 
@@ -321,7 +433,7 @@ def _upsert_cases_and_parties(
             result = conn.execute(pcl_cases.insert().values(**payload))
             new_id = int(result.inserted_primary_key[0])
             existing[cn_full] = new_id
-            case_pk_by_number[cn_full] = new_id
+            case_pk_by_number_fallback[cn_full] = new_id
             inserted += 1
 
         # Insert parties. Deduplicate within the import run by hash.
@@ -330,7 +442,7 @@ def _upsert_cases_and_parties(
         seen_hashes: set[str] = set()
         for party in parties:
             cn_full = str(party.get("case_number_full") or "")
-            case_pk = case_pk_by_number.get(cn_full) or existing.get(cn_full)
+            case_pk = case_pk_by_number_fallback.get(cn_full) or existing.get(cn_full)
             if not case_pk:
                 party_skipped += 1
                 continue
@@ -481,7 +593,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "parties_aggregated": len(party_records),
         "rows_csv": str(rows_csv),
         "cases_csv": str(summary_csv),
-        "database_url": database_url,
+        "database_url_redacted": _redact_database_url(database_url),
         "import_stats": stats,
     }
     (run_dir / "import_summary.json").write_text(
