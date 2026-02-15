@@ -19,9 +19,11 @@
     {% set judge_last = judge_last|title %}
   {% endif %}
 {% endif %}
-{% set judge_display = (judge_last or (judge_full|title) or "—") %}
+{# Prefer the full docket judge label when available. #}
+{% set judge_display = (judge_full or judge_last or "—") %}
 {% set counsel_count = case.get("docket_attorney_count") %}
 {% set party_count = case.get("docket_party_count") %}
+{% set party_names = case.get("docket_party_names") or [] %}
 {% set docket_entry_count = case.get("docket_entry_count") %}
 {% set recent_entries = case.get("docket_recent_entries") or [] %}
 {% set counsel_names = case.get("docket_attorney_names") or [] %}
@@ -68,7 +70,18 @@
       <span title="{{ judge_full if judge_full else judge_display }}"><strong>Judge</strong> {{ judge_display }}</span>
     </div>
     <div class="pcl-case-row">
-      <span><strong>Parties</strong> {{ party_count if party_count is not none else "—" }}</span>
+      {% if party_names %}
+        <span class="pcl-case-row__wide">
+          <strong>Parties</strong>
+          {% set party_preview = party_names[:3] %}
+          {{ party_preview | join("; ") }}
+          {% if party_names|length > (party_preview|length) %}
+            <span class="small">(+{{ party_names|length - (party_preview|length) }} more)</span>
+          {% endif %}
+        </span>
+      {% else %}
+        <span><strong>Parties</strong> {{ party_count if party_count is not none else "—" }}</span>
+      {% endif %}
       <span><strong>Counsel</strong> {{ counsel_count if counsel_count is not none else "—" }}</span>
       {% if charges %}
         <span class="pcl-case-row__wide">
@@ -131,7 +144,7 @@
     {% elif docket_status in ["queued", "running"] %}
       <p class="small">Docket fetch is {{ docket_status }}. Refresh in a moment.</p>
     {% else %}
-      <p class="small">No docket saved yet. Click “Fetch docket” to pull it from PACER.</p>
+      <p class="small">No docket saved yet. Click “Get docket” to pull it from PACER.</p>
     {% endif %}
 
     <details class="case-docket-details" data-case-id="{{ case.get('id') }}">

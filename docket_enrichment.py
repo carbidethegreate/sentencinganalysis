@@ -648,6 +648,7 @@ class DocketEnrichmentWorker:
                 attorneys = _extract_attorneys_from_parties(parties) if parties else []
                 party_summary = _flatten_parties_for_search(parties) if parties else ""
                 attorney_names = _extract_attorney_names(attorneys, limit=25) if attorneys else []
+                party_names = _extract_party_names(parties, limit=25) if parties else []
                 charge_items = _extract_charge_items_from_parties(parties, limit=40) if parties else []
                 _upsert_case_field(
                     conn,
@@ -656,6 +657,15 @@ class DocketEnrichmentWorker:
                     "docket_parties",
                     field_value_text=None,
                     field_value_json=parties or None,
+                    now=now,
+                )
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_party_names",
+                    field_value_text=" | ".join(party_names) if party_names else None,
+                    field_value_json=party_names or None,
                     now=now,
                 )
                 _upsert_case_field(
@@ -1875,10 +1885,12 @@ def _extract_judge_display_list(header_fields: Dict[str, Any]) -> List[str]:
         if isinstance(raw, list):
             for item in raw:
                 cleaned = re.sub(r"\s+", " ", str(item or "")).strip()
+                cleaned = _format_judge_label_for_display(cleaned)
                 if cleaned:
                     values.append(cleaned)
         elif raw:
             cleaned = re.sub(r"\s+", " ", str(raw)).strip()
+            cleaned = _format_judge_label_for_display(cleaned)
             if cleaned:
                 values.append(cleaned)
     seen = set()
@@ -1893,6 +1905,51 @@ def _extract_judge_display_list(header_fields: Dict[str, Any]) -> List[str]:
 
 
 _JUDGE_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+
+
+def _format_judge_label_for_display(value: str) -> str:
+    if not value:
+        return ""
+    cleaned = re.sub(r"\s+", " ", str(value)).strip()
+    cleaned = re.sub(r"\s*\\([^)]*\\)\\s*$", "", cleaned).strip()
+    # Remove common prefixes so the case card can show just the full name.
+    cleaned = re.sub(
+        r"(?i)^(?:hon\\.?\\s+)?(?:chief\\s+)?(?:district|magistrate|bankruptcy)?\\s*judge\\s+",
+        "",
+        cleaned,
+    ).strip()
+    if not cleaned:
+        return ""
+
+    letters = [ch for ch in cleaned if ch.isalpha()]
+    uppercase_ratio = (
+        (sum(1 for ch in letters if ch.isupper()) / len(letters)) if letters else 0.0
+    )
+    if uppercase_ratio >= 0.85:
+        cleaned = cleaned.title()
+        # Fix common titlecasing issues like "Mchugh" -> "McHugh".
+        cleaned = re.sub(
+            r"\bMc([a-z])",
+            lambda match: f"Mc{match.group(1).upper()}",
+            cleaned,
+        )
+        # Restore suffix casing (Jr., Sr., II, III, IV, V).
+        tokens = cleaned.split()
+        normalized_tokens: List[str] = []
+        for token in tokens:
+            bare = token.strip(",.;:")
+            lower = bare.lower().strip(".")
+            if lower in _JUDGE_SUFFIXES:
+                # Keep original punctuation if any.
+                suffix = lower.upper() if lower in {"ii", "iii", "iv", "v"} else lower.title()
+                prefix = token[: token.find(bare)] if bare in token else ""
+                suffix_token = token.replace(bare, suffix)
+                normalized_tokens.append(suffix_token if suffix_token else suffix)
+            else:
+                normalized_tokens.append(token)
+        cleaned = " ".join(normalized_tokens)
+
+    return cleaned
 
 
 def _guess_last_name_from_judge_label(value: str) -> str:
@@ -1947,6 +2004,7 @@ def backfill_case_card_metadata_from_saved_dockets(
     docket_party_count_row = pcl_case_fields.alias("docket_party_count_row")
     docket_attorney_count_row = pcl_case_fields.alias("docket_attorney_count_row")
     docket_parties_row = pcl_case_fields.alias("docket_parties_row")
+    docket_party_names_row = pcl_case_fields.alias("docket_party_names_row")
     docket_attorneys_row = pcl_case_fields.alias("docket_attorneys_row")
     docket_party_summary_row = pcl_case_fields.alias("docket_party_summary_row")
     docket_entries_row = pcl_case_fields.alias("docket_entries_row")
@@ -1980,6 +2038,11 @@ def backfill_case_card_metadata_from_saved_dockets(
             docket_parties_row,
             (docket_parties_row.c.case_id == pcl_cases.c.id)
             & (docket_parties_row.c.field_name == "docket_parties"),
+        )
+        .outerjoin(
+            docket_party_names_row,
+            (docket_party_names_row.c.case_id == pcl_cases.c.id)
+            & (docket_party_names_row.c.field_name == "docket_party_names"),
         )
         .outerjoin(
             docket_attorneys_row,
@@ -2032,6 +2095,8 @@ def backfill_case_card_metadata_from_saved_dockets(
                 docket_party_count_row.c.id.is_(None),
                 docket_attorney_count_row.c.id.is_(None),
                 docket_parties_row.c.id.is_(None),
+                docket_party_names_row.c.id.is_(None),
+                docket_party_names_row.c.field_value_json.is_(None),
                 docket_attorneys_row.c.id.is_(None),
                 docket_party_summary_row.c.id.is_(None),
                 docket_entry_count_row.c.id.is_(None),
@@ -2157,6 +2222,7 @@ def backfill_case_card_metadata_from_saved_dockets(
             if parties:
                 attorneys = _extract_attorneys_from_parties(parties)
                 summary = _flatten_parties_for_search(parties)
+                party_names = _extract_party_names(parties, limit=25)
                 attorney_names = _extract_attorney_names(attorneys, limit=25) if attorneys else []
                 charge_items = _extract_charge_items_from_parties(parties, limit=40) if parties else []
                 _upsert_case_field(
@@ -2166,6 +2232,16 @@ def backfill_case_card_metadata_from_saved_dockets(
                     "docket_parties",
                     field_value_text=None,
                     field_value_json=parties,
+                    now=now,
+                )
+                updated_fields += 1
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_party_names",
+                    field_value_text=" | ".join(party_names) if party_names else None,
+                    field_value_json=party_names or None,
                     now=now,
                 )
                 updated_fields += 1
@@ -2283,6 +2359,28 @@ def _extract_attorney_names(attorneys: Any, *, limit: int = 25) -> List[str]:
     names: List[str] = []
     seen: set[str] = set()
     for item in attorneys:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= limit:
+            break
+    return names
+
+
+def _extract_party_names(parties: Any, *, limit: int = 25) -> List[str]:
+    """Return a stable, unique list of party names for lightweight card UIs."""
+    if not isinstance(parties, list) or limit <= 0:
+        return []
+    names: List[str] = []
+    seen: set[str] = set()
+    for item in parties:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name") or "").strip()

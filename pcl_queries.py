@@ -245,6 +245,7 @@ def list_case_cards(
 
     docket_judges = literal(None).label("docket_judges")
     docket_party_count = literal(None).label("docket_party_count")
+    docket_party_names = literal(None).label("docket_party_names")
     docket_attorney_count = literal(None).label("docket_attorney_count")
     docket_entry_count = literal(None).label("docket_entry_count")
     docket_recent_entries = literal(None).label("docket_recent_entries")
@@ -266,6 +267,14 @@ def list_case_cards(
             .limit(1)
             .scalar_subquery()
             .label("docket_party_count")
+        )
+        docket_party_names = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_party_names")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_party_names")
         )
         docket_attorney_count = (
             select(case_fields.c.field_value_json)
@@ -337,6 +346,7 @@ def list_case_cards(
             enrichment_last_error,
             docket_judges,
             docket_party_count,
+            docket_party_names,
             docket_attorney_count,
             docket_entry_count,
             docket_recent_entries,
