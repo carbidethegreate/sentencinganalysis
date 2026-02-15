@@ -1085,6 +1085,87 @@ def _attorney_identity_key(attorney: Dict[str, Any]) -> str:
     return name
 
 
+def _append_unique_bucket_line(bucket: Dict[str, Any], set_name: str, list_name: str, value: Any) -> None:
+    cleaned = _clean_str(value)
+    if not cleaned:
+        return
+    seen: set[str] = bucket.setdefault(set_name, set())
+    if cleaned in seen:
+        return
+    seen.add(cleaned)
+    bucket.setdefault(list_name, []).append(cleaned)
+
+
+def _looks_like_contact_line(value: str) -> bool:
+    if not value:
+        return False
+    lowered = value.lower()
+    if "@" in value:
+        return True
+    if lowered.startswith(
+        (
+            "email:",
+            "phone:",
+            "telephone:",
+            "tel:",
+            "ph:",
+            "fax:",
+            "facsimile:",
+            "website:",
+            "web:",
+            "designation:",
+        )
+    ):
+        return True
+    if re.search(
+        r"(?:\+?1[\s.-]*)?(?:\(\d{3}\)|\d{3})[\s.-]*\d{3}[\s.-]*\d{4}(?:\s*(?:x|ext\.?)\s*\d+)?|\d{3}[\s.-]\d{4}",
+        value,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _looks_like_address_line(value: str) -> bool:
+    if not value:
+        return False
+    if _looks_like_contact_line(value):
+        return False
+    lowered = value.lower()
+    if any(token in lowered for token in ("p.o.", "po box", "suite", "ste", "floor", "room", "rm", "bldg", "building")):
+        return True
+    if re.search(r"\b\d{5}(?:-\d{4})?\b", value):
+        return True
+    if any(char.isdigit() for char in value) and any(char.isalpha() for char in value):
+        return True
+    return False
+
+
+def _extract_attorney_addresses(details: List[str], raw_lines: List[str], organizations: List[str]) -> List[str]:
+    # Prefer normalized `details` which typically hold office/address lines.
+    candidates = details or raw_lines
+    org_lower = {str(item).strip().lower() for item in organizations or [] if str(item).strip()}
+    output: List[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        cleaned = _clean_str(item)
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in org_lower:
+            continue
+        if not _looks_like_address_line(cleaned):
+            continue
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        output.append(cleaned)
+        # Addresses can be long; keep this compact.
+        if len(output) >= 8:
+            break
+    return output
+
+
 def _bucket_case_id_set(bucket: Dict[str, Any]) -> set[int]:
     case_ids: set[int] = set()
     for row in bucket.get("case_rows") or []:
@@ -1103,10 +1184,16 @@ def _merge_attorney_buckets(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
         "website_set",
         "designation_set",
         "role_set",
-        "detail_set",
-        "raw_line_set",
     ):
         dst.setdefault(set_name, set()).update(src.get(set_name) or set())
+
+    # Preserve address/detail line order for readability while keeping de-dupe sets.
+    dst.setdefault("detail_set", set()).update(src.get("detail_set") or set())
+    dst.setdefault("raw_line_set", set()).update(src.get("raw_line_set") or set())
+    for value in src.get("detail_lines") or []:
+        _append_unique_bucket_line(dst, "detail_set", "detail_lines", value)
+    for value in src.get("raw_line_lines") or []:
+        _append_unique_bucket_line(dst, "raw_line_set", "raw_line_lines", value)
 
     dst_keys = dst.setdefault("case_keys", set())
     dst_rows = dst.setdefault("case_rows", [])
@@ -1167,6 +1254,58 @@ def _consolidate_attorney_buckets(attorneys: Dict[str, Dict[str, Any]]) -> None:
                 j += 1
             i += 1
 
+    # Second pass: merge same-name buckets across different cases when we have a strong
+    # identity signal (shared email/phone), or when the organization matches and one
+    # record is missing contact identifiers.
+    def _has_identifiers(bucket: Dict[str, Any]) -> bool:
+        return bool(bucket.get("email_set") or bucket.get("phone_set"))
+
+    for _, keys in by_name.items():
+        if len(keys) < 2:
+            continue
+        i = 0
+        while i < len(keys):
+            primary_key = keys[i]
+            primary = attorneys.get(primary_key)
+            if primary is None:
+                i += 1
+                continue
+            primary_emails = set(primary.get("email_set") or set())
+            primary_phones = set(primary.get("phone_set") or set())
+            primary_orgs = set(primary.get("organization_set") or set())
+            j = i + 1
+            while j < len(keys):
+                other_key = keys[j]
+                other = attorneys.get(other_key)
+                if other is None:
+                    keys.pop(j)
+                    continue
+                other_emails = set(other.get("email_set") or set())
+                other_phones = set(other.get("phone_set") or set())
+                other_orgs = set(other.get("organization_set") or set())
+
+                shared_email = bool(primary_emails & other_emails)
+                shared_phone = bool(primary_phones & other_phones)
+                shared_org = bool(primary_orgs & other_orgs)
+                merge = False
+                if shared_email or shared_phone:
+                    merge = True
+                elif shared_org and (_has_identifiers(primary) != _has_identifiers(other)):
+                    # Same org, and one entry is "thin" (missing email/phone) while the other
+                    # has identifiers: likely the same person.
+                    merge = True
+
+                if merge:
+                    _merge_attorney_buckets(primary, other)
+                    primary_emails |= other_emails
+                    primary_phones |= other_phones
+                    primary_orgs |= other_orgs
+                    del attorneys[other_key]
+                    keys.pop(j)
+                    continue
+                j += 1
+            i += 1
+
 
 def _new_attorney_bucket(attorney: Dict[str, Any], case_ref: Dict[str, Any]) -> Dict[str, Any]:
     bucket = {
@@ -1178,8 +1317,10 @@ def _new_attorney_bucket(attorney: Dict[str, Any], case_ref: Dict[str, Any]) -> 
         "website_set": set(attorney.get("websites") or []),
         "designation_set": set(attorney.get("designations") or []),
         "role_set": set(attorney.get("roles") or []),
-        "detail_set": set(attorney.get("details") or []),
-        "raw_line_set": set(attorney.get("raw_lines") or []),
+        "detail_set": set(),
+        "detail_lines": [],
+        "raw_line_set": set(),
+        "raw_line_lines": [],
         "case_rows": [],
         "case_keys": set(),
         "last_seen_at": case_ref.get("updated_at"),
@@ -1200,11 +1341,13 @@ def _merge_attorney_bucket(
         ("websites", "website_set"),
         ("designations", "designation_set"),
         ("roles", "role_set"),
-        ("details", "detail_set"),
-        ("raw_lines", "raw_line_set"),
     ):
         for item in attorney.get(key) or []:
             bucket[set_name].add(item)
+    for item in attorney.get("details") or []:
+        _append_unique_bucket_line(bucket, "detail_set", "detail_lines", item)
+    for item in attorney.get("raw_lines") or []:
+        _append_unique_bucket_line(bucket, "raw_line_set", "raw_line_lines", item)
     case_id = case_ref.get("case_id")
     case_key = (
         case_id,
@@ -1241,17 +1384,27 @@ def _finalize_attorney_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
         ),
         reverse=True,
     )
+    organizations = sorted(bucket.get("organization_set") or [])
+    details = list(bucket.get("detail_lines") or [])
+    raw_lines = list(bucket.get("raw_line_lines") or [])
+    # Fall back if older buckets were built before we preserved insertion order.
+    if not details:
+        details = sorted(bucket.get("detail_set") or [])
+    if not raw_lines:
+        raw_lines = sorted(bucket.get("raw_line_set") or [])
+    addresses = _extract_attorney_addresses(details, raw_lines, organizations)
     return {
         "name": bucket.get("name"),
-        "organizations": sorted(bucket.get("organization_set") or []),
+        "organizations": organizations,
         "emails": sorted(bucket.get("email_set") or []),
         "phones": sorted(bucket.get("phone_set") or []),
         "faxes": sorted(bucket.get("fax_set") or []),
         "websites": sorted(bucket.get("website_set") or []),
         "designations": sorted(bucket.get("designation_set") or []),
         "roles": sorted(bucket.get("role_set") or []),
-        "details": sorted(bucket.get("detail_set") or []),
-        "raw_lines": sorted(bucket.get("raw_line_set") or []),
+        "addresses": addresses,
+        "details": details,
+        "raw_lines": raw_lines,
         "case_count": len(case_rows),
         "related_cases": case_rows,
         "last_seen_at": bucket.get("last_seen_at"),

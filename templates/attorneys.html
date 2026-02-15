@@ -117,6 +117,17 @@
             </div>
           </div>
 
+          {% if attorney.addresses %}
+            <div class="attorney-address">
+              <p class="small"><strong>Address</strong></p>
+              <ul class="attorney-contact-list">
+                {% for line in attorney.addresses %}
+                  <li>{{ line }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+
           {% if attorney.organizations or attorney.designations or attorney.roles %}
             <div class="attorney-tags">
               {% for organization in attorney.organizations %}
@@ -183,6 +194,13 @@
               </div>
             </details>
           {% endif %}
+
+          {% if attorney.details or attorney.raw_lines %}
+            <details class="attorney-details">
+              <summary class="pcl-detail-summary">Show all contact/detail lines</summary>
+              <pre class="code-block">{% if attorney.raw_lines %}{{ attorney.raw_lines | join('\n') }}{% elif attorney.details %}{{ attorney.details | join('\n') }}{% endif %}</pre>
+            </details>
+          {% endif %}
         </article>
       {% endfor %}
     </section>
@@ -203,4 +221,3 @@
     </div>
   </nav>
 {% endblock %}
-
