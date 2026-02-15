@@ -542,6 +542,13 @@ def _build_where_clauses(
         ]
         if case_fields is not None:
             # Allow the primary search box to match parties/counsel when docket metadata exists.
+            #
+            # NOTE: `docket_party_summary` is stored in `field_value_text` and is intentionally
+            # truncated to keep the (field_name, field_value_text) btree index healthy. That
+            # truncation can cause searches to miss counsel who appear later in long party/count
+            # summaries. To keep search reliable for attorneys, we also search the compact JSON
+            # name lists (`docket_attorney_names`, `docket_party_names`, etc.) which are not
+            # truncated.
             search_clauses.append(
                 exists(
                     select(1).where(
@@ -555,6 +562,27 @@ def _build_where_clauses(
                     )
                 )
             )
+            for field_name in (
+                "docket_attorney_names",
+                "docket_party_names",
+                "docket_judges",
+                "docket_charges",
+            ):
+                search_clauses.append(
+                    exists(
+                        select(1).where(
+                            and_(
+                                case_fields.c.case_id == pcl_cases.c.id,
+                                case_fields.c.field_name == field_name,
+                                func.lower(
+                                    func.coalesce(
+                                        cast(case_fields.c.field_value_json, Text), ""
+                                    )
+                                ).like(like_pattern),
+                            )
+                        )
+                    )
+                )
         clauses.append(or_(*search_clauses))
     if (filters.field_name or filters.field_value) and case_fields is not None:
         field_clauses = [case_fields.c.case_id == pcl_cases.c.id]

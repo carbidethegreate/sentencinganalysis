@@ -102,11 +102,10 @@
       {% if counsel_names %}
         <span class="pcl-case-row__wide">
           <strong>Counsel</strong>
-          {% set counsel_preview = counsel_names[:2] %}
-          {{ counsel_preview | join("; ") }}
-          {% if counsel_names|length > (counsel_preview|length) %}
-            <span class="small">(+{{ counsel_names|length - (counsel_preview|length) }} more)</span>
-          {% endif %}
+          <span
+            class="pcl-case-inline-list"
+            title="{{ counsel_names | join('; ') }}"
+          >{{ counsel_names | join("; ") }}</span>
         </span>
       {% else %}
         <span class="pcl-case-row__wide"><strong>Counsel</strong> —</span>

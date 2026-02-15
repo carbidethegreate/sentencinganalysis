@@ -2859,6 +2859,13 @@ input[type="submit"].danger:disabled {
   flex-basis: 100%;
 }
 
+.pcl-case-inline-list {
+  display: block;
+  max-height: 5.2em;
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .case-docket-preview {
   border: 1px solid rgba(140, 132, 128, 0.2);
   border-radius: 14px;
