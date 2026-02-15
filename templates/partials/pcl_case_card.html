@@ -21,7 +21,6 @@
 {% endif %}
 {# Prefer the full docket judge label when available. #}
 {% set judge_display = (judge_full or judge_last or "—") %}
-{% set counsel_count = case.get("docket_attorney_count") %}
 {% set party_count = case.get("docket_party_count") %}
 {% set party_names = case.get("docket_party_names") or [] %}
 {% set docket_entry_count = case.get("docket_entry_count") %}
@@ -82,7 +81,6 @@
       {% else %}
         <span><strong>Parties</strong> {{ party_count if party_count is not none else "—" }}</span>
       {% endif %}
-      <span><strong>Counsel</strong> {{ counsel_count if counsel_count is not none else "—" }}</span>
       {% if charges %}
         <span class="pcl-case-row__wide">
           <strong>Charges</strong>

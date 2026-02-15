@@ -10,6 +10,7 @@ My Chats With Codex/
 case_filed_rpt.sqlite
 data/manual_import/
 output/
+tmp/
 
 # Test and tooling caches
 .pytest_cache/
