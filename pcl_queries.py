@@ -234,6 +234,10 @@ def list_case_cards(
     docket_judges = literal(None).label("docket_judges")
     docket_party_count = literal(None).label("docket_party_count")
     docket_attorney_count = literal(None).label("docket_attorney_count")
+    docket_entry_count = literal(None).label("docket_entry_count")
+    docket_recent_entries = literal(None).label("docket_recent_entries")
+    docket_attorney_names = literal(None).label("docket_attorney_names")
+    docket_charges = literal(None).label("docket_charges")
     if case_fields is not None:
         docket_judges = (
             select(case_fields.c.field_value_json)
@@ -259,6 +263,38 @@ def list_case_cards(
             .scalar_subquery()
             .label("docket_attorney_count")
         )
+        docket_entry_count = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_entry_count")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_entry_count")
+        )
+        docket_recent_entries = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_recent_entries")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_recent_entries")
+        )
+        docket_attorney_names = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_attorney_names")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_attorney_names")
+        )
+        docket_charges = (
+            select(case_fields.c.field_value_json)
+            .where(case_fields.c.case_id == pcl_cases.c.id)
+            .where(case_fields.c.field_name == "docket_charges")
+            .limit(1)
+            .scalar_subquery()
+            .label("docket_charges")
+        )
 
     has_sentencing = literal(False).label("has_sentencing")
     sentencing_events = _maybe_table(engine, tables, "sentencing_events")
@@ -276,6 +312,8 @@ def list_case_cards(
             pcl_cases.c.case_title,
             pcl_cases.c.case_type,
             pcl_cases.c.date_filed,
+            pcl_cases.c.date_closed,
+            pcl_cases.c.effective_date_closed,
             pcl_cases.c.judge_last_name,
             pcl_cases.c.case_year,
             pcl_cases.c.case_office,
@@ -287,6 +325,10 @@ def list_case_cards(
             docket_judges,
             docket_party_count,
             docket_attorney_count,
+            docket_entry_count,
+            docket_recent_entries,
+            docket_attorney_names,
+            docket_charges,
             has_sentencing,
         )
         .where(and_(*where_clauses))

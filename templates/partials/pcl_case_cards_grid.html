@@ -1,0 +1,12 @@
+{# Grid contents only (no outer container). Expects: cases, csrf_token #}
+{% set show_empty_state = show_empty_state if show_empty_state is defined else true %}
+{% if cases %}
+  {% for case in cases %}
+    {% include "partials/pcl_case_card.html" %}
+  {% endfor %}
+{% elif show_empty_state %}
+  <div class="card pcl-empty-state">
+    <h3>No saved cases yet</h3>
+    <p class="small">Run a PACER search and click “Save to database” to create cards.</p>
+  </div>
+{% endif %}

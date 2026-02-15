@@ -8145,6 +8145,29 @@ def create_app() -> Flask:
             case_field_choices=_load_case_field_choices(),
         )
 
+    @app.get("/admin/federal-data-dashboard/cases/cards-fragment")
+    @admin_required
+    def admin_federal_data_dashboard_cases_cards_fragment():
+        """HTML fragment for infinite-scroll card loading."""
+        filters, page, page_size = parse_filters(request.args.to_dict(flat=True))
+        result = list_case_cards(engine, pcl_tables, filters, page=page, page_size=page_size)
+        total_pages = result.pagination.total_pages
+        next_page = page + 1 if page < total_pages else None
+        html = render_template(
+            "partials/pcl_case_cards_grid.html",
+            cases=result.rows,
+            csrf_token=get_csrf_token(),
+            show_empty_state=False,
+        )
+        return jsonify(
+            {
+                "html": html,
+                "page": page,
+                "next_page": next_page,
+                "total_pages": total_pages,
+            }
+        )
+
     @app.post("/admin/federal-data-dashboard/cases/update-card-metadata")
     @admin_required
     def admin_federal_data_dashboard_cases_update_card_metadata():
@@ -9980,6 +10003,45 @@ def create_app() -> Flask:
             flash(message, "error")
 
         return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-jobs")
+
+    @app.get("/admin/pcl/cases/<int:case_id>/docket-entries-fragment")
+    @admin_required
+    def admin_pcl_case_docket_entries_fragment(case_id: int):
+        """HTML fragment for the case-card docket dropdown (no full page render)."""
+        raw_limit = (request.args.get("limit") or "").strip()
+        try:
+            limit = int(raw_limit or 60)
+        except ValueError:
+            limit = 60
+        limit = max(1, min(limit, 200))
+
+        pcl_case_fields = pcl_tables.get("pcl_case_fields")
+        if pcl_case_fields is None:
+            abort(404)
+
+        with engine.begin() as conn:
+            value = conn.execute(
+                select(pcl_case_fields.c.field_value_json)
+                .where(
+                    pcl_case_fields.c.case_id == case_id,
+                    pcl_case_fields.c.field_name == "docket_entries",
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+
+        entries = value if isinstance(value, list) else []
+        total = len(entries)
+        shown = min(total, limit)
+        tail = entries[-shown:] if shown else []
+        display_entries = list(reversed([row for row in tail if isinstance(row, dict)]))
+
+        return render_template(
+            "partials/pcl_case_docket_entries_fragment.html",
+            entries=display_entries,
+            total=total,
+            shown=shown,
+            case_id=case_id,
+        )
 
     @app.get("/admin/pcl/cases/<int:case_id>")
     @admin_required

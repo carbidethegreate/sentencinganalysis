@@ -1,0 +1,150 @@
+{# Single case card. Expects: case, csrf_token #}
+{% set docket_status = (case.get("enrichment_status") or "none") %}
+{% set docket_label = "not pulled" %}
+{% if docket_status == "completed" %}
+  {% set docket_label = "pulled" %}
+{% elif docket_status in ["queued", "running"] %}
+  {% set docket_label = docket_status %}
+{% elif docket_status == "failed" %}
+  {% set docket_label = "failed" %}
+{% endif %}
+{% set closed_date = case.get("effective_date_closed") or case.get("date_closed") %}
+{% set case_status = "Closed" if closed_date else "Open" %}
+{% set judge_full = (case.get("docket_judges")[0] if case.get("docket_judges") and (case.get("docket_judges")|length) > 0 else "") %}
+{% set judge_last = (case.get("judge_last_name") or "") %}
+{% if judge_last and judge_last == judge_last.upper() %}
+  {% if judge_last|length > 2 and judge_last[:2] == 'MC' %}
+    {% set judge_last = 'Mc' ~ (judge_last[2]|upper) ~ (judge_last[3:]|lower) %}
+  {% else %}
+    {% set judge_last = judge_last|title %}
+  {% endif %}
+{% endif %}
+{% set judge_display = (judge_last or (judge_full|title) or "—") %}
+{% set counsel_count = case.get("docket_attorney_count") %}
+{% set party_count = case.get("docket_party_count") %}
+{% set docket_entry_count = case.get("docket_entry_count") %}
+{% set recent_entries = case.get("docket_recent_entries") or [] %}
+{% set counsel_names = case.get("docket_attorney_names") or [] %}
+{% set charges = case.get("docket_charges") or [] %}
+
+<article class="card pcl-case-card">
+  <header class="pcl-case-card__header">
+    <div class="pcl-case-card__heading">
+      <p class="pcl-case-card__number">{{ case.get("case_number_full") or case.get("case_number") }}</p>
+      {% set full_title = case.get("case_title") or case.get("short_title") or "Untitled case" %}
+      <h3 class="pcl-case-card__title" title="{{ full_title }}">{{ full_title }}</h3>
+    </div>
+
+    <div class="pcl-case-card__status" aria-label="Case status">
+      <div class="small">
+        <strong>{{ case_status }}</strong>
+        {% if closed_date %}<span class="small">· {{ closed_date.isoformat() }}</span>{% endif %}
+      </div>
+      <div class="small">
+        <span>Docket: {{ docket_label }}</span>
+        {% if case.get("has_sentencing") %}<span> · Sentencing</span>{% endif %}
+      </div>
+    </div>
+  </header>
+
+  <div class="pcl-case-rows" aria-label="Case summary">
+    <div class="pcl-case-row">
+      <span><strong>Filed</strong> {{ case.get("date_filed").isoformat() if case.get("date_filed") else "—" }}</span>
+      <span><strong>Court</strong> {{ case.get("court_id") or "—" }}</span>
+      <span><strong>Type</strong> {{ case.get("case_type") or "—" }}</span>
+      <span title="{{ judge_full if judge_full else judge_display }}"><strong>Judge</strong> {{ judge_display }}</span>
+    </div>
+    <div class="pcl-case-row">
+      <span><strong>Parties</strong> {{ party_count if party_count is not none else "—" }}</span>
+      <span><strong>Counsel</strong> {{ counsel_count if counsel_count is not none else "—" }}</span>
+      {% if charges %}
+        <span class="pcl-case-row__wide">
+          <strong>Charges</strong>
+          {% set preview = charges[:2] %}
+          {% for item in preview %}
+            {% if loop.index0 > 0 %}; {% endif %}
+            {{ item.count }}
+            {% if item.disposition %} ({{ item.disposition }}){% endif %}
+          {% endfor %}
+          {% if charges|length > (preview|length) %}
+            <span class="small">(+{{ charges|length - (preview|length) }} more)</span>
+          {% endif %}
+        </span>
+      {% else %}
+        <span class="pcl-case-row__wide"><strong>Charges</strong> —</span>
+      {% endif %}
+    </div>
+    <div class="pcl-case-row">
+      {% if counsel_names %}
+        <span class="pcl-case-row__wide">
+          <strong>Counsel</strong>
+          {% set counsel_preview = counsel_names[:2] %}
+          {{ counsel_preview | join("; ") }}
+          {% if counsel_names|length > (counsel_preview|length) %}
+            <span class="small">(+{{ counsel_names|length - (counsel_preview|length) }} more)</span>
+          {% endif %}
+        </span>
+      {% else %}
+        <span class="pcl-case-row__wide"><strong>Counsel</strong> —</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <section class="case-docket-preview" aria-label="Latest docket entries">
+    <p class="small">
+      <strong>Latest docket</strong>
+      {% if docket_entry_count is not none %}<span class="small">· {{ docket_entry_count }} entries</span>{% endif %}
+    </p>
+    {% if recent_entries %}
+      <ul class="case-docket-list">
+        {% for entry in recent_entries[:3] %}
+          <li class="case-docket-item">
+            <div class="case-docket-item__main">
+              {% if entry.documentNumber %}
+                <span class="case-docket-doc">#{{ entry.documentNumber }}</span>
+              {% endif %}
+              <span class="case-docket-desc">{{ entry.description or "—" }}</span>
+            </div>
+            <div class="small case-docket-date">{{ entry.dateFiled or "—" }}</div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% elif docket_status in ["completed", "queued", "running", "failed"] %}
+      <p class="small">Open the docket dropdown to view entries.</p>
+    {% else %}
+      <p class="small">No docket entries saved for this case yet.</p>
+    {% endif %}
+
+    <details class="case-docket-details" data-case-id="{{ case.get('id') }}">
+      <summary class="pcl-detail-summary">
+        Show full docket{% if docket_entry_count is not none %} ({{ docket_entry_count }}){% endif %}
+      </summary>
+      <div class="case-docket-details__body" data-loaded="0" aria-busy="false">
+        <p class="small">Loading docket…</p>
+      </div>
+    </details>
+  </section>
+
+  <footer class="pcl-case-card__footer">
+    <span class="small">
+      Docket updated:
+      {% if case.get("enrichment_updated_at") %}
+        {{ case.get("enrichment_updated_at").isoformat() }}
+      {% else %}
+        —
+      {% endif %}
+    </span>
+    <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.get('id')) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="include_docket_text" value="1">
+      <button class="secondary" type="submit">Pull docket</button>
+    </form>
+    <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">Open case</a>
+    <a
+      class="pill"
+      href="{{ url_for('admin_pcl_attorneys', q=(case.get('case_number_full') or case.get('case_number') or ''), court_id=(case.get('court_id') or ''), case_type=(case.get('case_type') or '')) }}"
+    >
+      Counsel
+    </a>
+  </footer>
+</article>

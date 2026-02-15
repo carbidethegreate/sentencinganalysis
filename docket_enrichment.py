@@ -451,6 +451,8 @@ class DocketEnrichmentWorker:
         if not html_body and parsed_format == "html":
             html_body = fetch_result.body.decode("utf-8", errors="replace")
         docket_is_shell = parsed_format == "html" and _looks_like_docket_shell(html_body or "")
+        entry_count = len(docket_entries or [])
+        recent_entries = _extract_recent_docket_entries_for_preview(docket_entries or [], limit=5)
 
         with self._engine.begin() as conn:
             if pcl_case_fields is not None:
@@ -500,6 +502,24 @@ class DocketEnrichmentWorker:
                     "docket_entries",
                     field_value_text=None,
                     field_value_json=docket_entries if docket_entries else None,
+                    now=now,
+                )
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_entry_count",
+                    field_value_text=str(entry_count),
+                    field_value_json=entry_count,
+                    now=now,
+                )
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_recent_entries",
+                    field_value_text=None,
+                    field_value_json=recent_entries or None,
                     now=now,
                 )
                 _upsert_case_field(
@@ -627,6 +647,8 @@ class DocketEnrichmentWorker:
                 )
                 attorneys = _extract_attorneys_from_parties(parties) if parties else []
                 party_summary = _flatten_parties_for_search(parties) if parties else ""
+                attorney_names = _extract_attorney_names(attorneys, limit=25) if attorneys else []
+                charge_items = _extract_charge_items_from_parties(parties, limit=40) if parties else []
                 _upsert_case_field(
                     conn,
                     pcl_case_fields,
@@ -652,6 +674,32 @@ class DocketEnrichmentWorker:
                     "docket_party_summary",
                     field_value_text=party_summary or None,
                     field_value_json=None,
+                    now=now,
+                )
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_attorney_names",
+                    field_value_text=" | ".join(attorney_names) if attorney_names else None,
+                    field_value_json=attorney_names or None,
+                    now=now,
+                )
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_row["id"],
+                    "docket_charges",
+                    field_value_text=(
+                        " | ".join(
+                            f"{item.get('count')}{(' - ' + item.get('disposition')) if item.get('disposition') else ''}"
+                            for item in charge_items
+                            if isinstance(item, dict) and item.get("count")
+                        )
+                        if charge_items
+                        else None
+                    ),
+                    field_value_json=charge_items or None,
                     now=now,
                 )
                 if fetch_result.request_debug and os.environ.get("PACER_DOCKET_DEBUG"):
@@ -1894,6 +1942,11 @@ def backfill_case_card_metadata_from_saved_dockets(
     docket_parties_row = pcl_case_fields.alias("docket_parties_row")
     docket_attorneys_row = pcl_case_fields.alias("docket_attorneys_row")
     docket_party_summary_row = pcl_case_fields.alias("docket_party_summary_row")
+    docket_entries_row = pcl_case_fields.alias("docket_entries_row")
+    docket_entry_count_row = pcl_case_fields.alias("docket_entry_count_row")
+    docket_recent_entries_row = pcl_case_fields.alias("docket_recent_entries_row")
+    docket_attorney_names_row = pcl_case_fields.alias("docket_attorney_names_row")
+    docket_charges_row = pcl_case_fields.alias("docket_charges_row")
 
     join_from = (
         pcl_cases.join(
@@ -1931,6 +1984,31 @@ def backfill_case_card_metadata_from_saved_dockets(
             (docket_party_summary_row.c.case_id == pcl_cases.c.id)
             & (docket_party_summary_row.c.field_name == "docket_party_summary"),
         )
+        .outerjoin(
+            docket_entries_row,
+            (docket_entries_row.c.case_id == pcl_cases.c.id)
+            & (docket_entries_row.c.field_name == "docket_entries"),
+        )
+        .outerjoin(
+            docket_entry_count_row,
+            (docket_entry_count_row.c.case_id == pcl_cases.c.id)
+            & (docket_entry_count_row.c.field_name == "docket_entry_count"),
+        )
+        .outerjoin(
+            docket_recent_entries_row,
+            (docket_recent_entries_row.c.case_id == pcl_cases.c.id)
+            & (docket_recent_entries_row.c.field_name == "docket_recent_entries"),
+        )
+        .outerjoin(
+            docket_attorney_names_row,
+            (docket_attorney_names_row.c.case_id == pcl_cases.c.id)
+            & (docket_attorney_names_row.c.field_name == "docket_attorney_names"),
+        )
+        .outerjoin(
+            docket_charges_row,
+            (docket_charges_row.c.case_id == pcl_cases.c.id)
+            & (docket_charges_row.c.field_name == "docket_charges"),
+        )
     )
 
     stmt = (
@@ -1938,6 +2016,7 @@ def backfill_case_card_metadata_from_saved_dockets(
             pcl_cases.c.id.label("case_id"),
             pcl_cases.c.judge_last_name,
             header.c.field_value_json.label("header_fields"),
+            docket_entries_row.c.field_value_json.label("docket_entries"),
         )
         .select_from(join_from)
         .where(
@@ -1948,6 +2027,10 @@ def backfill_case_card_metadata_from_saved_dockets(
                 docket_parties_row.c.id.is_(None),
                 docket_attorneys_row.c.id.is_(None),
                 docket_party_summary_row.c.id.is_(None),
+                docket_entry_count_row.c.id.is_(None),
+                docket_recent_entries_row.c.id.is_(None),
+                docket_attorney_names_row.c.id.is_(None),
+                docket_charges_row.c.id.is_(None),
                 pcl_cases.c.judge_last_name.is_(None),
                 pcl_cases.c.judge_last_name == "",
             )
@@ -1973,6 +2056,23 @@ def backfill_case_card_metadata_from_saved_dockets(
             return parsed if isinstance(parsed, dict) else None
         return None
 
+    def _coerce_docket_entries(value: Any) -> List[Dict[str, Any]]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return []
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return []
+            if isinstance(parsed, list):
+                return [item for item in parsed if isinstance(item, dict)]
+        return []
+
     now = datetime.utcnow()
     scanned = 0
     updated_fields = 0
@@ -1986,6 +2086,7 @@ def backfill_case_card_metadata_from_saved_dockets(
             header_fields = _coerce_header_fields(row.get("header_fields"))
             if not header_fields:
                 continue
+            docket_entries = _coerce_docket_entries(row.get("docket_entries"))
 
             judges = _extract_judge_display_list(header_fields)
             parties = (
@@ -2003,6 +2104,8 @@ def backfill_case_card_metadata_from_saved_dockets(
                     for party in parties
                     if isinstance(party, dict)
                 )
+            entry_count = len(docket_entries)
+            recent_entries = _extract_recent_docket_entries_for_preview(docket_entries, limit=5)
 
             if judges:
                 _upsert_case_field(
@@ -2043,6 +2146,8 @@ def backfill_case_card_metadata_from_saved_dockets(
             if parties:
                 attorneys = _extract_attorneys_from_parties(parties)
                 summary = _flatten_parties_for_search(parties)
+                attorney_names = _extract_attorney_names(attorneys, limit=25) if attorneys else []
+                charge_items = _extract_charge_items_from_parties(parties, limit=40) if parties else []
                 _upsert_case_field(
                     conn,
                     pcl_case_fields,
@@ -2073,6 +2178,55 @@ def backfill_case_card_metadata_from_saved_dockets(
                     now=now,
                 )
                 updated_fields += 1
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_attorney_names",
+                    field_value_text=" | ".join(attorney_names) if attorney_names else None,
+                    field_value_json=attorney_names or None,
+                    now=now,
+                )
+                updated_fields += 1
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_charges",
+                    field_value_text=(
+                        " | ".join(
+                            f"{item.get('count')}{(' - ' + item.get('disposition')) if item.get('disposition') else ''}"
+                            for item in charge_items
+                            if isinstance(item, dict) and item.get("count")
+                        )
+                        if charge_items
+                        else None
+                    ),
+                    field_value_json=charge_items or None,
+                    now=now,
+                )
+                updated_fields += 1
+
+            _upsert_case_field(
+                conn,
+                pcl_case_fields,
+                case_id,
+                "docket_entry_count",
+                field_value_text=str(entry_count),
+                field_value_json=entry_count,
+                now=now,
+            )
+            updated_fields += 1
+            _upsert_case_field(
+                conn,
+                pcl_case_fields,
+                case_id,
+                "docket_recent_entries",
+                field_value_text=None,
+                field_value_json=recent_entries or None,
+                now=now,
+            )
+            updated_fields += 1
 
             existing_last = str(row.get("judge_last_name") or "").strip()
             if not existing_last and judges:
@@ -2109,6 +2263,89 @@ def _extract_attorneys_from_parties(parties: List[Dict[str, Any]]) -> List[Dict[
                 enriched["party_type"] = party_type
             attorneys.append(enriched)
     return attorneys
+
+
+def _extract_attorney_names(attorneys: Any, *, limit: int = 25) -> List[str]:
+    """Return a stable, unique list of counsel names for lightweight card UIs."""
+    if not isinstance(attorneys, list) or limit <= 0:
+        return []
+    names: List[str] = []
+    seen: set[str] = set()
+    for item in attorneys:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= limit:
+            break
+    return names
+
+
+def _extract_charge_items_from_parties(
+    parties: Any, *, limit: int = 40
+) -> List[Dict[str, str]]:
+    """Extract PACER 'Pending/Terminated Counts' and 'Complaints' rows.
+
+    Each item carries the raw count label and disposition when present.
+    """
+    if not isinstance(parties, list) or limit <= 0:
+        return []
+    items: List[Dict[str, str]] = []
+    for party in parties:
+        if not isinstance(party, dict):
+            continue
+        for section in ("pending_counts", "terminated_counts", "complaints"):
+            for row in party.get(section) or []:
+                if not isinstance(row, dict):
+                    continue
+                count_text = str(row.get("count") or "").strip()
+                disposition = str(row.get("disposition") or "").strip()
+                if not count_text:
+                    continue
+                if count_text.strip().lower() == "none":
+                    continue
+                items.append(
+                    {
+                        "section": section,
+                        "count": count_text,
+                        "disposition": disposition,
+                    }
+                )
+                if len(items) >= limit:
+                    return items
+    return items
+
+
+def _extract_recent_docket_entries_for_preview(
+    docket_entries: Any, *, limit: int = 5
+) -> List[Dict[str, Any]]:
+    """Normalize docket entry shapes into a small list for card previews."""
+    if not isinstance(docket_entries, list) or limit <= 0:
+        return []
+    trimmed = docket_entries[-limit:]
+    normalized: List[Dict[str, Any]] = []
+    for entry in reversed(trimmed):
+        if not isinstance(entry, dict):
+            continue
+        date_filed = str(entry.get("dateFiled") or entry.get("docketTextDate") or "").strip()
+        doc_number = str(entry.get("documentNumber") or "").strip()
+        description = str(entry.get("description") or entry.get("docketText") or "").strip()
+        if not (date_filed or doc_number or description):
+            continue
+        normalized.append(
+            {
+                "dateFiled": date_filed or None,
+                "documentNumber": doc_number or None,
+                "description": description or None,
+            }
+        )
+    return normalized
 
 
 def _flatten_parties_for_search(parties: List[Dict[str, Any]]) -> str:

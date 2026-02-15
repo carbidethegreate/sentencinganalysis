@@ -2707,6 +2707,10 @@ input[type="submit"].danger:disabled {
   align-items: flex-start;
 }
 
+.pcl-case-card__heading {
+  min-width: 0;
+}
+
 .pcl-case-card__number {
   font-weight: 800;
   color: var(--primary-dark);
@@ -2721,24 +2725,18 @@ input[type="submit"].danger:disabled {
   margin: 0;
   color: var(--primary-dark);
   line-height: 1.25;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.pcl-case-card__badges {
+.pcl-case-card__status {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-.pcl-case-card .pcl-badge {
-  text-transform: none;
-  letter-spacing: 0.01em;
-  font-size: 0.76rem;
-  padding: 5px 9px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+  color: var(--muted);
 }
 
 .pcl-badge {
@@ -2786,6 +2784,108 @@ input[type="submit"].danger:disabled {
   margin: 0;
 }
 
+.pcl-case-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.pcl-case-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: baseline;
+  font-size: 0.92rem;
+  color: var(--text);
+}
+
+.pcl-case-row strong {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 6px;
+}
+
+.pcl-case-row__wide {
+  flex-basis: 100%;
+}
+
+.case-docket-preview {
+  border: 1px solid rgba(140, 132, 128, 0.2);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 10px 12px;
+}
+
+.case-docket-list {
+  margin: 8px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.case-docket-list--full {
+  margin-top: 10px;
+}
+
+.case-docket-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  border-bottom: 1px solid rgba(140, 132, 128, 0.14);
+  padding-bottom: 8px;
+}
+
+.case-docket-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.case-docket-item__main {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.case-docket-doc {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(140, 132, 128, 0.25);
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--primary-dark);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+.case-docket-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.case-docket-date {
+  flex: none;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.case-docket-details {
+  margin-top: 8px;
+}
+
 .pcl-case-meta dt {
   font-size: 0.78rem;
   text-transform: uppercase;
@@ -2811,6 +2911,20 @@ input[type="submit"].danger:disabled {
 
 .pcl-empty-state {
   text-align: center;
+}
+
+.js-enabled .casecards-pagination {
+  display: none;
+}
+
+.casecards-sentinel {
+  height: 1px;
+}
+
+.casecards-infinite-status {
+  margin-top: 10px;
+  text-align: center;
+  color: var(--muted);
 }
 
 .federal-overview-grid {

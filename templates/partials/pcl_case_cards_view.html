@@ -171,106 +171,36 @@
     </details>
   </section>
 
-  <section class="pcl-card-grid" aria-live="polite">
-    {% if cases %}
-      {% for case in cases %}
-        {% set docket_status = (case.get("enrichment_status") or "none") %}
-        {% set docket_badge_variant = "stub" %}
-        {% if docket_status == "completed" %}
-          {% set docket_badge_variant = "indexed" %}
-        {% elif docket_status in ["queued", "running"] %}
-          {% set docket_badge_variant = "warning" %}
-        {% elif docket_status == "failed" %}
-          {% set docket_badge_variant = "danger" %}
-        {% endif %}
-        {% set judge_full = (case.get("docket_judges")[0] if case.get("docket_judges") and (case.get("docket_judges")|length) > 0 else "") %}
-        {% set judge_last = (case.get("judge_last_name") or "") %}
-        {% if judge_last and judge_last == judge_last.upper() %}
-          {% if judge_last|length > 2 and judge_last[:2] == 'MC' %}
-            {% set judge_last = 'Mc' ~ (judge_last[2]|upper) ~ (judge_last[3:]|lower) %}
-          {% else %}
-            {% set judge_last = judge_last|title %}
-          {% endif %}
-        {% endif %}
-        {% set judge_display = (judge_last or (judge_full|title) or "—") %}
-        {% set counsel_count = case.get("docket_attorney_count") %}
-        {% set party_count = case.get("docket_party_count") %}
-        <article class="card pcl-case-card">
-          <header class="pcl-case-card__header">
-            <div>
-              <p class="pcl-case-card__number">{{ case.get("case_number_full") or case.get("case_number") }}</p>
-              <h3 class="pcl-case-card__title">{{ case.get("case_title") or case.get("short_title") or "Untitled case" }}</h3>
-            </div>
-            <div class="pcl-case-card__badges" aria-label="Case status">
-              <span class="pcl-badge" data-variant="{{ docket_badge_variant }}">Docket: {{ docket_status }}</span>
-              {% if case.get("has_sentencing") %}
-                <span class="pcl-badge" data-variant="indexed">Sentencing: yes</span>
-              {% else %}
-                <span class="pcl-badge" data-variant="stub">Sentencing: no</span>
-              {% endif %}
-            </div>
-          </header>
+  {% set fragment_url = url_for(
+    'admin_federal_data_dashboard_cases_cards_fragment',
+    q=filters.search_text,
+    court_id=filters.court_id,
+    case_type=filters.case_type,
+    date_filed_from=(filters.date_filed_from.isoformat() if filters.date_filed_from else ''),
+    date_filed_to=(filters.date_filed_to.isoformat() if filters.date_filed_to else ''),
+    judge_last_name=filters.judge_last_name,
+    enriched_only=('1' if filters.enriched_only else ''),
+    sentencing_only=('1' if filters.sentencing_only else ''),
+    field_name=filters.field_name,
+    field_value=filters.field_value,
+    page_size=pagination.page_size
+  ) %}
 
-          <dl class="pcl-case-meta">
-            <div>
-              <dt>Date filed</dt>
-              <dd>{{ case.get("date_filed").isoformat() if case.get("date_filed") else "—" }}</dd>
-            </div>
-            <div>
-              <dt>Court</dt>
-              <dd>{{ case.get("court_id") or "—" }}</dd>
-            </div>
-            <div>
-              <dt>Case type</dt>
-              <dd>{{ case.get("case_type") or "—" }}</dd>
-            </div>
-            <div>
-              <dt>Judge</dt>
-              <dd title="{{ judge_full if judge_full else judge_display }}">{{ judge_display }}</dd>
-            </div>
-            <div>
-              <dt>Parties</dt>
-              <dd>{{ party_count if party_count is not none else "—" }}</dd>
-            </div>
-            <div>
-              <dt>Counsel</dt>
-              <dd>{{ counsel_count if counsel_count is not none else "—" }}</dd>
-            </div>
-          </dl>
-
-          <footer class="pcl-case-card__footer">
-            <span class="small">
-              Docket updated:
-              {% if case.get("enrichment_updated_at") %}
-                {{ case.get("enrichment_updated_at").isoformat() }}
-              {% else %}
-                —
-              {% endif %}
-            </span>
-            <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.get('id')) }}">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-              <input type="hidden" name="include_docket_text" value="1">
-              <button class="secondary" type="submit">Pull docket</button>
-            </form>
-            <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">Open case</a>
-            <a
-              class="pill"
-              href="{{ url_for('admin_pcl_attorneys', q=(case.get('case_number_full') or case.get('case_number') or ''), court_id=(case.get('court_id') or ''), case_type=(case.get('case_type') or '')) }}"
-            >
-              Counsel
-            </a>
-          </footer>
-        </article>
-      {% endfor %}
-    {% else %}
-      <div class="card pcl-empty-state">
-        <h3>No saved cases yet</h3>
-        <p class="small">Run a PACER search and click “Save to database” to create cards.</p>
-      </div>
-    {% endif %}
+  <section
+    class="pcl-card-grid"
+    id="case-cards-grid"
+    aria-live="polite"
+    data-fragment-url="{{ fragment_url }}"
+    data-page="{{ pagination.page }}"
+    data-total-pages="{{ pagination.total_pages }}"
+  >
+    {% include "partials/pcl_case_cards_grid.html" %}
   </section>
 
-  <nav class="pcl-pagination" aria-label="Case card pagination">
+  <div class="casecards-infinite-status small" id="casecards-infinite-status" hidden></div>
+  <div class="casecards-sentinel" id="casecards-sentinel" aria-hidden="true"></div>
+
+  <nav class="pcl-pagination casecards-pagination" aria-label="Case card pagination">
     {% set total_pages = pagination.total_pages %}
     {% set current_page = pagination.page %}
     <span class="small">Page {{ current_page }} of {{ total_pages }}</span>
@@ -279,3 +209,107 @@
       <a class="pill {% if current_page >= total_pages %}disabled{% endif %}" href="{{ page_url(current_page + 1) if current_page < total_pages else '#' }}" aria-disabled="{{ 'true' if current_page >= total_pages else 'false' }}">Next</a>
     </div>
   </nav>
+
+  <script>
+    (() => {
+      const grid = document.getElementById("case-cards-grid");
+      const sentinel = document.getElementById("casecards-sentinel");
+      const statusEl = document.getElementById("casecards-infinite-status");
+      if (!grid || !sentinel) return;
+
+      document.documentElement.classList.add("js-enabled");
+
+      const fragmentUrl = grid.dataset.fragmentUrl;
+      let nextPage = (parseInt(grid.dataset.page || "1", 10) || 1) + 1;
+      const totalPages = parseInt(grid.dataset.totalPages || "1", 10) || 1;
+      let isLoading = false;
+
+      const setStatus = (text, visible) => {
+        if (!statusEl) return;
+        statusEl.textContent = text || "";
+        statusEl.hidden = !visible;
+      };
+
+      const appendCardsFromHtml = (html) => {
+        if (!html) return;
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = html;
+        Array.from(wrapper.children).forEach((child) => {
+          grid.appendChild(child);
+        });
+      };
+
+      const loadNextPage = async () => {
+        if (isLoading) return;
+        if (!fragmentUrl) return;
+        if (nextPage > totalPages) return;
+        isLoading = true;
+        setStatus("Loading more cases…", true);
+        try {
+          const url = new URL(fragmentUrl, window.location.origin);
+          url.searchParams.set("page", String(nextPage));
+          const response = await fetch(url.toString(), {
+            credentials: "same-origin",
+            headers: { "X-Requested-With": "XMLHttpRequest" },
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const payload = await response.json();
+          appendCardsFromHtml(payload.html);
+          if (payload.next_page) {
+            nextPage = payload.next_page;
+          } else {
+            nextPage = totalPages + 1;
+            setStatus("All results loaded.", true);
+            sentinel.remove();
+            window.setTimeout(() => setStatus("", false), 1500);
+          }
+        } catch (error) {
+          setStatus("Could not load more cases. Scroll to retry.", true);
+          window.setTimeout(() => setStatus("", false), 2500);
+        } finally {
+          isLoading = false;
+        }
+      };
+
+      if ("IntersectionObserver" in window) {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+              loadNextPage();
+            }
+          },
+          { rootMargin: "600px 0px" }
+        );
+        observer.observe(sentinel);
+      }
+
+      document.addEventListener("toggle", async (event) => {
+        const details = event.target;
+        if (!(details instanceof HTMLDetailsElement)) return;
+        if (!details.matches(".case-docket-details")) return;
+        if (!details.open) return;
+        const body = details.querySelector(".case-docket-details__body");
+        if (!body) return;
+        if (body.dataset.loaded === "1") return;
+        const caseId = details.dataset.caseId;
+        if (!caseId) return;
+        body.dataset.loaded = "1";
+        body.setAttribute("aria-busy", "true");
+        body.innerHTML = "<p class=\"small\">Loading docket…</p>";
+        try {
+          const response = await fetch(`/admin/pcl/cases/${encodeURIComponent(caseId)}/docket-entries-fragment?limit=60`, {
+            credentials: "same-origin",
+            headers: { "X-Requested-With": "XMLHttpRequest" },
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const html = await response.text();
+          body.innerHTML = html;
+        } catch (error) {
+          body.dataset.loaded = "0";
+          body.innerHTML = "<p class=\"small\">Could not load docket entries.</p>";
+        } finally {
+          body.setAttribute("aria-busy", "false");
+        }
+      });
+    })();
+  </script>

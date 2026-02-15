@@ -1,0 +1,29 @@
+{# Docket entries fragment for card dropdown. Expects: entries, total, shown, case_id #}
+{% if total and (shown < total) %}
+  <p class="small">Showing latest {{ shown }} of {{ total }} entries.</p>
+{% elif total %}
+  <p class="small">{{ total }} entries.</p>
+{% else %}
+  <p class="small">No docket entries saved for this case.</p>
+{% endif %}
+
+{% if entries %}
+  <ul class="case-docket-list case-docket-list--full">
+    {% for entry in entries %}
+      <li class="case-docket-item">
+        <div class="case-docket-item__main">
+          {% if entry.documentNumber %}
+            <span class="case-docket-doc">#{{ entry.documentNumber }}</span>
+          {% endif %}
+          <span class="case-docket-desc">{{ entry.description or entry.docketText or "—" }}</span>
+        </div>
+        <div class="small case-docket-date">{{ entry.dateFiled or entry.docketTextDate or "—" }}</div>
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<div class="actions mt-8">
+  <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case_id) }}">Open full case</a>
+</div>
+
