@@ -12,7 +12,7 @@ from xml.etree import ElementTree
 
 from lxml import html as lxml_html
 from lxml import etree as lxml_etree
-from sqlalchemy import Table, select, update, or_
+from sqlalchemy import Table, inspect, select, update, or_
 
 
 TERMINAL_FAILURE_MESSAGE = "endpoint not yet implemented"
@@ -645,6 +645,21 @@ class DocketEnrichmentWorker:
                     and isinstance(header_fields.get("parties"), list)
                     else []
                 )
+                case_entities = self._tables.get("case_entities")
+                if header_fields and case_entities is not None:
+                    try:
+                        _refresh_case_entities(
+                            conn,
+                            case_entities,
+                            case_id=case_row["id"],
+                            header_fields=header_fields,
+                        )
+                    except Exception:
+                        if self._logger:
+                            self._logger.exception(
+                                "Unable to refresh case_entities for case_id=%s",
+                                case_row["id"],
+                            )
                 attorneys = _extract_attorneys_from_parties(parties) if parties else []
                 party_summary = _flatten_parties_for_search(parties) if parties else ""
                 # Keep these lists large enough that *all* counsel/party names remain searchable
@@ -2001,6 +2016,14 @@ def backfill_case_card_metadata_from_saved_dockets(
     pcl_case_fields = tables.get("pcl_case_fields")
     if pcl_case_fields is None:
         return {"scanned": 0, "updated_fields": 0, "updated_cases": 0}
+    case_entities = tables.get("case_entities")
+    if case_entities is not None:
+        try:
+            inspector = inspect(engine)
+            if not inspector.has_table(case_entities.name):
+                case_entities = None
+        except Exception:
+            case_entities = None
 
     header = pcl_case_fields.alias("header_fields")
     docket_judges_row = pcl_case_fields.alias("docket_judges_row")
@@ -2173,6 +2196,18 @@ def backfill_case_card_metadata_from_saved_dockets(
                 if isinstance(header_fields.get("parties"), list)
                 else []
             )
+            if case_entities is not None:
+                try:
+                    _refresh_case_entities(
+                        conn,
+                        case_entities,
+                        case_id=case_id,
+                        header_fields=header_fields,
+                    )
+                except Exception:
+                    # Don't break the "make cards useful" button if this optional table
+                    # is missing or has not been migrated yet.
+                    pass
             party_count = header_fields.get("party_count")
             attorney_count = header_fields.get("attorney_count")
             if not isinstance(party_count, int) and parties:
@@ -2539,6 +2574,204 @@ def _flatten_parties_for_search(parties: List[Dict[str, Any]]) -> str:
                 if item.get("disposition"):
                     parts.append(str(item["disposition"]))
     return " | ".join(parts)
+
+
+def _normalize_case_entity_value(value: Any) -> str:
+    """Normalize values for case_entities searches/deduping.
+
+    Keep this conservative: lower-case, collapse whitespace, replace
+    punctuation with spaces so user searches match reliably.
+    """
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    raw = re.sub(r"[^a-z0-9]+", " ", raw)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _merge_entity_meta(target: Dict[str, Any], incoming: Dict[str, Any]) -> None:
+    """Merge meta JSON for duplicate entities (same normalized value)."""
+    for key, value in (incoming or {}).items():
+        if value is None or value == "" or value == []:
+            continue
+        existing = target.get(key)
+        if existing is None:
+            target[key] = value
+            continue
+        if isinstance(existing, list) and isinstance(value, list):
+            _merge_unique_list(existing, [str(v) for v in value if str(v).strip()])
+            continue
+        if isinstance(existing, list) and not isinstance(value, list):
+            _merge_unique_list(existing, [str(value)])
+            continue
+        if not isinstance(existing, list) and isinstance(value, list):
+            merged: List[str] = []
+            _merge_unique_list(merged, [str(existing)])
+            _merge_unique_list(merged, [str(v) for v in value if str(v).strip()])
+            target[key] = merged
+            continue
+        if existing == value:
+            continue
+        target[key] = [str(existing), str(value)]
+
+
+def _build_case_entities_from_header_fields(
+    header_fields: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Derive normalized case_entities rows from saved docket header fields.
+
+    This is intentionally redundant with the nested `docket_header_fields` JSON:
+    it gives us a stable, compact, searchable store for judges/parties/counsel/charges
+    without relying on long, truncated summary text fields.
+    """
+
+    entities: Dict[tuple[str, str], Dict[str, Any]] = {}
+
+    def _add(
+        entity_type: str,
+        value: Any,
+        *,
+        source_field: str = "docket_header_fields",
+        meta_json: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        norm = _normalize_case_entity_value(text)
+        if not norm:
+            return
+        key = (entity_type, norm)
+        existing = entities.get(key)
+        if existing is None:
+            entities[key] = {
+                "entity_type": entity_type,
+                "value": text,
+                "value_normalized": norm,
+                "source_field": source_field,
+                "meta_json": meta_json or None,
+            }
+            return
+        if meta_json:
+            existing_meta = existing.get("meta_json") or {}
+            if not isinstance(existing_meta, dict):
+                existing_meta = {}
+            _merge_entity_meta(existing_meta, meta_json)
+            existing["meta_json"] = existing_meta or None
+
+    # Judges
+    for label in header_fields.get("judges") or []:
+        _add("judge", label, meta_json={"role": "judge"})
+    for label in header_fields.get("assigned_to") or []:
+        _add("judge", label, meta_json={"role": "assigned_to"})
+    for label in header_fields.get("referred_to") or []:
+        _add("judge", label, meta_json={"role": "referred_to"})
+
+    # Parties / Counsel / Charges
+    parties = header_fields.get("parties")
+    if not isinstance(parties, list):
+        parties = []
+    for party in parties:
+        if not isinstance(party, dict):
+            continue
+        party_name = str(party.get("name") or "").strip()
+        party_type = str(party.get("party_type") or "").strip()
+        party_heading = str(party.get("party_heading") or "").strip()
+        party_index = party.get("party_index")
+
+        if party_name:
+            _add(
+                "party",
+                party_name,
+                meta_json={
+                    "party_type": party_type or None,
+                    "party_heading": party_heading or None,
+                    "party_index": party_index if isinstance(party_index, int) else None,
+                },
+            )
+
+        for attorney in party.get("represented_by") or []:
+            if not isinstance(attorney, dict):
+                continue
+            name = str(attorney.get("name") or "").strip()
+            if not name:
+                continue
+            meta = {
+                "party_names": [party_name] if party_name else [],
+                "party_types": [party_type] if party_type else [],
+                "party_headings": [party_heading] if party_heading else [],
+                "organizations": [str(attorney.get("organization") or "").strip()]
+                if str(attorney.get("organization") or "").strip()
+                else [],
+                "roles": [str(v).strip() for v in (attorney.get("roles") or []) if str(v).strip()],
+                "designations": [
+                    str(v).strip()
+                    for v in (attorney.get("designations") or [])
+                    if str(v).strip()
+                ],
+                "emails": [
+                    str(v).strip()
+                    for v in (attorney.get("emails") or [])
+                    if str(v).strip()
+                ],
+                "phones": [
+                    str(v).strip()
+                    for v in (attorney.get("phones") or [])
+                    if str(v).strip()
+                ],
+                "faxes": [
+                    str(v).strip()
+                    for v in (attorney.get("faxes") or [])
+                    if str(v).strip()
+                ],
+                "websites": [
+                    str(v).strip()
+                    for v in (attorney.get("websites") or [])
+                    if str(v).strip()
+                ],
+            }
+            # Drop empty arrays so meta stays compact.
+            meta = {k: v for k, v in meta.items() if v}
+            _add("counsel", name, meta_json=meta or None)
+
+        for section in ("pending_counts", "terminated_counts", "complaints"):
+            for row in party.get(section) or []:
+                if not isinstance(row, dict):
+                    continue
+                count_text = str(row.get("count") or "").strip()
+                disposition = str(row.get("disposition") or "").strip()
+                if not count_text or count_text.lower() == "none":
+                    continue
+                value = f"{count_text} - {disposition}" if disposition else count_text
+                _add(
+                    "charge",
+                    value,
+                    meta_json={
+                        "section": section,
+                        "count": count_text,
+                        "disposition": disposition or None,
+                        "party_name": party_name or None,
+                    },
+                )
+
+    return list(entities.values())
+
+
+def _refresh_case_entities(
+    conn: Any,
+    case_entities: Optional[Table],
+    *,
+    case_id: int,
+    header_fields: Optional[Dict[str, Any]],
+) -> int:
+    if case_entities is None or not header_fields:
+        return 0
+    derived = _build_case_entities_from_header_fields(header_fields)
+    conn.execute(case_entities.delete().where(case_entities.c.case_id == case_id))
+    if not derived:
+        return 0
+    rows = [{"case_id": case_id, **item} for item in derived]
+    conn.execute(case_entities.insert(), rows)
+    return len(rows)
 
 
 def _format_pacer_error(message: str, fetch_result: DocketFetchResult) -> str:

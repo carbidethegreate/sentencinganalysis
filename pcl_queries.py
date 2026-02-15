@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -106,8 +107,11 @@ def list_cases(engine, tables, filters: PclCaseFilters, *, page: int, page_size:
     pcl_batch_segments = tables["pcl_batch_segments"]
     docket_enrichment_jobs = _maybe_table(engine, tables, "docket_enrichment_jobs")
     case_fields = _maybe_table(engine, tables, "pcl_case_fields")
+    case_entities = _maybe_table(engine, tables, "case_entities")
 
-    where_clauses = _build_where_clauses(pcl_cases, filters, case_fields=case_fields)
+    where_clauses = _build_where_clauses(
+        pcl_cases, filters, case_fields=case_fields, case_entities=case_entities
+    )
     enrichment_status = literal(None).label("enrichment_status")
     enrichment_updated_at = literal(None).label("enrichment_updated_at")
     has_enrichment = None
@@ -204,7 +208,10 @@ def list_case_cards(
     pcl_cases = tables["pcl_cases"]
     docket_enrichment_jobs = _maybe_table(engine, tables, "docket_enrichment_jobs")
     case_fields = _maybe_table(engine, tables, "pcl_case_fields")
-    where_clauses = _build_where_clauses(pcl_cases, filters, case_fields=case_fields)
+    case_entities = _maybe_table(engine, tables, "case_entities")
+    where_clauses = _build_where_clauses(
+        pcl_cases, filters, case_fields=case_fields, case_entities=case_entities
+    )
     enrichment_status = literal(None).label("enrichment_status")
     enrichment_updated_at = literal(None).label("enrichment_updated_at")
     enrichment_last_error = literal(None).label("enrichment_last_error")
@@ -519,7 +526,7 @@ def get_case_detail(engine, tables, case_id: int) -> Optional[Dict[str, Any]]:
 
 
 def _build_where_clauses(
-    pcl_cases, filters: PclCaseFilters, *, case_fields=None
+    pcl_cases, filters: PclCaseFilters, *, case_fields=None, case_entities=None
 ) -> List[Any]:
     clauses: List[Any] = [pcl_cases.c.id.is_not(None)]
     if filters.court_id:
@@ -533,13 +540,32 @@ def _build_where_clauses(
     if filters.date_filed_to:
         clauses.append(pcl_cases.c.date_filed <= filters.date_filed_to)
     if filters.search_text:
-        like_pattern = f"%{filters.search_text.lower()}%"
+        raw_needle = filters.search_text.lower()
+        like_pattern = f"%{raw_needle}%"
+        normalized_needle = re.sub(r"[^a-z0-9]+", " ", raw_needle)
+        normalized_needle = re.sub(r"\s+", " ", normalized_needle).strip()
+        normalized_like_pattern = (
+            f"%{normalized_needle}%" if normalized_needle else like_pattern
+        )
         search_clauses: List[Any] = [
             func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(like_pattern),
             func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(like_pattern),
             func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(like_pattern),
             func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(like_pattern),
         ]
+        if case_entities is not None:
+            search_clauses.append(
+                exists(
+                    select(1).where(
+                        and_(
+                            case_entities.c.case_id == pcl_cases.c.id,
+                            func.lower(func.coalesce(case_entities.c.value_normalized, "")).like(
+                                normalized_like_pattern
+                            ),
+                        )
+                    )
+                )
+            )
         if case_fields is not None:
             # Allow the primary search box to match parties/counsel when docket metadata exists.
             #
@@ -851,7 +877,10 @@ def estimate_docket_cost_for_filters(
     docket_jobs = tables["docket_enrichment_jobs"]
     docket_receipts = tables["docket_enrichment_receipts"]
 
-    where_clauses = _build_where_clauses(pcl_cases, filters, case_fields=None)
+    case_entities = _maybe_table(engine, tables, "case_entities")
+    where_clauses = _build_where_clauses(
+        pcl_cases, filters, case_fields=None, case_entities=case_entities
+    )
     case_type = filters.case_type
 
     candidate_ids_stmt = select(pcl_cases.c.id).where(and_(*where_clauses))

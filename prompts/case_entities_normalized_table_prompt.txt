@@ -1,0 +1,69 @@
+Title: Implement Normalized `case_entities` (Judges / Parties / Counsel / Charges)
+
+Goal
+- Add a future-proof normalized table that stores case "entities" as individual rows so:
+  - Counsel searches never miss cases due to truncated summary text.
+  - Judges / parties / charges are queryable without parsing nested JSON at query time.
+  - The UI can reliably show "all counsel" and support search by any counsel name.
+
+Non-Negotiables
+- Do NOT remove or increase any truncation on `pcl_case_fields.field_value_text` that exists for index safety.
+- Do NOT break existing pages/routes/components that currently rely on:
+  - `pcl_cases`
+  - `pcl_case_fields` (especially `docket_header_fields`, `docket_parties`, `docket_attorneys`, `docket_charges`)
+  - `docket_enrichment_jobs`
+
+Schema
+1. Add a new table `case_entities`:
+  - `id` PK
+  - `case_id` FK -> `pcl_cases.id` (ON DELETE CASCADE)
+  - `entity_type` (judge | party | counsel | charge)
+  - `value` (original display text)
+  - `value_normalized` (lowercase + whitespace-collapsed + punctuation replaced with spaces)
+  - `source_field` (e.g. `docket_header_fields`)
+  - `meta_json` (optional, compact)
+  - timestamps
+  - Unique constraint: (`case_id`, `entity_type`, `value_normalized`)
+  - Indexes:
+    - (`case_id`)
+    - (`entity_type`, `value_normalized`)
+    - (`value_normalized`)
+
+Migration
+2. Add a SQL migration file under `migrations/` to create the table and indexes.
+
+Derivation Rules (Backfill + Ongoing)
+3. Source-of-truth should be `pcl_case_fields.docket_header_fields.field_value_json` when available.
+4. Extract:
+  - Judges:
+    - `header_fields.judges`
+    - `header_fields.assigned_to`
+    - `header_fields.referred_to`
+  - Parties:
+    - `header_fields.parties[].name` (+ party_type / heading / index in meta)
+  - Counsel:
+    - `header_fields.parties[].represented_by[].name`
+    - meta: party_names, roles/designations, org/emails/phones/faxes/websites
+  - Charges:
+    - `pending_counts` / `terminated_counts` / `complaints` count + disposition
+5. Dedup entities per case by `(entity_type, value_normalized)` and merge meta when duplicates occur.
+
+Keeping It Updated
+6. Whenever a docket pull saves/updates `docket_header_fields`, refresh `case_entities` for that case:
+  - Delete all existing rows for `case_id`
+  - Insert freshly derived rows (atomic transaction)
+
+Search Integration
+7. Extend the case search box (`q`) to also match `case_entities.value_normalized` (exists subquery).
+
+Backfill Script
+8. Add a script:
+  - Reads all cases with `docket_header_fields`
+  - Rebuilds `case_entities`
+  - Safe to re-run
+
+How To Run (Render)
+9. SSH into the service, then:
+  - `cd /app`
+  - `python3 scripts/backfill_case_entities.py`
+

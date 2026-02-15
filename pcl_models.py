@@ -419,6 +419,35 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         ),
     )
 
+    case_entities = Table(
+        "case_entities",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("case_id", Integer, ForeignKey("pcl_cases.id"), nullable=False),
+        Column("entity_type", String(40), nullable=False),
+        Column("value", Text, nullable=False),
+        Column("value_normalized", Text, nullable=False),
+        Column("source_field", Text, nullable=True),
+        Column("meta_json", json_type, nullable=True),
+        UniqueConstraint(
+            "case_id",
+            "entity_type",
+            "value_normalized",
+            name="uq_case_entities_case_type_value",
+        ),
+        Index("ix_case_entities_case_id", "case_id"),
+        Index("ix_case_entities_type_value", "entity_type", "value_normalized"),
+        Index("ix_case_entities_value_normalized", "value_normalized"),
+    )
+
     pcl_parties = Table(
         "pcl_parties",
         metadata,
@@ -626,6 +655,7 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
         "pcl_case_result_raw": pcl_case_result_raw,
         "pcl_cases": pcl_cases,
         "pcl_case_fields": pcl_case_fields,
+        "case_entities": case_entities,
         "pcl_parties": pcl_parties,
         "docket_document_jobs": docket_document_jobs,
         "docket_document_items": docket_document_items,
