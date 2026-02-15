@@ -888,6 +888,10 @@ def _aggregate_attorneys(
             else:
                 _merge_attorney_bucket(bucket, attorney, case_ref)
 
+    # Consolidate duplicates that come from inconsistent identity keys
+    # (ex: same name appears in the same case once with contact info and once without).
+    _consolidate_attorney_buckets(attorneys)
+
     rows: List[Dict[str, Any]] = []
     for bucket in attorneys.values():
         rows.append(_finalize_attorney_bucket(bucket))
@@ -997,6 +1001,89 @@ def _attorney_identity_key(attorney: Dict[str, Any]) -> str:
     if phone_key:
         return f"{name}|{phone_key}"
     return name
+
+
+def _bucket_case_id_set(bucket: Dict[str, Any]) -> set[int]:
+    case_ids: set[int] = set()
+    for row in bucket.get("case_rows") or []:
+        case_id = row.get("case_id")
+        if isinstance(case_id, int):
+            case_ids.add(case_id)
+    return case_ids
+
+
+def _merge_attorney_buckets(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+    for set_name in (
+        "organization_set",
+        "email_set",
+        "phone_set",
+        "fax_set",
+        "website_set",
+        "designation_set",
+        "role_set",
+        "detail_set",
+        "raw_line_set",
+    ):
+        dst.setdefault(set_name, set()).update(src.get(set_name) or set())
+
+    dst_keys = dst.setdefault("case_keys", set())
+    dst_rows = dst.setdefault("case_rows", [])
+    for row in src.get("case_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        case_key = (
+            row.get("case_id"),
+            row.get("party_name") or "",
+            row.get("party_type") or "",
+        )
+        if case_key in dst_keys:
+            continue
+        dst_keys.add(case_key)
+        dst_rows.append(row)
+
+    src_seen = src.get("last_seen_at")
+    dst_seen = dst.get("last_seen_at")
+    if src_seen and (dst_seen is None or src_seen > dst_seen):
+        dst["last_seen_at"] = src_seen
+
+
+def _consolidate_attorney_buckets(attorneys: Dict[str, Dict[str, Any]]) -> None:
+    by_name: Dict[str, List[str]] = {}
+    for key, bucket in list(attorneys.items()):
+        name_key = str(bucket.get("name") or "").strip().lower()
+        if not name_key:
+            continue
+        by_name.setdefault(name_key, []).append(key)
+
+    for _, keys in by_name.items():
+        if len(keys) < 2:
+            continue
+        # Pairwise merge buckets that share at least one case id.
+        # This fixes common duplicates caused by parsing variations.
+        i = 0
+        while i < len(keys):
+            primary_key = keys[i]
+            primary = attorneys.get(primary_key)
+            if primary is None:
+                i += 1
+                continue
+            primary_cases = _bucket_case_id_set(primary)
+            j = i + 1
+            while j < len(keys):
+                other_key = keys[j]
+                other = attorneys.get(other_key)
+                if other is None:
+                    keys.pop(j)
+                    continue
+                other_cases = _bucket_case_id_set(other)
+                if primary_cases and other_cases and (primary_cases & other_cases):
+                    _merge_attorney_buckets(primary, other)
+                    primary_cases |= other_cases
+                    del attorneys[other_key]
+                    keys.pop(j)
+                    continue
+                j += 1
+            i += 1
 
 
 def _new_attorney_bucket(attorney: Dict[str, Any], case_ref: Dict[str, Any]) -> Dict[str, Any]:
