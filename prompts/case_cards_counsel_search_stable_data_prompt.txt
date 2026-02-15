@@ -1,0 +1,48 @@
+You are working in the CourtDataPro repo.
+
+Goal
+- Make case cards attorney-usable when searching by counsel.
+- Case cards MUST list all counsel names on the card (not a truncated preview like "Name A; Name B (+6 more)").
+- The primary search box MUST match any counsel name on the case, even if that counsel is not first in the list.
+- Do not break existing routes, workers, or docket enrichment.
+
+Problem Summary
+- Current case-card search relies on `pcl_case_fields.field_value_text` for `docket_party_summary`.
+- `field_value_text` is intentionally truncated (~2000 chars) for index safety, so long party/count summaries can truncate later counsel names.
+- Result: searching counsel by name can miss cases where counsel appears later in the summary.
+
+Requirements
+1. Counsel display
+- On `templates/partials/pcl_case_card.html`, show ALL counsel names.
+- Keep cards compact: allow wrapping; if needed, constrain height and make the counsel section scrollable.
+
+2. Counsel search
+- In `_build_where_clauses` (see `pcl_queries.py`), update the primary search (`q`) to also match on non-truncated JSON fields:
+  - `docket_attorney_names` (JSON list)
+  - `docket_party_names` (JSON list)
+  - `docket_judges` (JSON list)
+  - `docket_charges` (JSON list of dicts)
+- Do NOT rely solely on `docket_party_summary` text.
+- Keep the existing case-number/title search.
+
+3. Stable derived fields
+- Ensure docket enrichment stores large-enough JSON lists for party/counsel names so that "ALL counsel" can be displayed and searched.
+- Preferred: update name list limits to a safe higher cap (e.g., 250+) in `docket_enrichment.py`.
+- Keep `docket_party_summary` text truncation intact for index safety.
+
+4. Future-proof data model (proposal)
+- Propose (and optionally implement) a normalized entity table to avoid truncation and simplify search:
+  - `case_entities` with columns: `case_id`, `entity_type` (judge|party|counsel|charge), `value`, `value_normalized`, `source_field`, timestamps.
+  - Unique constraint on (`case_id`, `entity_type`, `value_normalized`).
+  - Index on (`entity_type`, `value_normalized`).
+- Backfill from existing `docket_header_fields` / `docket_parties` / `docket_attorneys`.
+- Update enrichment to keep it in sync.
+
+Acceptance Tests
+- Searching for a counsel name that appears later in a long docket (example: "Alexandre Mikhail Dempsey") returns ALL matching cases, not only the ones where the name appears early.
+- Cards display all counsel names and remain readable on desktop and mobile.
+- No regressions to infinite scroll / card loading endpoints.
+
+Deliverables
+- Code changes with clear comments.
+- If a schema change is proposed: include a migration and a backfill script.
