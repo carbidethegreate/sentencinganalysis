@@ -157,7 +157,7 @@
     <details class="casecards-maintenance">
       <summary class="pcl-detail-summary">Maintenance</summary>
       <p class="small mt-8">
-        If a docket was pulled before the latest card layout, you can rebuild card metadata from saved dockets (no PACER cost).
+        If a docket was pulled before the latest card layout, you can rebuild card metadata (judge, counsel, charges, and docket preview) from saved dockets (no PACER cost).
       </p>
       <form method="post" action="{{ url_for('admin_federal_data_dashboard_cases_update_card_metadata') }}" class="inline-form mt-8">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
