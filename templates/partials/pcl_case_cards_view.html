@@ -5,6 +5,22 @@
       These are the cases you saved from PACER. Open a case to see parties/counsel details, or pull the docket to refresh case metadata.
     </p>
 
+    <div class="flash">
+      <strong>Not seeing judges or counsel on the cards?</strong>
+      <p class="small mt-8">
+        If these dockets were pulled before the latest card layout, you can update existing cards from the saved dockets (no PACER cost).
+      </p>
+      <form method="post" action="{{ url_for('admin_federal_data_dashboard_cases_update_card_metadata') }}" class="inline-form mt-8">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <label>
+          Max cases
+          <input type="number" name="limit" min="1" max="5000" value="500">
+        </label>
+        <button class="primary" type="submit">Update existing cards</button>
+      </form>
+    </div>
+
     <form method="get" class="pcl-filter-form" aria-label="Filter cases">
       <div class="grid two">
         <div>

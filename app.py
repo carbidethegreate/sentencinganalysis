@@ -109,7 +109,10 @@ from pacer_env import (
     build_pacer_environment_config,
     validate_pacer_environment_config,
 )
-from docket_enrichment import DocketEnrichmentWorker
+from docket_enrichment import (
+    DocketEnrichmentWorker,
+    backfill_case_card_metadata_from_saved_dockets,
+)
 from docket_documents import DocketDocumentWorker
 from pcl_batch import CRIMINAL_CASE_TYPES, PclBatchPlanner, PclBatchWorker
 from pcl_client import PclApiError, PclClient, PclJsonResponse
@@ -8141,6 +8144,43 @@ def create_app() -> Flask:
             case_type_choices=_load_case_type_choices(),
             case_field_choices=_load_case_field_choices(),
         )
+
+    @app.post("/admin/federal-data-dashboard/cases/update-card-metadata")
+    @admin_required
+    def admin_federal_data_dashboard_cases_update_card_metadata():
+        """One-click "make cards useful" refresh.
+
+        Uses already-saved docket header fields to populate:
+        - judge display (docket_judges)
+        - party/counsel counts
+        - docket_parties/docket_attorneys so the counsel directory works
+        - pcl_cases.judge_last_name for filtering
+        """
+
+        require_csrf()
+        limit = _parse_optional_int(request.form.get("limit")) or 500
+        limit = max(1, min(limit, 5000))
+
+        next_url = request.form.get("next") or url_for(
+            "admin_federal_data_dashboard_cases", source="pacer", view="cards"
+        )
+        if not next_url.startswith("/"):
+            next_url = url_for("admin_federal_data_dashboard_cases", source="pacer", view="cards")
+
+        result = backfill_case_card_metadata_from_saved_dockets(
+            engine, pcl_tables, limit=limit
+        )
+        scanned = int(result.get("scanned") or 0)
+        updated_fields = int(result.get("updated_fields") or 0)
+        updated_cases = int(result.get("updated_cases") or 0)
+        if scanned <= 0:
+            flash("No saved dockets needed updates.", "success")
+        else:
+            flash(
+                f"Updated {scanned} case(s): wrote {updated_fields} metadata field(s) and updated {updated_cases} judge value(s).",
+                "success",
+            )
+        return redirect(next_url)
 
     @app.get("/admin/federal-data-dashboard/case-cards")
     @admin_required

@@ -12,7 +12,7 @@ from xml.etree import ElementTree
 
 from lxml import html as lxml_html
 from lxml import etree as lxml_etree
-from sqlalchemy import Table, select, update
+from sqlalchemy import Table, select, update, or_
 
 
 TERMINAL_FAILURE_MESSAGE = "endpoint not yet implemented"
@@ -1859,6 +1859,237 @@ def _guess_last_name_from_judge_label(value: str) -> str:
     if last.lower().strip(".") in _JUDGE_SUFFIXES and len(tokens) >= 2:
         last = tokens[-2]
     return last.strip(" ,.;:")[:80]
+
+
+def backfill_case_card_metadata_from_saved_dockets(
+    engine: Any,
+    tables: Dict[str, Table],
+    *,
+    limit: int = 500,
+) -> Dict[str, int]:
+    """Populate case-card metadata using already-saved docket header fields.
+
+    This is a *local* operation (no PACER calls). It scans cases that already have
+    `docket_header_fields` stored and writes derived fields that make the case-card
+    UI useful:
+    - `docket_judges` (list of judge labels)
+    - `docket_party_count` (int)
+    - `docket_attorney_count` (int)
+    - `docket_parties` / `docket_attorneys` / `docket_party_summary` (for counsel directory)
+    - Backfills `pcl_cases.judge_last_name` when missing so judge filters work.
+
+    Returns:
+      dict with keys: scanned, updated_fields, updated_cases
+    """
+
+    pcl_cases = tables["pcl_cases"]
+    pcl_case_fields = tables.get("pcl_case_fields")
+    if pcl_case_fields is None:
+        return {"scanned": 0, "updated_fields": 0, "updated_cases": 0}
+
+    header = pcl_case_fields.alias("header_fields")
+    docket_judges_row = pcl_case_fields.alias("docket_judges_row")
+    docket_party_count_row = pcl_case_fields.alias("docket_party_count_row")
+    docket_attorney_count_row = pcl_case_fields.alias("docket_attorney_count_row")
+    docket_parties_row = pcl_case_fields.alias("docket_parties_row")
+    docket_attorneys_row = pcl_case_fields.alias("docket_attorneys_row")
+    docket_party_summary_row = pcl_case_fields.alias("docket_party_summary_row")
+
+    join_from = (
+        pcl_cases.join(
+            header,
+            (header.c.case_id == pcl_cases.c.id)
+            & (header.c.field_name == "docket_header_fields"),
+        )
+        .outerjoin(
+            docket_judges_row,
+            (docket_judges_row.c.case_id == pcl_cases.c.id)
+            & (docket_judges_row.c.field_name == "docket_judges"),
+        )
+        .outerjoin(
+            docket_party_count_row,
+            (docket_party_count_row.c.case_id == pcl_cases.c.id)
+            & (docket_party_count_row.c.field_name == "docket_party_count"),
+        )
+        .outerjoin(
+            docket_attorney_count_row,
+            (docket_attorney_count_row.c.case_id == pcl_cases.c.id)
+            & (docket_attorney_count_row.c.field_name == "docket_attorney_count"),
+        )
+        .outerjoin(
+            docket_parties_row,
+            (docket_parties_row.c.case_id == pcl_cases.c.id)
+            & (docket_parties_row.c.field_name == "docket_parties"),
+        )
+        .outerjoin(
+            docket_attorneys_row,
+            (docket_attorneys_row.c.case_id == pcl_cases.c.id)
+            & (docket_attorneys_row.c.field_name == "docket_attorneys"),
+        )
+        .outerjoin(
+            docket_party_summary_row,
+            (docket_party_summary_row.c.case_id == pcl_cases.c.id)
+            & (docket_party_summary_row.c.field_name == "docket_party_summary"),
+        )
+    )
+
+    stmt = (
+        select(
+            pcl_cases.c.id.label("case_id"),
+            pcl_cases.c.judge_last_name,
+            header.c.field_value_json.label("header_fields"),
+        )
+        .select_from(join_from)
+        .where(
+            or_(
+                docket_judges_row.c.id.is_(None),
+                docket_party_count_row.c.id.is_(None),
+                docket_attorney_count_row.c.id.is_(None),
+                docket_parties_row.c.id.is_(None),
+                docket_attorneys_row.c.id.is_(None),
+                docket_party_summary_row.c.id.is_(None),
+                pcl_cases.c.judge_last_name.is_(None),
+                pcl_cases.c.judge_last_name == "",
+            )
+        )
+        .order_by(pcl_cases.c.id.asc())
+    )
+    if isinstance(limit, int) and limit > 0:
+        stmt = stmt.limit(limit)
+
+    def _coerce_header_fields(value: Any) -> Optional[Dict[str, Any]]:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+        return None
+
+    now = datetime.utcnow()
+    scanned = 0
+    updated_fields = 0
+    updated_cases = 0
+
+    with engine.begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+        for row in rows:
+            scanned += 1
+            case_id = int(row["case_id"])
+            header_fields = _coerce_header_fields(row.get("header_fields"))
+            if not header_fields:
+                continue
+
+            judges = _extract_judge_display_list(header_fields)
+            parties = (
+                header_fields.get("parties")
+                if isinstance(header_fields.get("parties"), list)
+                else []
+            )
+            party_count = header_fields.get("party_count")
+            attorney_count = header_fields.get("attorney_count")
+            if not isinstance(party_count, int) and parties:
+                party_count = len(parties)
+            if not isinstance(attorney_count, int) and parties:
+                attorney_count = sum(
+                    len(party.get("represented_by") or [])
+                    for party in parties
+                    if isinstance(party, dict)
+                )
+
+            if judges:
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_judges",
+                    field_value_text=" | ".join(judges),
+                    field_value_json=judges,
+                    now=now,
+                )
+                updated_fields += 1
+
+            if isinstance(party_count, int):
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_party_count",
+                    field_value_text=str(party_count),
+                    field_value_json=party_count,
+                    now=now,
+                )
+                updated_fields += 1
+
+            if isinstance(attorney_count, int):
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_attorney_count",
+                    field_value_text=str(attorney_count),
+                    field_value_json=attorney_count,
+                    now=now,
+                )
+                updated_fields += 1
+
+            if parties:
+                attorneys = _extract_attorneys_from_parties(parties)
+                summary = _flatten_parties_for_search(parties)
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_parties",
+                    field_value_text=None,
+                    field_value_json=parties,
+                    now=now,
+                )
+                updated_fields += 1
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_attorneys",
+                    field_value_text=None,
+                    field_value_json=attorneys or None,
+                    now=now,
+                )
+                updated_fields += 1
+                _upsert_case_field(
+                    conn,
+                    pcl_case_fields,
+                    case_id,
+                    "docket_party_summary",
+                    field_value_text=summary or None,
+                    field_value_json=None,
+                    now=now,
+                )
+                updated_fields += 1
+
+            existing_last = str(row.get("judge_last_name") or "").strip()
+            if not existing_last and judges:
+                last_name = _guess_last_name_from_judge_label(judges[0])
+                if last_name:
+                    conn.execute(
+                        update(pcl_cases)
+                        .where(pcl_cases.c.id == case_id)
+                        .values(judge_last_name=last_name, updated_at=now)
+                    )
+                    updated_cases += 1
+
+    return {
+        "scanned": scanned,
+        "updated_fields": updated_fields,
+        "updated_cases": updated_cases,
+    }
 
 
 def _extract_attorneys_from_parties(parties: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
