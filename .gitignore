@@ -6,6 +6,10 @@ __pycache__/
 .secret_key
 My Chats With Codex/
 
+# Local DB + manual import artifacts
+case_filed_rpt.sqlite
+data/manual_import/
+
 # Test and tooling caches
 .pytest_cache/
 .mypy_cache/
