@@ -123,7 +123,18 @@ def _run_cron_once() -> None:
 
 
 def main() -> None:
-    mode = (os.environ.get("SERVICE_MODE") or "web").strip().lower()
+    mode = (os.environ.get("SERVICE_MODE") or "").strip().lower()
+    # Some Render services use Secret Files (/etc/secrets) rather than env vars,
+    # so SERVICE_MODE may be unset. Fall back to Render's service type to keep
+    # worker/cron instances doing the right thing.
+    if not mode:
+        render_service_type = (os.environ.get("RENDER_SERVICE_TYPE") or "").strip().lower()
+        if render_service_type == "worker":
+            mode = "worker"
+        elif render_service_type in {"cron", "cron_job"}:
+            mode = "cron"
+        else:
+            mode = "web"
     if mode == "web":
         _run_web()
         return
