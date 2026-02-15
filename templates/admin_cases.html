@@ -5,66 +5,71 @@
 {% block federal_content %}
   {% set active_source = (source or 'pacer') %}
   {% set active_view = (view or 'cards') %}
-  <section class="card stack">
-    <p class="pacer-eyebrow">Cases</p>
-    <h2>Cases</h2>
-    <p class="small">
-      One place to browse cases. Choose your data source below.
-    </p>
+  {% if active_source == 'pacer' and active_view == 'cards' %}
+    {# Card view carries its own compact toolbar + filters to avoid double headers. #}
+    {% include "partials/pcl_case_cards_view.html" %}
+  {% else %}
+    <section class="card stack">
+      <p class="pacer-eyebrow">Cases</p>
+      <h2>Cases</h2>
+      <p class="small">
+        One place to browse cases. Choose your data source below.
+      </p>
 
-    <div class="actions">
-      <a
-        class="{% if active_source == 'pacer' %}primary{% else %}pill{% endif %}"
-        href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view=active_view if active_source == 'pacer' else 'cards') }}"
-      >
-        PACER cases
-      </a>
-      <a
-        class="{% if active_source == 'imported' %}primary{% else %}pill{% endif %}"
-        href="{{ url_for('admin_federal_data_dashboard_cases', source='imported') }}"
-      >
-        Imported cases (legacy)
-      </a>
-      {% if active_source == 'imported' %}
-        <a class="pill" href="{{ url_for('admin_case_data_one_upload') }}">Upload file</a>
-      {% endif %}
-    </div>
-
-    {% if active_source == 'pacer' %}
       <div class="actions">
         <a
-          class="{% if active_view == 'cards' %}primary{% else %}pill{% endif %}"
-          href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='cards') }}"
+          class="{% if active_source == 'pacer' %}primary{% else %}pill{% endif %}"
+          href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view=active_view if active_source == 'pacer' else 'cards') }}"
         >
-          Card view
+          PACER cases
         </a>
         <a
-          class="{% if active_view == 'ops' %}primary{% else %}pill{% endif %}"
-          href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='ops') }}"
+          class="{% if active_source == 'imported' %}primary{% else %}pill{% endif %}"
+          href="{{ url_for('admin_federal_data_dashboard_cases', source='imported') }}"
         >
-          Operations view
+          Imported cases (legacy)
         </a>
+        {% if active_source == 'imported' %}
+          <a class="pill" href="{{ url_for('admin_case_data_one_upload') }}">Upload file</a>
+        {% endif %}
       </div>
-    {% endif %}
+
+      {% if active_source == 'pacer' %}
+        <div class="actions">
+          <a
+            class="{% if active_view == 'cards' %}primary{% else %}pill{% endif %}"
+            href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='cards') }}"
+          >
+            Card view
+          </a>
+          <a
+            class="{% if active_view == 'ops' %}primary{% else %}pill{% endif %}"
+            href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='ops') }}"
+          >
+            Operations view
+          </a>
+        </div>
+      {% endif %}
+
+      {% if active_source == 'imported' %}
+        <div class="flash">
+          <strong>Note:</strong> Imported cases are uploaded manually and are not automatically synced with PACER.
+        </div>
+      {% else %}
+        <div class="flash">
+          <strong>Note:</strong> PACER cases come from your indexed PACER/PCL searches. Use “Pull docket” when you need the full docket.
+        </div>
+      {% endif %}
+    </section>
 
     {% if active_source == 'imported' %}
-      <div class="flash">
-        <strong>Note:</strong> Imported cases are uploaded manually and are not automatically synced with PACER.
-      </div>
+      {% include "partials/case_data_one_view.html" %}
     {% else %}
-      <div class="flash">
-        <strong>Note:</strong> PACER cases come from your indexed PACER/PCL searches. Use “Pull docket” when you need the full docket.
-      </div>
-    {% endif %}
-  </section>
-
-  {% if active_source == 'imported' %}
-    {% include "partials/case_data_one_view.html" %}
-  {% else %}
-    {% if active_view == 'ops' %}
-      {% include "partials/pcl_cases_view.html" %}
-    {% else %}
-      {% include "partials/pcl_case_cards_view.html" %}
+      {% if active_view == 'ops' %}
+        {% include "partials/pcl_cases_view.html" %}
+      {% else %}
+        {% include "partials/pcl_case_cards_view.html" %}
+      {% endif %}
     {% endif %}
   {% endif %}
 {% endblock %}

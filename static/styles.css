@@ -1971,6 +1971,64 @@ input[type="submit"].danger:disabled {
   gap: 18px;
 }
 
+.casecards-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.casecards-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.casecards-toolbar__right {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.casecards-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.casecards-filter-form {
+  background: rgba(217, 203, 186, 0.2);
+}
+
+.casecards-filter-field--wide {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 1120px) {
+  .casecards-filter-field--wide {
+    grid-column: 1 / span 2;
+  }
+}
+
+.casecards-maintenance {
+  border: 1px solid rgba(140, 132, 128, 0.2);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.68);
+  padding: 12px 14px;
+}
+
+.casecards-maintenance summary {
+  cursor: pointer;
+}
+
+.casecards-maintenance[open] {
+  background: rgba(255, 255, 255, 0.82);
+}
+
 .attorney-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -2621,7 +2679,7 @@ input[type="submit"].danger:disabled {
 
 .pcl-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 18px;
   margin-top: 18px;
 }
@@ -2631,8 +2689,15 @@ input[type="submit"].danger:disabled {
   flex-direction: column;
   gap: 16px;
   min-height: 220px;
-  border: 1px solid rgba(140, 132, 128, 0.25);
-  background: var(--surface);
+  padding: 20px;
+  border-radius: 20px;
+  border: 1px solid rgba(140, 132, 128, 0.22);
+  background: linear-gradient(
+    180deg,
+    rgba(249, 246, 242, 0.96),
+    rgba(249, 246, 242, 0.72)
+  );
+  box-shadow: var(--shadow-sm);
 }
 
 .pcl-case-card__header {
@@ -2643,15 +2708,23 @@ input[type="submit"].danger:disabled {
 }
 
 .pcl-case-card__number {
-  font-weight: 700;
+  font-weight: 800;
   color: var(--primary-dark);
   margin: 0 0 6px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
 }
 
 .pcl-case-card__title {
   margin: 0;
+  color: var(--primary-dark);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .pcl-case-card__badges {
@@ -2659,6 +2732,13 @@ input[type="submit"].danger:disabled {
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+}
+
+.pcl-case-card .pcl-badge {
+  text-transform: none;
+  letter-spacing: 0.01em;
+  font-size: 0.76rem;
+  padding: 5px 9px;
 }
 
 .pcl-badge {
@@ -2715,8 +2795,9 @@ input[type="submit"].danger:disabled {
 
 .pcl-case-meta dd {
   margin: 4px 0 0;
-  font-weight: 600;
+  font-weight: 650;
   color: var(--primary-dark);
+  word-break: break-word;
 }
 
 .pcl-case-card__footer {

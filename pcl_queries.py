@@ -469,14 +469,28 @@ def _build_where_clauses(
         clauses.append(pcl_cases.c.date_filed <= filters.date_filed_to)
     if filters.search_text:
         like_pattern = f"%{filters.search_text.lower()}%"
-        clauses.append(
-            or_(
-                func.lower(pcl_cases.c.case_number).like(like_pattern),
-                func.lower(pcl_cases.c.case_number_full).like(like_pattern),
-                func.lower(pcl_cases.c.short_title).like(like_pattern),
-                func.lower(pcl_cases.c.case_title).like(like_pattern),
+        search_clauses: List[Any] = [
+            func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(like_pattern),
+            func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(like_pattern),
+            func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(like_pattern),
+            func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(like_pattern),
+        ]
+        if case_fields is not None:
+            # Allow the primary search box to match parties/counsel when docket metadata exists.
+            search_clauses.append(
+                exists(
+                    select(1).where(
+                        and_(
+                            case_fields.c.case_id == pcl_cases.c.id,
+                            case_fields.c.field_name == "docket_party_summary",
+                            func.lower(func.coalesce(case_fields.c.field_value_text, "")).like(
+                                like_pattern
+                            ),
+                        )
+                    )
+                )
             )
-        )
+        clauses.append(or_(*search_clauses))
     if (filters.field_name or filters.field_value) and case_fields is not None:
         field_clauses = [case_fields.c.case_id == pcl_cases.c.id]
         if filters.field_name:
