@@ -567,6 +567,8 @@ def _build_where_clauses(
                 "docket_party_names",
                 "docket_judges",
                 "docket_charges",
+                "docket_attorneys",
+                "docket_parties",
             ):
                 search_clauses.append(
                     exists(
