@@ -1974,7 +1974,8 @@ input[type="submit"].danger:disabled {
 .casecards-shell {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
+  padding: 20px;
 }
 
 .casecards-toolbar {
@@ -1995,13 +1996,44 @@ input[type="submit"].danger:disabled {
 
 .casecards-switches {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-end;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .casecards-filter-form {
   background: rgba(217, 203, 186, 0.2);
+}
+
+.casecards-filter-form--compact {
+  padding: 12px;
+  gap: 12px;
+}
+
+.casecards-searchbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.casecards-searchbar__field {
+  flex: 1;
+  min-width: 260px;
+}
+
+.casecards-searchbar__field input {
+  width: 100%;
+}
+
+.casecards-toolbar .pcl-cases-summary {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  min-width: unset;
 }
 
 .casecards-filter-field--wide {
@@ -2679,9 +2711,21 @@ input[type="submit"].danger:disabled {
 
 .pcl-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: 1fr;
   gap: 18px;
   margin-top: 18px;
+}
+
+@media (min-width: 860px) {
+  .pcl-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1120px) {
+  .pcl-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .pcl-case-card {
@@ -2725,9 +2769,12 @@ input[type="submit"].danger:disabled {
   margin: 0;
   color: var(--primary-dark);
   line-height: 1.25;
-  white-space: nowrap;
+  white-space: normal;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .pcl-case-card__status {
@@ -2902,7 +2949,7 @@ input[type="submit"].danger:disabled {
 
 .pcl-case-card__footer {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   gap: 10px;
   margin-top: auto;

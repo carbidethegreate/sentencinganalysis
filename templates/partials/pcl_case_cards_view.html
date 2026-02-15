@@ -15,9 +15,7 @@
       <div>
         <p class="pacer-eyebrow">Cases</p>
         <h2>Case cards</h2>
-        <p class="small">
-          Saved PACER cases. Search by case number, party, or counsel, then open the case or pull the full docket.
-        </p>
+        <p class="small">Search by case number, title, party, or counsel.</p>
       </div>
 
       <div class="casecards-toolbar__right">
@@ -60,9 +58,9 @@
       </div>
     </div>
 
-    <form method="get" class="pcl-filter-form casecards-filter-form" aria-label="Search case cards">
-      <div class="grid three">
-        <div class="casecards-filter-field casecards-filter-field--wide">
+    <form method="get" class="pcl-filter-form casecards-filter-form casecards-filter-form--compact" aria-label="Search case cards">
+      <div class="casecards-searchbar">
+        <div class="casecards-searchbar__field">
           <label for="case-cards-search">Search</label>
           <input
             id="case-cards-search"
@@ -71,38 +69,45 @@
             placeholder="Case number, title, party, counsel"
           >
         </div>
-
-        <div class="casecards-filter-field">
-          <label for="case-cards-court">Court</label>
-          <input
-            id="case-cards-court"
-            name="court_id"
-            list="case-cards-court-list"
-            value="{{ filters.court_id }}"
-            placeholder="e.g., paedc"
-          >
-          <datalist id="case-cards-court-list">
-            {% for court in court_choices %}
-              <option value="{{ court.court_id }}">{{ court.label }}</option>
-            {% endfor %}
-          </datalist>
-        </div>
-
-        <div class="casecards-filter-field">
-          <label for="case-cards-type">Case type</label>
-          <select id="case-cards-type" name="case_type">
-            <option value="">All case types</option>
-            {% for case_type, label in case_type_choices %}
-              <option value="{{ case_type }}" {% if filters.case_type == case_type %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
+        <button class="primary" type="submit">Search</button>
+        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='cards') }}">Reset</a>
       </div>
 
-      <details class="pcl-advanced-filters">
-        <summary class="pcl-detail-summary">More filters</summary>
+      <details class="casecards-filters">
+        <summary class="pcl-detail-summary">Filters{% if active_filter_count %} ({{ active_filter_count }}){% endif %}</summary>
 
         <div class="grid three mt-12">
+          <div class="casecards-filter-field">
+            <label for="case-cards-court">Court</label>
+            <input
+              id="case-cards-court"
+              name="court_id"
+              list="case-cards-court-list"
+              value="{{ filters.court_id }}"
+              placeholder="e.g., paedc"
+            >
+            <datalist id="case-cards-court-list">
+              {% for court in court_choices %}
+                <option value="{{ court.court_id }}">{{ court.label }}</option>
+              {% endfor %}
+            </datalist>
+          </div>
+
+          <div class="casecards-filter-field">
+            <label for="case-cards-type">Case type</label>
+            <select id="case-cards-type" name="case_type">
+              <option value="">All case types</option>
+              {% for case_type, label in case_type_choices %}
+                <option value="{{ case_type }}" {% if filters.case_type == case_type %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="casecards-filter-field">
+            <label for="case-cards-judge">Judge last name</label>
+            <input id="case-cards-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., McHugh">
+          </div>
+
           <div class="casecards-filter-field">
             <label for="case-cards-date-from">Date filed from</label>
             <input id="case-cards-date-from" type="date" name="date_filed_from" value="{{ filters.date_filed_from.isoformat() if filters.date_filed_from else '' }}">
@@ -110,10 +115,6 @@
           <div class="casecards-filter-field">
             <label for="case-cards-date-to">Date filed to</label>
             <input id="case-cards-date-to" type="date" name="date_filed_to" value="{{ filters.date_filed_to.isoformat() if filters.date_filed_to else '' }}">
-          </div>
-          <div class="casecards-filter-field">
-            <label for="case-cards-judge">Judge last name</label>
-            <input id="case-cards-judge" name="judge_last_name" value="{{ filters.judge_last_name }}" placeholder="e.g., McHugh">
           </div>
         </div>
 
@@ -146,12 +147,6 @@
           </div>
         </div>
       </details>
-
-      <div class="actions pcl-filter-actions casecards-filter-actions">
-        <button class="primary" type="submit">Search</button>
-        <a class="pill" href="{{ url_for('admin_federal_data_dashboard_cases', source='pacer', view='cards') }}">Reset</a>
-        <span class="small">Showing {{ cases|length }} on this page</span>
-      </div>
     </form>
 
     <details class="casecards-maintenance">
@@ -283,6 +278,7 @@
         observer.observe(sentinel);
       }
 
+      // `toggle` does not reliably bubble from <details>, so listen in capture mode.
       document.addEventListener("toggle", async (event) => {
         const details = event.target;
         if (!(details instanceof HTMLDetailsElement)) return;
@@ -310,6 +306,6 @@
         } finally {
           body.setAttribute("aria-busy", "false");
         }
-      });
+      }, true);
     })();
   </script>

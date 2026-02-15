@@ -431,7 +431,7 @@ def build_pcl_tables(metadata: MetaData) -> Dict[str, Table]:
             onupdate=func.now(),
             nullable=False,
         ),
-        Column("case_id", Integer, ForeignKey("pcl_cases.id"), nullable=False, index=True),
+        Column("case_id", Integer, ForeignKey("pcl_cases.id"), nullable=False),
         Column("last_name", Text, nullable=True),
         Column("first_name", Text, nullable=True),
         Column("middle_name", Text, nullable=True),

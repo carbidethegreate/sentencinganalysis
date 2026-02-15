@@ -1755,6 +1755,13 @@ def _extract_judge_fields_from_text(text: str) -> Dict[str, Any]:
         if match:
             assigned.append(match.group(1).strip())
             continue
+        # Some courts render this as "ASSIGNED JUDGES <judge label>" (no colon).
+        match = re.search(r"Assigned Judges?:\s*(.+)", line, re.IGNORECASE)
+        if not match:
+            match = re.search(r"Assigned Judges?\s+(.+)", line, re.IGNORECASE)
+        if match:
+            assigned.append(match.group(1).strip())
+            continue
         match = re.search(r"Referred to:\s*(.+)", line, re.IGNORECASE)
         if match:
             referred.append(match.group(1).strip())
@@ -2028,9 +2035,13 @@ def backfill_case_card_metadata_from_saved_dockets(
                 docket_attorneys_row.c.id.is_(None),
                 docket_party_summary_row.c.id.is_(None),
                 docket_entry_count_row.c.id.is_(None),
+                docket_entry_count_row.c.field_value_json.is_(None),
                 docket_recent_entries_row.c.id.is_(None),
+                docket_recent_entries_row.c.field_value_json.is_(None),
                 docket_attorney_names_row.c.id.is_(None),
+                docket_attorney_names_row.c.field_value_json.is_(None),
                 docket_charges_row.c.id.is_(None),
+                docket_charges_row.c.field_value_json.is_(None),
                 pcl_cases.c.judge_last_name.is_(None),
                 pcl_cases.c.judge_last_name == "",
             )
@@ -2333,9 +2344,37 @@ def _extract_recent_docket_entries_for_preview(
     for entry in reversed(trimmed):
         if not isinstance(entry, dict):
             continue
-        date_filed = str(entry.get("dateFiled") or entry.get("docketTextDate") or "").strip()
-        doc_number = str(entry.get("documentNumber") or "").strip()
-        description = str(entry.get("description") or entry.get("docketText") or "").strip()
+        date_value = (
+            entry.get("dateFiled")
+            or entry.get("date_filed")
+            or entry.get("filingDate")
+            or entry.get("filing_date")
+            or entry.get("date")
+            or entry.get("docketTextDate")
+            or entry.get("docket_text_date")
+            or entry.get("docketDate")
+            or entry.get("docket_date")
+        )
+        doc_value = (
+            entry.get("documentNumber")
+            or entry.get("document_number")
+            or entry.get("docNumber")
+            or entry.get("doc_number")
+            or entry.get("doc_num")
+            or entry.get("doc")
+        )
+        desc_value = (
+            entry.get("description")
+            or entry.get("docketText")
+            or entry.get("docket_text")
+            or entry.get("text")
+            or entry.get("entry_text")
+            or entry.get("docketEntryText")
+        )
+
+        date_filed = str(date_value or "").strip()
+        doc_number = str(doc_value or "").strip()
+        description = str(desc_value or "").strip()
         if not (date_filed or doc_number or description):
             continue
         normalized.append(

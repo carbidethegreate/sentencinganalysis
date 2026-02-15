@@ -26,8 +26,17 @@
 {% set recent_entries = case.get("docket_recent_entries") or [] %}
 {% set counsel_names = case.get("docket_attorney_names") or [] %}
 {% set charges = case.get("docket_charges") or [] %}
+{% set last_error = (case.get("enrichment_last_error") or "")|trim %}
+{% set fetch_label = "Get docket" %}
+{% if docket_entry_count is not none and docket_entry_count > 0 %}
+  {% set fetch_label = "Refresh docket" %}
+{% endif %}
+{% set fetch_disabled = (docket_status in ["queued", "running"]) %}
+{% if fetch_disabled %}
+  {% set fetch_label = "Fetching…" %}
+{% endif %}
 
-<article class="card pcl-case-card">
+<article class="card pcl-case-card" id="case-card-{{ case.get('id') }}">
   <header class="pcl-case-card__header">
     <div class="pcl-case-card__heading">
       <p class="pcl-case-card__number">{{ case.get("case_number_full") or case.get("case_number") }}</p>
@@ -44,6 +53,9 @@
         <span>Docket: {{ docket_label }}</span>
         {% if case.get("has_sentencing") %}<span> · Sentencing</span>{% endif %}
       </div>
+      {% if case.get("enrichment_updated_at") %}
+        <div class="small">Updated {{ case.get("enrichment_updated_at").date().isoformat() }}</div>
+      {% endif %}
     </div>
   </header>
 
@@ -109,10 +121,16 @@
           </li>
         {% endfor %}
       </ul>
-    {% elif docket_status in ["completed", "queued", "running", "failed"] %}
-      <p class="small">Open the docket dropdown to view entries.</p>
+    {% elif docket_entry_count is not none and docket_entry_count > 0 %}
+      <p class="small">Preview not available. Open “Show full docket” to view recent entries.</p>
+    {% elif docket_status == "failed" %}
+      <p class="small">
+        Last docket fetch failed{% if last_error %}: {{ last_error|truncate(140, True) }}{% endif %}.
+      </p>
+    {% elif docket_status in ["queued", "running"] %}
+      <p class="small">Docket fetch is {{ docket_status }}. Refresh in a moment.</p>
     {% else %}
-      <p class="small">No docket entries saved for this case yet.</p>
+      <p class="small">No docket saved yet. Click “Fetch docket” to pull it from PACER.</p>
     {% endif %}
 
     <details class="case-docket-details" data-case-id="{{ case.get('id') }}">
@@ -126,25 +144,12 @@
   </section>
 
   <footer class="pcl-case-card__footer">
-    <span class="small">
-      Docket updated:
-      {% if case.get("enrichment_updated_at") %}
-        {{ case.get("enrichment_updated_at").isoformat() }}
-      {% else %}
-        —
-      {% endif %}
-    </span>
-    <form method="post" action="{{ url_for('admin_pcl_case_queue_docket_enrichment', case_id=case.get('id')) }}">
+    <form method="post" action="{{ url_for('admin_pcl_case_pull_docket_now', case_id=case.get('id')) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="include_docket_text" value="1">
-      <button class="secondary" type="submit">Pull docket</button>
+      <input type="hidden" name="next" value="{{ request.full_path }}#case-card-{{ case.get('id') }}">
+      <button class="secondary" type="submit" {% if fetch_disabled %}disabled{% endif %}>{{ fetch_label }}</button>
     </form>
-    <a class="pill" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">Open case</a>
-    <a
-      class="pill"
-      href="{{ url_for('admin_pcl_attorneys', q=(case.get('case_number_full') or case.get('case_number') or ''), court_id=(case.get('court_id') or ''), case_type=(case.get('case_type') or '')) }}"
-    >
-      Counsel
-    </a>
+    <a class="primary" href="{{ url_for('admin_pcl_case_detail', case_id=case.get('id')) }}">Open case</a>
   </footer>
 </article>

@@ -315,10 +315,11 @@ class AdminPclCasesTests(unittest.TestCase):
     def test_admin_routes_render(self):
         self._admin_session()
         response = self.client.get(
-            "/admin/pcl/cases?court_id=akd&date_filed_from=2024-01-01&date_filed_to=2024-01-31"
+            "/admin/pcl/cases?court_id=akd&date_filed_from=2024-01-01&date_filed_to=2024-01-31",
+            follow_redirects=True,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Indexed PCL cases", response.data)
+        self.assertIn(b"PACER Cases (Operations)", response.data)
         self.assertIn(b"USA v. Doe", response.data)
 
         with self.engine.begin() as conn:
@@ -377,7 +378,7 @@ class AdminPclCasesTests(unittest.TestCase):
         self._admin_session()
         response = self.client.get("/admin/docket-enrichment")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Docket enrichment queue", response.data)
+        self.assertIn(b"Docket queue (Advanced)", response.data)
         self.assertIn(b"Run worker", response.data)
         self.assertIn(b"1:24-cr-00999", response.data)
 

@@ -207,6 +207,7 @@ def list_case_cards(
     where_clauses = _build_where_clauses(pcl_cases, filters, case_fields=case_fields)
     enrichment_status = literal(None).label("enrichment_status")
     enrichment_updated_at = literal(None).label("enrichment_updated_at")
+    enrichment_last_error = literal(None).label("enrichment_last_error")
     if docket_enrichment_jobs is not None:
         enrichment_status = (
             select(docket_enrichment_jobs.c.status)
@@ -229,6 +230,17 @@ def list_case_cards(
             .limit(1)
             .scalar_subquery()
             .label("enrichment_updated_at")
+        )
+        enrichment_last_error = (
+            select(docket_enrichment_jobs.c.last_error)
+            .where(docket_enrichment_jobs.c.case_id == pcl_cases.c.id)
+            .order_by(
+                docket_enrichment_jobs.c.created_at.desc(),
+                docket_enrichment_jobs.c.id.desc(),
+            )
+            .limit(1)
+            .scalar_subquery()
+            .label("enrichment_last_error")
         )
 
     docket_judges = literal(None).label("docket_judges")
@@ -322,6 +334,7 @@ def list_case_cards(
             pcl_cases.c.last_search_run_at,
             enrichment_status,
             enrichment_updated_at,
+            enrichment_last_error,
             docket_judges,
             docket_party_count,
             docket_attorney_count,

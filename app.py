@@ -10002,7 +10002,11 @@ def create_app() -> Flask:
                 message = f"{message} {error_note}"
             flash(message, "error")
 
-        return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-jobs")
+        next_url = request.form.get("next") or f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-jobs"
+        # Avoid open redirects; keep redirects inside this app.
+        if not next_url.startswith("/"):
+            next_url = f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-jobs"
+        return redirect(next_url)
 
     @app.get("/admin/pcl/cases/<int:case_id>/docket-entries-fragment")
     @admin_required
