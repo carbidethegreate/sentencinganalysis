@@ -9,6 +9,7 @@ My Chats With Codex/
 # Local DB + manual import artifacts
 case_filed_rpt.sqlite
 data/manual_import/
+output/
 
 # Test and tooling caches
 .pytest_cache/
