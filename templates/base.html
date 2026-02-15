@@ -28,6 +28,9 @@
 
           {% if current_user %}
             <a href="{{ url_for('dashboard') }}" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
+            {% if not (is_admin and in_admin_area) %}
+              <a href="{{ url_for('attorneys') }}" class="{% if active_page == 'attorneys' %}active{% endif %}">Attorneys</a>
+            {% endif %}
           {% else %}
             <a href="{{ url_for('login') }}" class="{% if active_page == 'login' %}active{% endif %}">Login / Sign Up</a>
           {% endif %}

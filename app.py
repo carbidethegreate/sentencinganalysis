@@ -4769,6 +4769,54 @@ def create_app() -> Flask:
     def dashboard():
         return render_template("dashboard.html", active_page="dashboard")
 
+    @app.get("/attorneys")
+    @login_required
+    def attorneys():
+        params = request.args.to_dict(flat=True)
+        search_text = (params.get("q") or "").strip()
+        court_id = (params.get("court_id") or "").strip().lower()
+        case_type = (params.get("case_type") or "").strip().lower()
+        try:
+            page = max(1, int((params.get("page") or "1").strip()))
+        except ValueError:
+            page = 1
+        try:
+            page_size = min(100, max(1, int((params.get("page_size") or "25").strip())))
+        except ValueError:
+            page_size = 25
+
+        result = list_attorneys(
+            engine,
+            pcl_tables,
+            search_text=search_text,
+            court_id=court_id,
+            case_type=case_type,
+            page=page,
+            page_size=page_size,
+        )
+
+        def page_url(target_page: int) -> str:
+            next_params = dict(params)
+            next_params["page"] = target_page
+            return url_for("attorneys", **next_params)
+
+        filters = {
+            "q": search_text,
+            "court_id": court_id,
+            "case_type": case_type,
+            "page_size": page_size,
+        }
+        return render_template(
+            "attorneys.html",
+            active_page="attorneys",
+            attorneys=result.rows,
+            pagination=result.pagination,
+            page_url=page_url,
+            filters=filters,
+            available_courts=result.available_courts,
+            available_case_types=result.available_case_types,
+        )
+
     @app.route("/profile", methods=["GET", "POST"])
     @login_required
     def profile():

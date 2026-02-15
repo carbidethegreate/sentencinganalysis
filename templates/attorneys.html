@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+
+{% block title %}Attorneys | CourtDataPro{% endblock %}
+
+{% block content %}
+  <section class="card attorney-shell">
+    <div class="attorney-toolbar">
+      <div>
+        <p class="pacer-eyebrow">Directory</p>
+        <h1>Docket attorneys</h1>
+        <p class="small">Search attorneys and contact details found on federal docket sheets.</p>
+      </div>
+      <div class="pcl-cases-summary">
+        <strong>{{ pagination.total }}</strong>
+        <span class="small">attorney records</span>
+      </div>
+    </div>
+
+    <form method="get" class="pcl-filter-form attorney-filter-form" aria-label="Filter docket attorneys">
+      <div class="grid three">
+        <div>
+          <label for="attorney-search">Search</label>
+          <input id="attorney-search" name="q" value="{{ filters.q or '' }}" placeholder="Name, email, phone, organization, case">
+        </div>
+        <div>
+          <label for="attorney-court">Court</label>
+          <select id="attorney-court" name="court_id">
+            <option value="">All courts</option>
+            {% for court in available_courts %}
+              <option value="{{ court }}" {% if filters.court_id == court %}selected{% endif %}>{{ court }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="attorney-case-type">Case type</label>
+          <select id="attorney-case-type" name="case_type">
+            <option value="">All case types</option>
+            {% for value in available_case_types %}
+              <option value="{{ value }}" {% if filters.case_type == value %}selected{% endif %}>{{ value }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="actions pcl-filter-actions">
+        <button class="primary" type="submit">Apply filters</button>
+        <a class="pill" href="{{ url_for('attorneys') }}">Reset</a>
+      </div>
+    </form>
+  </section>
+
+  {% if attorneys %}
+    <section class="attorney-grid" aria-live="polite">
+      {% for attorney in attorneys %}
+        <article class="card attorney-card">
+          <header class="attorney-card__header">
+            <div>
+              <h2 class="attorney-card__name">{{ attorney.name }}</h2>
+              <p class="small">
+                {% if attorney.last_seen_at %}Last seen {{ attorney.last_seen_at.isoformat() }}{% else %}Last seen —{% endif %}
+              </p>
+            </div>
+            <div class="attorney-meta">
+              <span class="attorney-chip">{{ attorney.case_count }} cases</span>
+              <span class="attorney-chip">{{ (attorney.emails|length) + (attorney.phones|length) + (attorney.faxes|length) }} contacts</span>
+            </div>
+          </header>
+
+          <div class="attorney-contact-grid">
+            <div>
+              <p class="small"><strong>Email</strong></p>
+              {% if attorney.emails %}
+                <ul class="attorney-contact-list">
+                  {% for email in attorney.emails %}
+                    <li><a href="mailto:{{ email }}">{{ email }}</a></li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="small">—</p>
+              {% endif %}
+            </div>
+            <div>
+              <p class="small"><strong>Phone</strong></p>
+              {% if attorney.phones %}
+                <ul class="attorney-contact-list">
+                  {% for phone in attorney.phones %}
+                    <li><a href="tel:{{ phone|replace(' ', '') }}">{{ phone }}</a></li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="small">—</p>
+              {% endif %}
+            </div>
+            <div>
+              <p class="small"><strong>Fax</strong></p>
+              {% if attorney.faxes %}
+                <ul class="attorney-contact-list">
+                  {% for fax in attorney.faxes %}
+                    <li>{{ fax }}</li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="small">—</p>
+              {% endif %}
+            </div>
+            <div>
+              <p class="small"><strong>Web</strong></p>
+              {% if attorney.websites %}
+                <ul class="attorney-contact-list">
+                  {% for site in attorney.websites %}
+                    {% set site_href = site if site.startswith('http://') or site.startswith('https://') else 'https://' ~ site %}
+                    <li><a href="{{ site_href }}" target="_blank" rel="noopener">{{ site }}</a></li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="small">—</p>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if attorney.organizations or attorney.designations or attorney.roles %}
+            <div class="attorney-tags">
+              {% for organization in attorney.organizations %}
+                <span class="attorney-tag">{{ organization }}</span>
+              {% endfor %}
+              {% for designation in attorney.designations %}
+                <span class="attorney-tag">{{ designation }}</span>
+              {% endfor %}
+              {% for role in attorney.roles %}
+                <span class="attorney-tag">{{ role }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          <section class="attorney-related">
+            <p class="small"><strong>Recent related cases</strong></p>
+            <ul class="attorney-case-list">
+              {% for case in attorney.related_cases[:5] %}
+                <li class="attorney-case-item">
+                  <div>
+                    {{ case.case_number_full or case.case_number or 'Case' }}
+                    <div class="small">{{ case.short_title or case.case_title or 'Untitled case' }}</div>
+                  </div>
+                  <div class="small">
+                    {{ case.court_id or '—' }} · {{ case.case_type or '—' }}{% if case.date_filed %} · {{ case.date_filed.isoformat() }}{% endif %}
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          </section>
+
+          {% if attorney.related_cases|length > 5 %}
+            <details class="attorney-details">
+              <summary class="pcl-detail-summary">Show all related cases ({{ attorney.related_cases|length }})</summary>
+              <div class="table-wrap mt-8">
+                <table class="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Case</th>
+                      <th>Court</th>
+                      <th>Type</th>
+                      <th>Filed</th>
+                      <th>Party</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for case in attorney.related_cases %}
+                      <tr>
+                        <td>
+                          {{ case.case_number_full or case.case_number or 'Case' }}
+                          <div class="small">{{ case.short_title or case.case_title or 'Untitled case' }}</div>
+                        </td>
+                        <td>{{ case.court_id or '—' }}</td>
+                        <td>{{ case.case_type or '—' }}</td>
+                        <td>{{ case.date_filed.isoformat() if case.date_filed else '—' }}</td>
+                        <td>
+                          {{ case.party_name or '—' }}
+                          {% if case.party_type %}<div class="small">{{ case.party_type }}</div>{% endif %}
+                        </td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </section>
+  {% else %}
+    <div class="card pcl-empty-state">
+      <h2>No attorneys match those filters</h2>
+      <p class="small">Pull more dockets to expand the directory, or broaden filters.</p>
+    </div>
+  {% endif %}
+
+  <nav class="pcl-pagination" aria-label="Attorney pagination">
+    {% set total_pages = pagination.total_pages %}
+    {% set current_page = pagination.page %}
+    <span class="small">Page {{ current_page }} of {{ total_pages }}</span>
+    <div class="pcl-pagination__actions">
+      <a class="pill {% if current_page <= 1 %}disabled{% endif %}" href="{{ page_url(current_page - 1) if current_page > 1 else '#' }}" aria-disabled="{{ 'true' if current_page <= 1 else 'false' }}">Previous</a>
+      <a class="pill {% if current_page >= total_pages %}disabled{% endif %}" href="{{ page_url(current_page + 1) if current_page < total_pages else '#' }}" aria-disabled="{{ 'true' if current_page >= total_pages else 'false' }}">Next</a>
+    </div>
+  </nav>
+{% endblock %}
+
