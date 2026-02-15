@@ -1175,6 +1175,29 @@ def create_app() -> Flask:
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
     pacer_auth_base_url_env = _first_env_or_secret_file("PACER_AUTH_BASE_URL")
     pcl_base_url_env = _first_env_or_secret_file("PCL_BASE_URL")
+    # Render often supplies secrets via /etc/secrets, but non-secret env vars like
+    # PACER_AUTH_BASE_URL/PCL_BASE_URL may be unset on worker/cron services.
+    # If we already have a PACER service token saved in the DB, infer the intended
+    # environment from that token to keep all services aligned (web + workers).
+    if not pacer_auth_base_url_env and not pcl_base_url_env:
+        service_session_key = os.environ.get("PACER_SERVICE_SESSION_KEY", "service")
+        try:
+            with engine.begin() as conn:
+                token_env_row = conn.execute(
+                    select(pacer_tokens.c.environment).where(
+                        pacer_tokens.c.session_key == service_session_key
+                    )
+                ).first()
+            token_env = (token_env_row.environment if token_env_row else "") or ""
+            token_env = token_env.strip().lower()
+        except Exception:
+            token_env = ""
+        if token_env == ENV_PROD:
+            pacer_auth_base_url_env = DEFAULT_PACER_AUTH_BASE_URL_PROD
+            pcl_base_url_env = DEFAULT_PCL_BASE_URL_PROD
+        elif token_env == ENV_QA:
+            pacer_auth_base_url_env = DEFAULT_PACER_AUTH_BASE_URL
+            pcl_base_url_env = DEFAULT_PCL_BASE_URL
     pacer_auth_base_url = _normalize_pacer_base_url(
         pacer_auth_base_url_env or DEFAULT_PACER_AUTH_BASE_URL
     )
