@@ -647,8 +647,11 @@ class DocketEnrichmentWorker:
                 )
                 attorneys = _extract_attorneys_from_parties(parties) if parties else []
                 party_summary = _flatten_parties_for_search(parties) if parties else ""
-                attorney_names = _extract_attorney_names(attorneys, limit=25) if attorneys else []
-                party_names = _extract_party_names(parties, limit=25) if parties else []
+                # Keep these lists large enough that *all* counsel/party names remain searchable
+                # and displayable on case cards. These are stored as JSON (not truncated), while
+                # the text summary fields may be truncated for index safety.
+                attorney_names = _extract_attorney_names(attorneys, limit=250) if attorneys else []
+                party_names = _extract_party_names(parties, limit=250) if parties else []
                 charge_items = _extract_charge_items_from_parties(parties, limit=40) if parties else []
                 _upsert_case_field(
                     conn,
@@ -2222,8 +2225,8 @@ def backfill_case_card_metadata_from_saved_dockets(
             if parties:
                 attorneys = _extract_attorneys_from_parties(parties)
                 summary = _flatten_parties_for_search(parties)
-                party_names = _extract_party_names(parties, limit=25)
-                attorney_names = _extract_attorney_names(attorneys, limit=25) if attorneys else []
+                party_names = _extract_party_names(parties, limit=250)
+                attorney_names = _extract_attorney_names(attorneys, limit=250) if attorneys else []
                 charge_items = _extract_charge_items_from_parties(parties, limit=40) if parties else []
                 _upsert_case_field(
                     conn,
