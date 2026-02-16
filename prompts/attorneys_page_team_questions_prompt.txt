@@ -1,0 +1,23 @@
+Title: Team Discovery Prompt — Improve `/attorneys` for Paid Attorney Users
+
+Role instructions:
+- Answer as a focused panel: Product Manager, UX Designer, Trial Attorney User, Litigation Paralegal, Data Engineer, Backend Engineer, Frontend Engineer, QA Lead.
+- Keep answers practical. No generic design advice.
+- Assume users are paid attorneys/paralegals and need complete counsel contact intelligence quickly.
+
+Questions:
+1) What are the top 3 user tasks this page must optimize for?
+2) What must be visible on-card without clicking?
+3) What should be filterable/searchable in one step?
+4) What are acceptable dedup rules for attorneys with inconsistent PACER blocks?
+5) Which sorting modes matter most for legal workflows?
+6) How do we keep full contact blocks available without making cards unusable?
+7) What actions should be one-click from each card?
+8) What pagination/volume controls are needed?
+9) What edge cases should QA prioritize?
+10) What is the minimum "done" definition for this iteration?
+
+Output format:
+- Role-by-role bullet responses.
+- Then a single prioritized implementation list: P0, P1, P2.
+

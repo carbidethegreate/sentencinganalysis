@@ -4776,6 +4776,27 @@ def create_app() -> Flask:
         search_text = (params.get("q") or "").strip()
         court_id = (params.get("court_id") or "").strip().lower()
         case_type = (params.get("case_type") or "").strip().lower()
+        sort_by = (params.get("sort") or "cases_desc").strip().lower()
+        if sort_by not in {"cases_desc", "recent_desc", "contacts_desc", "name_asc"}:
+            sort_by = "cases_desc"
+        has_email = (params.get("has_email") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        has_phone = (params.get("has_phone") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        has_address = (params.get("has_address") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         try:
             page = max(1, int((params.get("page") or "1").strip()))
         except ValueError:
@@ -4791,6 +4812,10 @@ def create_app() -> Flask:
             search_text=search_text,
             court_id=court_id,
             case_type=case_type,
+            sort_by=sort_by,
+            has_email=has_email,
+            has_phone=has_phone,
+            has_address=has_address,
             page=page,
             page_size=page_size,
         )
@@ -4804,6 +4829,10 @@ def create_app() -> Flask:
             "q": search_text,
             "court_id": court_id,
             "case_type": case_type,
+            "sort": sort_by,
+            "has_email": has_email,
+            "has_phone": has_phone,
+            "has_address": has_address,
             "page_size": page_size,
         }
         return render_template(
@@ -10109,6 +10138,27 @@ def create_app() -> Flask:
         search_text = (params.get("q") or "").strip()
         court_id = (params.get("court_id") or "").strip().lower()
         case_type = (params.get("case_type") or "").strip().lower()
+        sort_by = (params.get("sort") or "cases_desc").strip().lower()
+        if sort_by not in {"cases_desc", "recent_desc", "contacts_desc", "name_asc"}:
+            sort_by = "cases_desc"
+        has_email = (params.get("has_email") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        has_phone = (params.get("has_phone") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        has_address = (params.get("has_address") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         try:
             page = max(1, int((params.get("page") or "1").strip()))
         except ValueError:
@@ -10124,6 +10174,10 @@ def create_app() -> Flask:
             search_text=search_text,
             court_id=court_id,
             case_type=case_type,
+            sort_by=sort_by,
+            has_email=has_email,
+            has_phone=has_phone,
+            has_address=has_address,
             page=page,
             page_size=page_size,
         )
@@ -10137,6 +10191,10 @@ def create_app() -> Flask:
             "q": search_text,
             "court_id": court_id,
             "case_type": case_type,
+            "sort": sort_by,
+            "has_email": has_email,
+            "has_phone": has_phone,
+            "has_address": has_address,
             "page_size": page_size,
         }
         return render_template(

@@ -384,6 +384,10 @@ def list_attorneys(
     search_text: str = "",
     court_id: str = "",
     case_type: str = "",
+    sort_by: str = "cases_desc",
+    has_email: bool = False,
+    has_phone: bool = False,
+    has_address: bool = False,
     page: int = 1,
     page_size: int = DEFAULT_PAGE_SIZE,
 ) -> PclAttorneyListResult:
@@ -400,6 +404,7 @@ def list_attorneys(
     normalized_search = (search_text or "").strip()
     normalized_court = (court_id or "").strip().lower()
     normalized_case_type = (case_type or "").strip().lower()
+    normalized_sort = (sort_by or "cases_desc").strip().lower()
     page = max(1, int(page or 1))
     page_size = max(1, min(int(page_size or DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE))
 
@@ -450,6 +455,40 @@ def list_attorneys(
         {str(row.get("case_type")) for row in source_rows if row.get("case_type")}
     )
     attorneys = _aggregate_attorneys(source_rows, search_text=normalized_search)
+    filtered_rows: List[Dict[str, Any]] = []
+    for item in attorneys:
+        if has_email and not (item.get("emails") or []):
+            continue
+        if has_phone and not (item.get("phones") or []):
+            continue
+        if has_address and not (item.get("addresses") or []):
+            continue
+        item["contact_count"] = (
+            len(item.get("emails") or [])
+            + len(item.get("phones") or [])
+            + len(item.get("faxes") or [])
+            + len(item.get("websites") or [])
+            + len(item.get("addresses") or [])
+        )
+        filtered_rows.append(item)
+
+    attorneys = filtered_rows
+    if normalized_sort == "name_asc":
+        attorneys.sort(key=lambda item: str(item.get("name") or "").lower())
+    elif normalized_sort == "recent_desc":
+        attorneys.sort(key=lambda item: str(item.get("name") or "").lower())
+        attorneys.sort(key=lambda item: int(item.get("case_count") or 0), reverse=True)
+        attorneys.sort(key=lambda item: item.get("last_seen_at") or datetime.min, reverse=True)
+    elif normalized_sort == "contacts_desc":
+        attorneys.sort(key=lambda item: str(item.get("name") or "").lower())
+        attorneys.sort(key=lambda item: int(item.get("case_count") or 0), reverse=True)
+        attorneys.sort(key=lambda item: int(item.get("contact_count") or 0), reverse=True)
+    else:
+        # default: most active counsel first, then recent, then name
+        attorneys.sort(key=lambda item: str(item.get("name") or "").lower())
+        attorneys.sort(key=lambda item: item.get("last_seen_at") or datetime.min, reverse=True)
+        attorneys.sort(key=lambda item: int(item.get("case_count") or 0), reverse=True)
+
     total = len(attorneys)
     offset = (page - 1) * page_size
     paged_rows = attorneys[offset : offset + page_size]

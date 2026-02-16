@@ -1,0 +1,28 @@
+Title: Implementation Prompt — Attorneys Page P0 Improvements
+
+Input:
+- Team responses in `docs/attorneys_page_team_responses.md`.
+
+Implement now:
+1) Add attorney list sorting:
+   - `cases_desc` (default)
+   - `recent_desc`
+   - `contacts_desc`
+   - `name_asc`
+2) Add filters:
+   - `has_email`
+   - `has_phone`
+   - `has_address`
+3) Add page-size selector (25/50/100).
+4) Add one-click "Copy full contact block" per attorney card.
+5) Keep full contact lines visible and complete (no truncation of displayed lines).
+6) Apply to both:
+   - `/attorneys`
+   - `/admin/pcl/attorneys`
+7) Preserve existing data integrity and route compatibility.
+
+Validation:
+- Compile/import checks pass.
+- Manual route load does not error.
+- Existing default behavior remains if no new query params are supplied.
+
