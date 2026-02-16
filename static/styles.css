@@ -2069,6 +2069,13 @@ input[type="submit"].danger:disabled {
   gap: 14px;
 }
 
+.attorney-toolbar h1,
+.attorney-toolbar h2 {
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+  color: var(--primary-dark);
+}
+
 .attorney-results-meta {
   margin: 0;
   color: var(--muted);
@@ -2077,10 +2084,25 @@ input[type="submit"].danger:disabled {
 .attorney-filter-form {
   background: rgba(217, 203, 186, 0.14);
   gap: 12px;
+  padding: 14px;
+  border-radius: 14px;
+}
+
+.attorney-filter-form label {
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  margin-bottom: 4px;
 }
 
 .attorney-filter-form input[name="q"] {
-  font-size: 0.98rem;
+  font-size: 0.95rem;
+}
+
+.attorney-filter-form input,
+.attorney-filter-form select {
+  min-height: 38px;
 }
 
 .attorney-advanced-filters {
@@ -2092,6 +2114,9 @@ input[type="submit"].danger:disabled {
 
 .attorney-advanced-filters summary {
   cursor: pointer;
+  font-size: 0.88rem;
+  color: var(--primary-dark);
+  font-weight: 700;
 }
 
 .attorney-filter-secondary {
@@ -2139,6 +2164,14 @@ input[type="submit"].danger:disabled {
   padding: 16px;
   border-radius: 16px;
   background: linear-gradient(180deg, rgba(249, 246, 242, 0.96), rgba(249, 246, 242, 0.72));
+  border: 1px solid rgba(140, 132, 128, 0.28);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.attorney-card:hover {
+  border-color: rgba(84, 75, 69, 0.24);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
 }
 
 .attorney-card__header {
@@ -2162,6 +2195,7 @@ input[type="submit"].danger:disabled {
   margin: 0 0 4px;
   color: var(--primary-dark);
   line-height: 1.25;
+  font-size: clamp(1.2rem, 1.8vw, 1.42rem);
 }
 
 .attorney-meta {
@@ -2216,7 +2250,8 @@ input[type="submit"].danger:disabled {
 .attorney-contact-list li {
   color: var(--text);
   word-break: break-word;
-  line-height: 1.35;
+  line-height: 1.38;
+  font-size: 0.93rem;
 }
 
 .attorney-field-label {
@@ -2294,9 +2329,14 @@ input[type="submit"].danger:disabled {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: flex-start;
+  align-items: baseline;
   border-bottom: 1px solid rgba(140, 132, 128, 0.14);
   padding-bottom: 6px;
+}
+
+.attorney-case-item > div:last-child {
+  text-align: right;
+  min-width: 140px;
 }
 
 .attorney-case-item:last-child {
@@ -2313,6 +2353,7 @@ input[type="submit"].danger:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  padding-top: 2px;
 }
 
 .attorney-filter-chip {
@@ -2324,6 +2365,7 @@ input[type="submit"].danger:disabled {
   background: rgba(255, 255, 255, 0.75);
   font-size: 0.74rem;
   color: var(--text);
+  line-height: 1.2;
 }
 
 .cases-hero {
@@ -4033,6 +4075,11 @@ input[type="submit"].danger:disabled {
   .attorney-case-item {
     flex-direction: column;
     gap: 4px;
+  }
+
+  .attorney-case-item > div:last-child {
+    text-align: left;
+    min-width: 0;
   }
 }
 
