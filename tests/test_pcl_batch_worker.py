@@ -5,6 +5,7 @@ from sqlalchemy import MetaData, create_engine, select
 
 from pacer_http import TokenExpired
 from pcl_batch import PclBatchPlanner, PclBatchWorker
+from pcl_client import PclApiError
 from pcl_models import build_pcl_tables
 
 
@@ -71,6 +72,12 @@ class StatusTimeoutClient(FakePclClient):
     def get_case_download_status(self, report_id):
         self.calls.append(("status", report_id))
         raise TimeoutError("The read operation timed out")
+
+
+class StatusNotFoundClient(FakePclClient):
+    def get_case_download_status(self, report_id):
+        self.calls.append(("status", report_id))
+        raise PclApiError(404, "Not Found")
 
 
 class PclBatchWorkerTests(unittest.TestCase):
@@ -237,6 +244,39 @@ class PclBatchWorkerTests(unittest.TestCase):
         self.assertEqual(
             segment["remote_status_message"],
             "network timeout while checking report status",
+        )
+        self.assertIsNotNone(segment["next_poll_at"])
+
+    def test_status_not_found_requeues_segment(self):
+        planner = PclBatchPlanner(self.engine, self.tables)
+        planner.create_batch_request(
+            court_id="akdc",
+            date_filed_from=date(2024, 4, 1),
+            date_filed_to=date(2024, 4, 30),
+            case_types=["cr"],
+        )
+        worker = PclBatchWorker(
+            self.engine,
+            self.tables,
+            StatusNotFoundClient(),
+            sleep_fn=lambda _: None,
+            now_fn=lambda: datetime(2024, 4, 1),
+        )
+        worker.run_once(max_segments=1)
+
+        with self.engine.begin() as conn:
+            segment = conn.execute(
+                select(self.tables["pcl_batch_segments"])
+            ).mappings().one()
+
+        self.assertEqual(segment["status"], "running")
+        self.assertEqual(segment["report_id"], "r1")
+        self.assertEqual(
+            segment["last_error"], "transient status error (404): Not Found"
+        )
+        self.assertEqual(
+            segment["remote_status_message"],
+            "transient status error (404): Not Found",
         )
         self.assertIsNotNone(segment["next_poll_at"])
 

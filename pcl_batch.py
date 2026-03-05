@@ -411,6 +411,12 @@ class PclBatchWorker:
             if exc.status_code == 429 or _looks_like_pcl_concurrency_limit(exc.message):
                 self._mark_throttled(segment, exc.message)
                 return segment
+            if _looks_like_retryable_pcl_error(exc.status_code, exc.message):
+                self._mark_transient_network_error(
+                    segment,
+                    f"transient submit error ({exc.status_code}): {exc.message}",
+                )
+                return segment
             self._mark_failed(segment, exc.message)
             return segment
         report_id = response.get("reportId") or response.get("report_id")
@@ -480,6 +486,14 @@ class PclBatchWorker:
             )
             return
         except PclApiError as exc:
+            if _looks_like_retryable_pcl_error(
+                exc.status_code, exc.message, allow_not_found=True
+            ):
+                self._mark_transient_network_error(
+                    segment,
+                    f"transient status error ({exc.status_code}): {exc.message}",
+                )
+                return
             self._handle_status_error(segment, exc.message)
             return
 
@@ -526,6 +540,14 @@ class PclBatchWorker:
             )
             return
         except PclApiError as exc:
+            if _looks_like_retryable_pcl_error(
+                exc.status_code, exc.message, allow_not_found=True
+            ):
+                self._mark_transient_network_error(
+                    segment,
+                    f"transient download error ({exc.status_code}): {exc.message}",
+                )
+                return
             self._mark_failed(segment, exc.message)
             return
 
@@ -853,10 +875,34 @@ class PclBatchWorker:
 
     def _mark_transient_network_error(self, segment: Dict[str, Any], message: str) -> None:
         """Retry transient upstream/network failures without permanently failing segments."""
-        delay_seconds = 10 + self._rng.uniform(0, 8)
         now = self._now()
         has_report = bool(segment.get("report_id"))
-        status = "running" if has_report else "queued"
+        if has_report:
+            poll_attempts = int(segment.get("poll_attempts") or 0) + 1
+            if poll_attempts >= self._max_poll_attempts:
+                self._mark_failed(segment, f"{message} (poll attempts exceeded)")
+                return
+            delay_seconds = self._poll_base_seconds * (2 ** (poll_attempts - 1))
+            delay_seconds += self._rng.uniform(0, self._poll_jitter_seconds)
+            if self._logger:
+                self._logger.info(
+                    "Deferring PCL segment %s after transient network error: %s (retry in %.0fs)",
+                    segment.get("id"),
+                    message,
+                    delay_seconds,
+                )
+            updates: Dict[str, Any] = {
+                "status": "running",
+                "poll_attempts": poll_attempts,
+                "next_poll_at": now + timedelta(seconds=delay_seconds),
+                "last_error": message,
+                "remote_status_message": message,
+                "updated_at": now,
+            }
+            self._update_segment(segment["id"], updates)
+            return
+
+        delay_seconds = 10 + self._rng.uniform(0, 8)
         if self._logger:
             self._logger.info(
                 "Deferring PCL segment %s after transient network error: %s (retry in %.0fs)",
@@ -864,16 +910,17 @@ class PclBatchWorker:
                 message,
                 delay_seconds,
             )
-        updates: Dict[str, Any] = {
-            "status": status,
-            "next_poll_at": now + timedelta(seconds=delay_seconds),
-            "last_error": message,
-            "remote_status_message": message,
-            "updated_at": now,
-        }
-        if not has_report:
-            updates["error_message"] = message
-        self._update_segment(segment["id"], updates)
+        self._update_segment(
+            segment["id"],
+            {
+                "status": "queued",
+                "next_poll_at": now + timedelta(seconds=delay_seconds),
+                "last_error": message,
+                "error_message": message,
+                "remote_status_message": message,
+                "updated_at": now,
+            },
+        )
 
     def _mark_needs_reauth(self, segment: Dict[str, Any]) -> None:
         self._update_segment(
@@ -951,6 +998,28 @@ def _looks_like_pcl_concurrency_limit(message: str) -> bool:
     if not lowered:
         return False
     return "exceeded maximum batch jobs" in lowered or "running concurrently" in lowered
+
+
+def _looks_like_retryable_pcl_error(
+    status_code: int,
+    message: str,
+    *,
+    allow_not_found: bool = False,
+) -> bool:
+    lowered = (message or "").strip().lower()
+    if status_code in {408, 429, 500, 502, 503, 504}:
+        return True
+    if allow_not_found and status_code == 404 and "not found" in lowered:
+        return True
+    transient_markers = (
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "try again",
+    )
+    return any(marker in lowered for marker in transient_markers)
 
 
 def _record_hash(record: Dict[str, Any]) -> str:
