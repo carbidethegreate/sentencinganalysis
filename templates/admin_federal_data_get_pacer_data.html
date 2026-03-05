@@ -477,11 +477,16 @@
             </div>
           {% endif %}
 
-          {% if pacer_server_creds_available and not manual_mode %}
+          {% if pacer_server_creds_available %}
             <div class="pacer-server-creds">
               <p class="small">
                 PACER credentials are configured on the server; they are not shown in the browser.
               </p>
+              {% if manual_mode %}
+                <p class="small">
+                  Manual mode is optional here. You can authenticate using only your current 2FA code below.
+                </p>
+              {% endif %}
               <a class="pacer-text-link" href="{{ url_for('admin_federal_data_dashboard_get_pacer_data', manual='1') }}">
                 Enter PACER username/password manually
               </a>
@@ -505,20 +510,25 @@
                   </p>
                 {% endif %}
               </div>
-              {% if pacer_needs_otp %}
-                <div class="pacer-form__section">
-                  <label for="pacer-otp-code">2FA code (required if your PACER account uses MFA)</label>
-                  <input
-                    id="pacer-otp-code"
-                    name="pacer_otp_code"
-                    autocomplete="one-time-code"
-                    inputmode="numeric"
-                    data-lpignore="true"
-                    data-1p-ignore="true"
-                    data-bwignore="true"
-                  >
-                </div>
-              {% endif %}
+              <div class="pacer-form__section">
+                <label for="pacer-otp-code">2FA code (from Google Authenticator)</label>
+                <input
+                  id="pacer-otp-code"
+                  name="pacer_otp_code"
+                  autocomplete="one-time-code"
+                  inputmode="numeric"
+                  pattern="[0-9]{6}"
+                  maxlength="6"
+                  placeholder="6-digit code"
+                  {% if pacer_needs_otp %}required{% endif %}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-bwignore="true"
+                >
+                <p class="small">
+                  Use your current one-time code. It changes frequently and is not stored.
+                </p>
+              </div>
               <div class="pacer-ack">
                 <label class="pacer-ack__label" for="pacer-redaction-ack">
                   <input
@@ -667,7 +677,11 @@
           </ul>
           <div class="pacer-help-card__divider" role="presentation"></div>
           <p class="small pacer-help-card__footnote">
-            Need to use server-side credentials instead? Remove <code>?manual=1</code> from the URL.
+            {% if pacer_server_creds_available %}
+              Use the 2FA field on this page for authenticator codes. Manual username/password entry is optional.
+            {% else %}
+              Need to use server-side credentials instead? Remove <code>?manual=1</code> from the URL.
+            {% endif %}
           </p>
         </aside>
       </div>
