@@ -2414,16 +2414,38 @@ def create_app() -> Flask:
                     )
                     updated += 1
                 continue
-            conn.execute(
-                insert(pcl_case_fields).values(
-                    **payload,
-                    case_id=case_id,
-                    field_name=field_name,
-                    created_at=now,
-                    updated_at=now,
+            try:
+                conn.execute(
+                    insert(pcl_case_fields).values(
+                        **payload,
+                        case_id=case_id,
+                        field_name=field_name,
+                        created_at=now,
+                        updated_at=now,
+                    )
                 )
-            )
-            inserted += 1
+                inserted += 1
+            except IntegrityError:
+                # Concurrent workers may insert the same (case_id, field_name).
+                # Recover by re-reading and updating instead of failing the batch.
+                raced = (
+                    conn.execute(
+                        select(pcl_case_fields.c.id).where(
+                            (pcl_case_fields.c.case_id == case_id)
+                            & (pcl_case_fields.c.field_name == field_name)
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if not raced:
+                    raise
+                conn.execute(
+                    update(pcl_case_fields)
+                    .where(pcl_case_fields.c.id == raced["id"])
+                    .values(**payload, updated_at=now)
+                )
+                updated += 1
         return inserted, updated
 
     def _upsert_case_field_value(
@@ -2462,16 +2484,37 @@ def create_app() -> Flask:
                 .values(**payload)
             )
             return
-        conn.execute(
-            insert(pcl_case_fields).values(
-                case_id=case_id,
-                field_name=field_name,
-                field_value_text=field_value_text,
-                field_value_json=field_value_json,
-                created_at=now,
-                updated_at=now,
+        try:
+            conn.execute(
+                insert(pcl_case_fields).values(
+                    case_id=case_id,
+                    field_name=field_name,
+                    field_value_text=field_value_text,
+                    field_value_json=field_value_json,
+                    created_at=now,
+                    updated_at=now,
+                )
             )
-        )
+            return
+        except IntegrityError:
+            # Concurrent insert race on unique (case_id, field_name): update winner row.
+            raced = (
+                conn.execute(
+                    select(pcl_case_fields.c.id).where(
+                        (pcl_case_fields.c.case_id == case_id)
+                        & (pcl_case_fields.c.field_name == field_name)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if not raced:
+                raise
+            conn.execute(
+                update(pcl_case_fields)
+                .where(pcl_case_fields.c.id == raced["id"])
+                .values(**payload)
+            )
 
     def _extract_document_links_from_case_fields(
         case_fields: List[Dict[str, Any]],
