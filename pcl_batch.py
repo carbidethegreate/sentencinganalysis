@@ -402,6 +402,11 @@ class PclBatchWorker:
         except TokenExpired:
             self._mark_needs_reauth(segment)
             return segment
+        except TimeoutError:
+            self._mark_transient_network_error(
+                segment, "network timeout while submitting batch request"
+            )
+            return segment
         except PclApiError as exc:
             if exc.status_code == 429 or _looks_like_pcl_concurrency_limit(exc.message):
                 self._mark_throttled(segment, exc.message)
@@ -469,6 +474,11 @@ class PclBatchWorker:
         except TokenExpired:
             self._mark_needs_reauth(segment)
             return
+        except TimeoutError:
+            self._mark_transient_network_error(
+                segment, "network timeout while checking report status"
+            )
+            return
         except PclApiError as exc:
             self._handle_status_error(segment, exc.message)
             return
@@ -509,6 +519,11 @@ class PclBatchWorker:
             payload = self._client.download_case_report(report_id)
         except TokenExpired:
             self._mark_needs_reauth(segment)
+            return
+        except TimeoutError:
+            self._mark_transient_network_error(
+                segment, "network timeout while downloading report payload"
+            )
             return
         except PclApiError as exc:
             self._mark_failed(segment, exc.message)
@@ -835,6 +850,30 @@ class PclBatchWorker:
                 "updated_at": now,
             },
         )
+
+    def _mark_transient_network_error(self, segment: Dict[str, Any], message: str) -> None:
+        """Retry transient upstream/network failures without permanently failing segments."""
+        delay_seconds = 10 + self._rng.uniform(0, 8)
+        now = self._now()
+        has_report = bool(segment.get("report_id"))
+        status = "running" if has_report else "queued"
+        if self._logger:
+            self._logger.info(
+                "Deferring PCL segment %s after transient network error: %s (retry in %.0fs)",
+                segment.get("id"),
+                message,
+                delay_seconds,
+            )
+        updates: Dict[str, Any] = {
+            "status": status,
+            "next_poll_at": now + timedelta(seconds=delay_seconds),
+            "last_error": message,
+            "remote_status_message": message,
+            "updated_at": now,
+        }
+        if not has_report:
+            updates["error_message"] = message
+        self._update_segment(segment["id"], updates)
 
     def _mark_needs_reauth(self, segment: Dict[str, Any]) -> None:
         self._update_segment(

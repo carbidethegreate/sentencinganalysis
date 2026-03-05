@@ -67,6 +67,12 @@ class DuplicateCaseNumberClient(FakePclClient):
         }
 
 
+class StatusTimeoutClient(FakePclClient):
+    def get_case_download_status(self, report_id):
+        self.calls.append(("status", report_id))
+        raise TimeoutError("The read operation timed out")
+
+
 class PclBatchWorkerTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:", future=True)
@@ -200,6 +206,39 @@ class PclBatchWorkerTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["case_id"], "9001")
         self.assertIn(("delete", "r1"), client.calls)
+
+    def test_status_timeout_requeues_segment(self):
+        planner = PclBatchPlanner(self.engine, self.tables)
+        planner.create_batch_request(
+            court_id="akdc",
+            date_filed_from=date(2024, 3, 1),
+            date_filed_to=date(2024, 3, 31),
+            case_types=["cr"],
+        )
+        worker = PclBatchWorker(
+            self.engine,
+            self.tables,
+            StatusTimeoutClient(),
+            sleep_fn=lambda _: None,
+            now_fn=lambda: datetime(2024, 3, 1),
+        )
+        worker.run_once(max_segments=1)
+
+        with self.engine.begin() as conn:
+            segment = conn.execute(
+                select(self.tables["pcl_batch_segments"])
+            ).mappings().one()
+
+        self.assertEqual(segment["status"], "running")
+        self.assertEqual(segment["report_id"], "r1")
+        self.assertEqual(
+            segment["last_error"], "network timeout while checking report status"
+        )
+        self.assertEqual(
+            segment["remote_status_message"],
+            "network timeout while checking report status",
+        )
+        self.assertIsNotNone(segment["next_poll_at"])
 
 
 if __name__ == "__main__":
