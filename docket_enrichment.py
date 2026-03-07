@@ -7,6 +7,7 @@ import json
 import os
 import re
 from typing import Any, Callable, Dict, List, Optional
+import urllib.error
 from urllib.parse import urlencode, urljoin, urlparse
 from xml.etree import ElementTree
 
@@ -128,7 +129,7 @@ class DocketEnrichmentWorker:
         try:
             fetch_result = self._fetch_docket_report(case_row)
         except Exception as exc:
-            self._mark_failed(job, f"Docket request failed: {exc}")
+            self._mark_failed(job, f"Docket request failed: {_describe_fetch_exception(exc)}")
             return
 
         if fetch_result.status_code != 200:
@@ -287,6 +288,26 @@ class DocketEnrichmentWorker:
         return dict(row) if row else None
 
     def _fetch_docket_report(self, case_row: Dict[str, Any]) -> DocketFetchResult:
+        def _try_direct_submit(*, all_case_ids: Optional[str]) -> Optional[DocketFetchResult]:
+            try:
+                return _submit_docket_report_direct(
+                    self._http_client,
+                    case_row["case_link"],
+                    case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
+                    output_format="html",
+                    all_case_ids=all_case_ids,
+                    case_num=formatted_case_number or " ",
+                )
+            except Exception as exc:
+                if self._logger:
+                    self._logger.warning(
+                        "Direct docket submit failed for case %s (%s): %s",
+                        case_row.get("id"),
+                        case_row.get("case_number_full"),
+                        _describe_fetch_exception(exc),
+                    )
+                return None
+
         case_id = _extract_case_id_from_url(case_row.get("case_link") or "")
         formatted_case_number = _format_case_number_for_pacer(
             case_office=case_row.get("case_office"),
@@ -322,17 +343,27 @@ class DocketEnrichmentWorker:
             and "html" in content_type.lower()
             and _looks_like_docket_shell(response.body.decode("utf-8", errors="replace"))
         ):
-            submit = _submit_docket_form(
-                self._http_client,
-                response.body.decode("utf-8", errors="replace"),
-                base_url=url,
-                case_number_full=case_row.get("case_number_full"),
-                case_number=case_row.get("case_number"),
-                case_office=case_row.get("case_office"),
-                case_year=case_row.get("case_year"),
-                case_type=case_row.get("case_type"),
-                preferred_output_format=self._docket_output,
-            )
+            submit = None
+            try:
+                submit = _submit_docket_form(
+                    self._http_client,
+                    response.body.decode("utf-8", errors="replace"),
+                    base_url=url,
+                    case_number_full=case_row.get("case_number_full"),
+                    case_number=case_row.get("case_number"),
+                    case_office=case_row.get("case_office"),
+                    case_year=case_row.get("case_year"),
+                    case_type=case_row.get("case_type"),
+                    preferred_output_format=self._docket_output,
+                )
+            except Exception as exc:
+                if self._logger:
+                    self._logger.warning(
+                        "Form docket submit failed for case %s (%s): %s",
+                        case_row.get("id"),
+                        case_row.get("case_number_full"),
+                        _describe_fetch_exception(exc),
+                    )
             if submit:
                 if _looks_like_docket_shell(
                     submit.body.decode("utf-8", errors="replace")
@@ -374,50 +405,30 @@ class DocketEnrichmentWorker:
                             if multistep_html:
                                 return multistep_html
                         return multistep
-                    direct = _submit_docket_report_direct(
-                        self._http_client,
-                        case_row["case_link"],
-                        case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
-                        output_format="html",
+                    direct = _try_direct_submit(
                         all_case_ids=_extract_case_id_from_url(case_row.get("case_link") or ""),
-                        case_num=formatted_case_number or " ",
                     )
                     if direct is not None and not _looks_like_docket_shell(
                         direct.body.decode("utf-8", errors="replace")
                     ):
                         return direct
-                    direct_comma = _submit_docket_report_direct(
-                        self._http_client,
-                        case_row["case_link"],
-                        case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
-                        output_format="html",
+                    direct_comma = _try_direct_submit(
                         all_case_ids=f"{_extract_case_id_from_url(case_row.get('case_link') or '')},",
-                        case_num=formatted_case_number or " ",
                     )
                     if direct_comma is not None and not _looks_like_docket_shell(
                         direct_comma.body.decode("utf-8", errors="replace")
                     ):
                         return direct_comma
                 return submit
-            direct = _submit_docket_report_direct(
-                self._http_client,
-                case_row["case_link"],
-                case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
-                output_format="html",
+            direct = _try_direct_submit(
                 all_case_ids=_extract_case_id_from_url(case_row.get("case_link") or ""),
-                case_num=formatted_case_number or " ",
             )
             if direct is not None and not _looks_like_docket_shell(
                 direct.body.decode("utf-8", errors="replace")
             ):
                 return direct
-            direct_comma = _submit_docket_report_direct(
-                self._http_client,
-                case_row["case_link"],
-                case_id=_extract_case_id_from_url(case_row.get("case_link") or ""),
-                output_format="html",
+            direct_comma = _try_direct_submit(
                 all_case_ids=f"{_extract_case_id_from_url(case_row.get('case_link') or '')},",
-                case_num=formatted_case_number or " ",
             )
             if direct_comma is not None:
                 return direct_comma
@@ -2786,6 +2797,16 @@ def _format_pacer_error(message: str, fetch_result: DocketFetchResult) -> str:
     return f"{message} ({' ; '.join(details)})"
 
 
+def _describe_fetch_exception(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        reason = str(exc.reason or "Not Found")
+        detail = f"HTTP Error {exc.code}: {reason}"
+        if exc.url:
+            detail = f"{detail} ({exc.url})"
+        return detail
+    return str(exc)
+
+
 def _with_form_details(
     fetch_result: DocketFetchResult, html_text: str
 ) -> DocketFetchResult:
@@ -3000,14 +3021,32 @@ def _submit_docket_form(
     case_values = list(dict.fromkeys(case_values))
     all_case_options = [case_id, "", None]
     result = None
+    last_error: Optional[Exception] = None
     for case_value in case_values:
         for all_case_ids in all_case_options:
-            result = _submit_with_format(output_format, case_value=case_value, all_case_ids=all_case_ids)
-            if not _looks_like_docket_shell(result.body.decode("utf-8", errors="replace")):
+            try:
+                result = _submit_with_format(
+                    output_format, case_value=case_value, all_case_ids=all_case_ids
+                )
+            except Exception as exc:
+                last_error = exc
+                continue
+            if not _looks_like_docket_shell(
+                result.body.decode("utf-8", errors="replace")
+            ):
                 return result
     if output_format == "xml" and result is not None:
         if _looks_like_docket_shell(result.body.decode("utf-8", errors="replace")):
-            result = _submit_with_format("html", case_value=case_values[0] if case_values else None, all_case_ids=case_id)
+            try:
+                result = _submit_with_format(
+                    "html",
+                    case_value=case_values[0] if case_values else None,
+                    all_case_ids=case_id,
+                )
+            except Exception as exc:
+                last_error = exc
+    if result is None and last_error is not None:
+        raise last_error
     return result
 
 
