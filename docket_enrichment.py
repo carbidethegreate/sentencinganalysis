@@ -804,7 +804,7 @@ def _build_docket_report_url(
                 case_id = token.split("=", 1)[1]
                 break
     if not case_id:
-        match = re.search(r"(\\d+)", raw_query)
+        match = re.search(r"(\d+)", raw_query)
         if match:
             case_id = match.group(1)
     if not case_id:
@@ -874,7 +874,7 @@ def _extract_case_id_from_url(url: str) -> Optional[str]:
     for token in raw_query.split("&"):
         if token.startswith("case_id="):
             return token.split("=", 1)[1]
-    match = re.search(r"(\\d+)", raw_query)
+    match = re.search(r"(\d+)", raw_query)
     return match.group(1) if match else None
 
 
@@ -3019,7 +3019,7 @@ def _resolve_form_action(base_url: str, action: str) -> str:
 
 def _select_docket_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
     forms = []
-    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
+    for match in re.finditer(r"<form\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
         form_html = match.group(0)
         tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
         attrs = tag_match.group(1) if tag_match else ""
@@ -3041,7 +3041,7 @@ def _select_docket_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
 
 
 def _select_any_form(html: str) -> tuple[Optional[str], Dict[str, str], str]:
-    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
+    for match in re.finditer(r"<form\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
         form_html = match.group(0)
         tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
         attrs = tag_match.group(1) if tag_match else ""
@@ -3191,7 +3191,7 @@ def _submit_confirm_form(
 
 def _select_confirm_form(html: str, *, desired_output: str = "xml") -> tuple[Optional[str], Dict[str, str]]:
     forms = []
-    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
+    for match in re.finditer(r"<form\b[^>]*>.*?</form>", html, re.IGNORECASE | re.DOTALL):
         form_html = match.group(0)
         tag_match = re.search(r"<form([^>]*)>", form_html, re.IGNORECASE)
         attrs = tag_match.group(1) if tag_match else ""
@@ -3378,7 +3378,7 @@ def _fetch_docket_report_multistep(
 
 
 def _find_first_form(html_text: str) -> Optional[tuple[str, Dict[str, str]]]:
-    match = re.search(r"<form\\b[^>]*>.*?</form>", html_text, re.IGNORECASE | re.DOTALL)
+    match = re.search(r"<form\b[^>]*>.*?</form>", html_text, re.IGNORECASE | re.DOTALL)
     if not match:
         return None
     form_html = match.group(0)
@@ -3390,7 +3390,7 @@ def _find_first_form(html_text: str) -> Optional[tuple[str, Dict[str, str]]]:
 
 
 def _find_form_with_input(html_text: str, input_name: str) -> Optional[tuple[str, Dict[str, str]]]:
-    for match in re.finditer(r"<form\\b[^>]*>.*?</form>", html_text, re.IGNORECASE | re.DOTALL):
+    for match in re.finditer(r"<form\b[^>]*>.*?</form>", html_text, re.IGNORECASE | re.DOTALL):
         form_html = match.group(0)
         if input_name not in form_html:
             continue
@@ -3600,7 +3600,7 @@ def _build_request_debug(
 
 
 def _extract_attr(attrs: str, name: str) -> Optional[str]:
-    match = re.search(rf"{name}\\s*=\\s*[\"']([^\"']*)[\"']", attrs, re.IGNORECASE)
+    match = re.search(rf"{name}\s*=\s*[\"']([^\"']*)[\"']", attrs, re.IGNORECASE)
     return match.group(1) if match else None
 
 
