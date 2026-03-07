@@ -517,8 +517,7 @@
                   name="pacer_otp_code"
                   autocomplete="one-time-code"
                   inputmode="numeric"
-                  pattern="[0-9]{6}"
-                  maxlength="6"
+                  maxlength="12"
                   placeholder="6-digit code"
                   {% if pacer_needs_otp %}required{% endif %}
                   data-lpignore="true"
@@ -700,6 +699,20 @@
           };
           checkbox.addEventListener("change", toggleSubmit);
           toggleSubmit();
+        })();
+      </script>
+      <script>
+        (function () {
+          const forms = document.querySelectorAll(
+            'form[action="{{ url_for("admin_federal_data_dashboard_pacer_auth") }}"]'
+          );
+          forms.forEach(function (form) {
+            form.addEventListener("submit", function () {
+              const otpInput = form.querySelector('input[name="pacer_otp_code"]');
+              if (!otpInput) return;
+              otpInput.value = (otpInput.value || "").replace(/\D+/g, "");
+            });
+          });
         })();
       </script>
     {% endif %}

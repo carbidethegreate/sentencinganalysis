@@ -455,7 +455,7 @@ def get_configured_pacer_otp_code() -> Optional[str]:
         "pacer_otp_code",
         "PACER_OTP_CODE",
     )
-    value = (value or "").strip()
+    value = normalize_pacer_otp_code(value) or ""
     if not value:
         return None
     # PACER expects a 6-digit code; keep the guard loose to allow leading zeros.
@@ -511,6 +511,22 @@ def _generate_totp_code(
     )
     code = code_int % (10**int(digits))
     return f"{code:0{int(digits)}d}"
+
+
+def normalize_pacer_otp_code(value: Optional[str]) -> Optional[str]:
+    """Normalize user-entered OTP while preserving leading zeros.
+
+    Authenticator apps and browser autofill can include spaces or separators
+    (for example "123 456" or "123-456"). PACER expects only digits.
+    """
+
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    digits_only = re.sub(r"\D+", "", cleaned)
+    return digits_only or cleaned
 
 
 def get_configured_pacer_otp_for_auth() -> Optional[str]:
@@ -571,8 +587,9 @@ def build_pacer_auth_payload(
     redact_flag: bool = False,
 ) -> Dict[str, str]:
     payload: Dict[str, str] = {"loginId": login_id, "password": password}
-    if otp_code:
-        payload["otpCode"] = otp_code
+    normalized_otp_code = normalize_pacer_otp_code(otp_code)
+    if normalized_otp_code:
+        payload["otpCode"] = normalized_otp_code
     if client_code:
         payload["clientCode"] = client_code
     if redact_flag:
@@ -7870,7 +7887,8 @@ def create_app() -> Flask:
             json_payload.get("otpCode")
             or json_payload.get("pacer_otp_code")
             or request.form.get("pacer_otp_code", "")
-        ).strip()
+        )
+        otp_code = normalize_pacer_otp_code(otp_code)
         client_code = (
             json_payload.get("clientCode")
             or json_payload.get("pacer_client_code")
@@ -7948,6 +7966,27 @@ def create_app() -> Flask:
         otp_code = otp_code or None
         client_code = client_code or None
         session["pacer_redaction_acknowledged"] = bool(redaction_ack)
+
+        if otp_code and (not otp_code.isdigit() or len(otp_code) not in {6, 8}):
+            session["pacer_needs_otp"] = True
+            session["pacer_client_code_required"] = False
+            session["pacer_redaction_required"] = False
+            session["pacer_search_disabled"] = False
+            session["pacer_search_disabled_reason"] = None
+            message = "Enter a valid one-time passcode (6 or 8 digits)."
+            if wants_json:
+                return (
+                    jsonify(
+                        {
+                            "authorized": False,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "status": "needs_otp",
+                        }
+                    ),
+                    400,
+                )
+            flash(message, "error")
+            return redirect(redirect_target)
 
         if not redaction_ack:
             session["pacer_needs_otp"] = False
@@ -8060,6 +8099,11 @@ def create_app() -> Flask:
             if login_result == "13" and not otp_code:
                 flash(
                     "If your PACER account is enrolled in MFA, a one time passcode (2FA code) is required.",
+                    "error",
+                )
+            if login_result == "13" and otp_code:
+                flash(
+                    "PACER rejected the 2FA code. Enter a fresh code from Google Authenticator and retry immediately.",
                     "error",
                 )
             if result.needs_redaction_ack:

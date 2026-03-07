@@ -53,6 +53,16 @@ class PacerAuthTests(unittest.TestCase):
         payload = build_pacer_auth_payload("user", "pass")
         self.assertEqual(payload, {"loginId": "user", "password": "pass"})
 
+    def test_build_payload_normalizes_otp_with_separators(self):
+        payload = build_pacer_auth_payload(
+            "user",
+            "pass",
+            otp_code="123 456",
+            client_code="CLIENT1",
+            redact_flag=True,
+        )
+        self.assertEqual(payload["otpCode"], "123456")
+
     def test_client_builds_correct_request_body(self):
         captured = {}
 
@@ -145,9 +155,9 @@ class PacerAuthTests(unittest.TestCase):
 class FederalDataDashboardTests(unittest.TestCase):
     @staticmethod
     def _fake_env_with_pacer_creds(*names):
-        if names == ("puser",):
+        if "puser" in names:
             return "pacer-user"
-        if names == ("ppass",):
+        if "ppass" in names:
             return "pacer-pass"
         if names == ("SECRET_KEY", "Secrets", "SECRETS"):
             return "test-secret"
@@ -450,6 +460,54 @@ class FederalDataDashboardTests(unittest.TestCase):
                 record = app.pacer_token_store.get_token_for_key(session_key)
                 self.assertIsNotNone(record)
                 self.assertEqual(record.token, "next-gen-token")
+
+    def test_pacer_auth_form_normalizes_user_entered_otp(self):
+        with patch(
+            "app._first_env_or_secret_file", side_effect=self._fake_env_with_pacer_creds
+        ):
+            app = create_app()
+            app.testing = True
+
+            captured = {}
+
+            def fake_authenticate(
+                login_id, password, otp_code=None, client_code=None, redact_flag=None
+            ):
+                captured["login_id"] = login_id
+                captured["password"] = password
+                captured["otp_code"] = otp_code
+                return PacerAuthResult(
+                    token="next-gen-token",
+                    error_description="",
+                    login_result="0",
+                    needs_otp=False,
+                    needs_client_code=False,
+                    needs_redaction_ack=False,
+                    search_disabled=False,
+                    search_disabled_reason=None,
+                    can_proceed=True,
+                )
+
+            with patch("app.PacerAuthClient.authenticate", side_effect=fake_authenticate):
+                with app.test_client() as client:
+                    with client.session_transaction() as sess:
+                        sess["is_admin"] = True
+                        sess["csrf_token"] = "csrf-token"
+
+                    response = client.post(
+                        "/admin/federal-data-dashboard/pacer-auth",
+                        data={
+                            "csrf_token": "csrf-token",
+                            "pacer_otp_code": "123 456",
+                            "pacer_redaction_ack": "1",
+                        },
+                        follow_redirects=False,
+                    )
+
+                    self.assertEqual(response.status_code, 302)
+                    self.assertEqual(captured["login_id"], "pacer-user")
+                    self.assertEqual(captured["password"], "pacer-pass")
+                    self.assertEqual(captured["otp_code"], "123456")
 
     def test_pacer_auth_logging_never_includes_next_gen_cso_value(self):
         messages = []
