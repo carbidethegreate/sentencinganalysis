@@ -3838,6 +3838,25 @@ input[type="submit"].danger:disabled {
   padding: 12px 14px;
 }
 
+.pacer-auth-feedback {
+  margin-top: 0;
+}
+
+.pacer-auth-feedback.error {
+  border-color: rgba(153, 43, 43, 0.55);
+  background: rgba(153, 43, 43, 0.1);
+}
+
+.pacer-auth-feedback.success {
+  border-color: rgba(34, 120, 83, 0.45);
+  background: rgba(34, 120, 83, 0.1);
+}
+
+.pacer-auth-feedback.warning {
+  border-color: rgba(168, 120, 25, 0.45);
+  background: rgba(168, 120, 25, 0.1);
+}
+
 .pacer-form {
   display: flex;
   flex-direction: column;

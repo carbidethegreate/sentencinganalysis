@@ -1664,6 +1664,14 @@ def create_app() -> Flask:
             return False
         return _pacer_token_matches_pcl() and not _pacer_search_disabled()
 
+    def _set_pacer_auth_feedback(level: str, title: str, message: str) -> None:
+        session["pacer_last_auth_feedback"] = {
+            "level": level,
+            "title": title,
+            "message": message,
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+        }
+
     # Immediate PCL searches always return 54 records per page; pageSize is not valid in /cases/find.
     PCL_PAGE_SIZE = 54
     PCL_EXPLORE_DEFAULT_MAX_RECORDS = 54
@@ -5701,6 +5709,7 @@ def create_app() -> Flask:
             pacer_env_mismatch=bool(app.config.get("PACER_ENV_MISMATCH")),
             pacer_env_mismatch_reason=app.config.get("PACER_ENV_MISMATCH_REASON"),
             manual_mode=manual_mode,
+            pacer_last_auth_feedback=session.get("pacer_last_auth_feedback"),
             search_mode=search_mode,
             saved_searches=_load_pacer_saved_searches(),
             search_run_history=_load_pacer_search_runs(),
@@ -7919,6 +7928,7 @@ def create_app() -> Flask:
                     "PACER credentials are not configured. Set Render env var puser and "
                     "secret file ppass (or ppassword), or use manual mode."
                 )
+                _set_pacer_auth_feedback("error", "PACER authorization failed", message)
                 if wants_json:
                     return (
                         jsonify(
@@ -7949,6 +7959,7 @@ def create_app() -> Flask:
             message = (
                 "Those look like CourtDataPro admin creds. Enter PACER credentials instead."
             )
+            _set_pacer_auth_feedback("error", "PACER authorization failed", message)
             if wants_json:
                 return (
                     jsonify(
@@ -7974,6 +7985,7 @@ def create_app() -> Flask:
             session["pacer_search_disabled"] = False
             session["pacer_search_disabled_reason"] = None
             message = "Enter a valid one-time passcode (6 or 8 digits)."
+            _set_pacer_auth_feedback("error", "PACER authorization failed", message)
             if wants_json:
                 return (
                     jsonify(
@@ -7997,6 +8009,7 @@ def create_app() -> Flask:
             message = (
                 "You must acknowledge the PACER redaction rules before authorizing a filer account."
             )
+            _set_pacer_auth_feedback("error", "PACER authorization failed", message)
             if wants_json:
                 return (
                     jsonify(
@@ -8025,6 +8038,9 @@ def create_app() -> Flask:
             session["pacer_redaction_required"] = False
             session["pacer_search_disabled"] = False
             session["pacer_search_disabled_reason"] = None
+            _set_pacer_auth_feedback(
+                "error", "PACER authorization failed", str(exc) or "PACER authentication failed."
+            )
             if wants_json:
                 return (
                     jsonify(
@@ -8056,6 +8072,18 @@ def create_app() -> Flask:
             session["pacer_redaction_required"] = False
             session["pacer_search_disabled"] = bool(result.search_disabled)
             session["pacer_search_disabled_reason"] = result.search_disabled_reason
+            if result.search_disabled:
+                _set_pacer_auth_feedback(
+                    "warning",
+                    "PACER authenticated",
+                    "Authenticated, but searching is disabled until a client code is supplied.",
+                )
+            else:
+                _set_pacer_auth_feedback(
+                    "success",
+                    "PACER authentication successful",
+                    "Session is active and PACER search is enabled.",
+                )
             if wants_json:
                 return jsonify(
                     {
@@ -8095,6 +8123,20 @@ def create_app() -> Flask:
                 )
             error_description = result.error_description or "PACER authentication failed."
             login_result = result.login_result or "unknown"
+            app.logger.warning(
+                "PACER auth failed loginResult=%s needsOtp=%s needsClientCode=%s needsRedactionAck=%s searchDisabled=%s hasOtpProvided=%s",
+                login_result,
+                bool(result.needs_otp),
+                bool(result.needs_client_code),
+                bool(result.needs_redaction_ack),
+                bool(result.search_disabled),
+                bool(otp_code),
+            )
+            _set_pacer_auth_feedback(
+                "error",
+                "PACER authorization failed",
+                f"{error_description} (loginResult: {login_result})",
+            )
             flash(f"{error_description} (loginResult: {login_result})", "error")
             if login_result == "13" and not otp_code:
                 flash(
@@ -8125,6 +8167,12 @@ def create_app() -> Flask:
         session["pacer_redaction_acknowledged"] = False
         session["pacer_search_disabled"] = False
         session["pacer_search_disabled_reason"] = None
+        session["pacer_last_auth_feedback"] = {
+            "level": "success",
+            "title": "PACER session cleared",
+            "message": "You have logged out of the current PACER session.",
+            "timestamp": datetime.utcnow().isoformat(timespec="seconds"),
+        }
         flash("PACER session cleared.", "success")
         return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 

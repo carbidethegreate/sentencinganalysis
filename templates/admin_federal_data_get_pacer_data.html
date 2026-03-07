@@ -25,6 +25,14 @@
         </div>
       {% endif %}
     </div>
+    {% if pacer_last_auth_feedback %}
+      <div class="flash pacer-auth-feedback {{ pacer_last_auth_feedback.level }}">
+        <strong>{{ pacer_last_auth_feedback.title }}.</strong> {{ pacer_last_auth_feedback.message }}
+        {% if pacer_last_auth_feedback.timestamp %}
+          <div class="small">Last update: {{ pacer_last_auth_feedback.timestamp.replace('T', ' ') }} UTC.</div>
+        {% endif %}
+      </div>
+    {% endif %}
     {% if pacer_authenticated %}
       <div class="card pacer-status-card">
         <div class="pacer-status-card__header">
