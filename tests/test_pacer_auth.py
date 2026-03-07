@@ -1,10 +1,13 @@
+import io
 import json
+import urllib.error
 import unittest
 from unittest.mock import patch
 
 from app import (
     PacerAuthClient,
     PacerAuthResult,
+    _build_pacer_auth_url,
     _normalize_pacer_base_url,
     _parse_pacer_auth_response_payload,
     build_pacer_auth_payload,
@@ -70,6 +73,7 @@ class PacerAuthTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout=30):
             captured["data"] = request.data
+            captured["url"] = request.full_url
             response_payload = json.dumps(
                 {
                     "loginResult": "0",
@@ -85,6 +89,7 @@ class PacerAuthTests(unittest.TestCase):
 
         request_payload = json.loads(captured["data"].decode("utf-8"))
         self.assertEqual(request_payload, {"loginId": "user", "password": "pass"})
+        self.assertEqual(captured["url"], "https://qa-login.uscourts.gov/services/cso-auth")
         self.assertTrue(result.can_proceed)
 
     def test_client_redaction_error_sets_redaction_requirement(self):
@@ -150,6 +155,45 @@ class PacerAuthTests(unittest.TestCase):
         self.assertEqual(
             _normalize_pacer_base_url("https://qa-login.uscourts.gov/services"),
             "https://qa-login.uscourts.gov",
+        )
+        self.assertEqual(
+            _normalize_pacer_base_url(
+                " 'https://qa-login.uscourts.gov/services/cso-auth?from=manual' "
+            ),
+            "https://qa-login.uscourts.gov",
+        )
+        self.assertEqual(
+            _normalize_pacer_base_url("qa-login.uscourts.gov/services/cso-auth"),
+            "https://qa-login.uscourts.gov",
+        )
+
+    def test_build_pacer_auth_url_always_targets_services_path(self):
+        self.assertEqual(
+            _build_pacer_auth_url("https://pacer.login.uscourts.gov/cso-auth"),
+            "https://pacer.login.uscourts.gov/services/cso-auth",
+        )
+        self.assertEqual(
+            _build_pacer_auth_url("https://qa-login.uscourts.gov/services/cso-auth?x=1"),
+            "https://qa-login.uscourts.gov/services/cso-auth",
+        )
+
+    def test_client_404_error_mentions_exact_endpoint(self):
+        http_error = urllib.error.HTTPError(
+            url="https://pacer.login.uscourts.gov/cso-auth",
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=io.BytesIO(b"<html><body>Object not found!</body></html>"),
+        )
+
+        with patch("app.urllib.request.urlopen", side_effect=http_error):
+            client = PacerAuthClient("https://pacer.login.uscourts.gov/cso-auth")
+            with self.assertRaises(ValueError) as ctx:
+                client.authenticate("user", "pass")
+
+        self.assertIn(
+            "https://pacer.login.uscourts.gov/services/cso-auth",
+            str(ctx.exception),
         )
 
     def test_interpret_success_response(self):
@@ -550,6 +594,7 @@ class FederalDataDashboardTests(unittest.TestCase):
                             "pacer_otp_code": "123 456",
                             "pacer_redaction_ack": "1",
                         },
+                        headers={"Accept": "text/html"},
                         follow_redirects=False,
                     )
 

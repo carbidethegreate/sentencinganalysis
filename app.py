@@ -32,7 +32,7 @@ from typing import (
     Set,
     Tuple,
 )
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, urlsplit
 
 import requests
 from flask import (
@@ -333,22 +333,28 @@ def _read_secret_file(path: Path) -> Optional[str]:
     return None
 
 
-def _first_env_or_secret_file(*names: str) -> Optional[str]:
+def _first_env_or_secret_file_with_source(*names: str) -> Tuple[Optional[str], Optional[str]]:
     for name in names:
         value = os.environ.get(name)
         if value:
-            return value
+            return value, f"env:{name}"
 
         file_override = os.environ.get(f"{name}_FILE")
         if file_override:
             value = _read_secret_file(Path(file_override))
             if value:
-                return value
+                return value, f"file:{file_override}"
 
-        value = _read_secret_file(Path("/etc/secrets") / name)
+        secret_path = Path("/etc/secrets") / name
+        value = _read_secret_file(secret_path)
         if value:
-            return value
-    return None
+            return value, f"secret:{secret_path}"
+    return None, None
+
+
+def _first_env_or_secret_file(*names: str) -> Optional[str]:
+    value, _source = _first_env_or_secret_file_with_source(*names)
+    return value
 
 
 def _normalize_database_url(url: str) -> str:
@@ -428,7 +434,7 @@ class PacerAuthResult:
 
 
 def _normalize_pacer_base_url(base_url: str) -> str:
-    normalized = (base_url or "").strip()
+    normalized = (base_url or "").strip().strip("'").strip('"')
     normalized = normalized[:-1] if normalized.endswith("/") else normalized
     # Guard against misconfigured endpoint URLs. The base URL should be the host root;
     # this client appends /services/cso-auth when authenticating.
@@ -437,7 +443,21 @@ def _normalize_pacer_base_url(base_url: str) -> str:
         "",
         normalized,
     )
-    return normalized
+    if not normalized:
+        return ""
+    parsed = urlsplit(normalized if "://" in normalized else f"https://{normalized}")
+    host = (parsed.netloc or parsed.path.split("/", 1)[0]).strip()
+    if not host:
+        return normalized
+    scheme = parsed.scheme if parsed.netloc else "https"
+    return f"{scheme}://{host}"
+
+
+def _build_pacer_auth_url(base_url: str) -> str:
+    normalized = _normalize_pacer_base_url(base_url)
+    if not normalized:
+        return "/services/cso-auth"
+    return f"{normalized}/services/cso-auth"
 
 
 def get_configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
@@ -696,6 +716,9 @@ def interpret_pacer_auth_response(
     search_disabled_reason = None
     if token_present and error_description:
         lowered = error_description.lower()
+        if needs_client_code:
+            search_disabled = True
+            search_disabled_reason = error_description
         # PACER may return a valid token but include an informational error_description
         # when search privileges are unavailable (e.g., missing client code).
         if "search privileges" in lowered or "will not have pacer search privileges" in lowered:
@@ -723,6 +746,7 @@ def interpret_pacer_auth_response(
 class PacerAuthClient:
     def __init__(self, base_url: str, logger: Optional[Any] = None, redact_flag: bool = False):
         self.base_url = _normalize_pacer_base_url(base_url)
+        self.auth_url = _build_pacer_auth_url(self.base_url)
         self.logger = logger
         self.redact_flag = redact_flag
 
@@ -744,7 +768,7 @@ class PacerAuthClient:
         )
         request_data = json.dumps(payload).encode("utf-8")
         request_obj = urllib.request.Request(
-            f"{self.base_url}/services/cso-auth",
+            self.auth_url,
             data=request_data,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             method="POST",
@@ -752,7 +776,9 @@ class PacerAuthClient:
 
         if self.logger:
             self.logger.info(
-                "PACER auth environment: %s", pacer_environment_label(self.base_url)
+                "PACER auth environment: %s endpoint=%s",
+                pacer_environment_label(self.base_url),
+                self.auth_url,
             )
 
         try:
@@ -769,8 +795,9 @@ class PacerAuthClient:
                 return result
             if self.logger:
                 self.logger.warning(
-                    "PACER auth HTTP error with unparseable body status=%s bodySnippet=%s",
+                    "PACER auth HTTP error with unparseable body status=%s endpoint=%s bodySnippet=%s",
                     status_code,
+                    self.auth_url,
                     _safe_log_snippet(error_body),
                 )
             if status_code in {401, 403}:
@@ -779,7 +806,7 @@ class PacerAuthClient:
                 ) from exc
             if status_code == 404:
                 raise ValueError(
-                    "PACER auth endpoint returned HTTP 404. Verify PACER_AUTH_BASE_URL is set to the host root (for example https://pacer.login.uscourts.gov)."
+                    f"PACER auth endpoint returned HTTP 404 at {self.auth_url}. Verify PACER_AUTH_BASE_URL is set to the host root (for example https://pacer.login.uscourts.gov) and not to /cso-auth."
                 ) from exc
             if status_code >= 500:
                 raise ValueError(
@@ -793,8 +820,9 @@ class PacerAuthClient:
         if not response_payload:
             if self.logger:
                 self.logger.warning(
-                    "PACER auth response was unparseable status=%s bodySnippet=%s",
+                    "PACER auth response was unparseable status=%s endpoint=%s bodySnippet=%s",
                     status_code,
+                    self.auth_url,
                     _safe_log_snippet(response_body),
                 )
             raise ValueError("PACER authentication failed.")
@@ -1273,8 +1301,10 @@ def create_app() -> Flask:
 
     case_stage1_imports: Dict[str, Dict[str, Any]] = {}
     case_data_one_imports: Dict[str, Dict[str, Any]] = {}
-    pacer_auth_base_url_env = _first_env_or_secret_file("PACER_AUTH_BASE_URL")
-    pcl_base_url_env = _first_env_or_secret_file("PCL_BASE_URL")
+    pacer_auth_base_url_env, pacer_auth_base_url_source = _first_env_or_secret_file_with_source(
+        "PACER_AUTH_BASE_URL"
+    )
+    pcl_base_url_env, _pcl_base_url_source = _first_env_or_secret_file_with_source("PCL_BASE_URL")
     # Render often supplies secrets via /etc/secrets, but non-secret env vars like
     # PACER_AUTH_BASE_URL/PCL_BASE_URL may be unset (or drift) on worker/cron services.
     # If we already have a PACER service token saved in the DB, infer the intended
@@ -1340,6 +1370,13 @@ def create_app() -> Flask:
     pacer_auth_env = pacer_env_config.auth_env
     pacer_auth_client = PacerAuthClient(
         pacer_auth_base_url, logger=app.logger, redact_flag=False
+    )
+    app.logger.info(
+        "PACER auth URL resolved source=%s raw=%s base=%s endpoint=%s",
+        pacer_auth_base_url_source or "default",
+        _safe_log_snippet(pacer_auth_base_url_env or "<unset>"),
+        pacer_auth_base_url,
+        pacer_auth_client.auth_url,
     )
     pacer_token_store_mode = os.environ.get("PACER_TOKEN_STORE", "").strip().lower()
     use_db_tokens = pacer_token_store_mode in {
@@ -8121,7 +8158,11 @@ def create_app() -> Flask:
             session["pacer_redaction_required"] = False
             session["pacer_search_disabled"] = False
             session["pacer_search_disabled_reason"] = None
-            app.logger.warning("PACER auth client failure: %s", str(exc))
+            app.logger.warning(
+                "PACER auth client failure endpoint=%s error=%s",
+                pacer_auth_client.auth_url,
+                str(exc),
+            )
             _set_pacer_auth_feedback(
                 "error", "PACER authorization failed", str(exc) or "PACER authentication failed."
             )
