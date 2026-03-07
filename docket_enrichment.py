@@ -308,6 +308,28 @@ class DocketEnrichmentWorker:
                     )
                 return None
 
+        def _try_multistep_fetch(*, output_format: str) -> Optional[DocketFetchResult]:
+            try:
+                return _fetch_docket_report_multistep(
+                    self._http_client,
+                    case_row["case_link"],
+                    case_number_full=case_row.get("case_number_full"),
+                    case_office=case_row.get("case_office"),
+                    case_year=case_row.get("case_year"),
+                    case_type=case_row.get("case_type"),
+                    case_number=case_row.get("case_number"),
+                    output_format=output_format,
+                )
+            except Exception as exc:
+                if self._logger:
+                    self._logger.warning(
+                        "Multistep docket fetch failed for case %s (%s): %s",
+                        case_row.get("id"),
+                        case_row.get("case_number_full"),
+                        _describe_fetch_exception(exc),
+                    )
+                return None
+
         case_id = _extract_case_id_from_url(case_row.get("case_link") or "")
         formatted_case_number = _format_case_number_for_pacer(
             case_office=case_row.get("case_office"),
@@ -330,13 +352,61 @@ class DocketEnrichmentWorker:
             output_format=self._docket_output,
             url_template=self._docket_url_template,
         )
-        response = _request_with_login_retry(
-            self._http_client,
-            "GET",
-            url,
-            headers={"Accept": "application/xml, text/html"},
-            include_cookie=True,
-        )
+        response = None
+        initial_error: Optional[Exception] = None
+        try:
+            response = _request_with_login_retry(
+                self._http_client,
+                "GET",
+                url,
+                headers={"Accept": "application/xml, text/html"},
+                include_cookie=True,
+            )
+        except Exception as exc:
+            initial_error = exc
+            if case_id:
+                try:
+                    fallback_url = _build_docket_report_url(
+                        case_row["case_link"],
+                        case_number_full=case_row.get("case_number_full"),
+                        case_number=case_row.get("case_number"),
+                        output_format="",
+                        url_template=self._docket_url_template,
+                    )
+                    response = _request_with_login_retry(
+                        self._http_client,
+                        "GET",
+                        fallback_url,
+                        headers={"Accept": "application/xml, text/html"},
+                        include_cookie=True,
+                    )
+                    url = fallback_url
+                    initial_error = None
+                except Exception as fallback_exc:
+                    initial_error = fallback_exc
+
+        if response is None:
+            direct = _try_direct_submit(all_case_ids=case_id)
+            if direct is not None and not _looks_like_docket_shell(
+                direct.body.decode("utf-8", errors="replace")
+            ):
+                return direct
+            direct_comma = _try_direct_submit(
+                all_case_ids=f"{case_id}," if case_id else None
+            )
+            if direct_comma is not None and not _looks_like_docket_shell(
+                direct_comma.body.decode("utf-8", errors="replace")
+            ):
+                return direct_comma
+            multistep = _try_multistep_fetch(output_format=self._docket_output)
+            if multistep is not None and not _looks_like_docket_shell(
+                multistep.body.decode("utf-8", errors="replace")
+            ):
+                return multistep
+            if initial_error is not None:
+                raise initial_error
+            raise RuntimeError("Docket request failed before response.")
+
         content_type = response.headers.get("Content-Type", "")
         if (
             response.status_code == 200
@@ -375,16 +445,7 @@ class DocketEnrichmentWorker:
                     )
                     if forced:
                         return forced
-                    multistep = _fetch_docket_report_multistep(
-                        self._http_client,
-                        case_row["case_link"],
-                        case_number_full=case_row.get("case_number_full"),
-                        case_office=case_row.get("case_office"),
-                        case_year=case_row.get("case_year"),
-                        case_type=case_row.get("case_type"),
-                        case_number=case_row.get("case_number"),
-                        output_format=self._docket_output,
-                    )
+                    multistep = _try_multistep_fetch(output_format=self._docket_output)
                     if multistep:
                         if _looks_like_docket_shell(
                             multistep.body.decode("utf-8", errors="replace")
@@ -392,15 +453,8 @@ class DocketEnrichmentWorker:
                             alternate_output = (
                                 "xml" if str(self._docket_output).lower() == "html" else "html"
                             )
-                            multistep_html = _fetch_docket_report_multistep(
-                                self._http_client,
-                                case_row["case_link"],
-                                case_number_full=case_row.get("case_number_full"),
-                                case_office=case_row.get("case_office"),
-                                case_year=case_row.get("case_year"),
-                                case_type=case_row.get("case_type"),
-                                case_number=case_row.get("case_number"),
-                                output_format=alternate_output,
+                            multistep_html = _try_multistep_fetch(
+                                output_format=alternate_output
                             )
                             if multistep_html:
                                 return multistep_html
