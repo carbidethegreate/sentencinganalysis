@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app import (
     PacerAuthClient,
     PacerAuthResult,
+    _normalize_pacer_base_url,
     _parse_pacer_auth_response_payload,
     build_pacer_auth_payload,
     create_app,
@@ -136,6 +137,20 @@ class PacerAuthTests(unittest.TestCase):
         self.assertEqual(parsed["loginResult"], "13")
         self.assertEqual(parsed["nextGenCSO"], "xml-token")
         self.assertIn("one-time passcode", parsed["errorDescription"])
+
+    def test_normalize_pacer_base_url_strips_auth_suffixes(self):
+        self.assertEqual(
+            _normalize_pacer_base_url("https://pacer.login.uscourts.gov/services/cso-auth"),
+            "https://pacer.login.uscourts.gov",
+        )
+        self.assertEqual(
+            _normalize_pacer_base_url("https://qa-login.uscourts.gov/cso-auth"),
+            "https://qa-login.uscourts.gov",
+        )
+        self.assertEqual(
+            _normalize_pacer_base_url("https://qa-login.uscourts.gov/services"),
+            "https://qa-login.uscourts.gov",
+        )
 
     def test_interpret_success_response(self):
         response = interpret_pacer_auth_response(

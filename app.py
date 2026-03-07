@@ -429,7 +429,15 @@ class PacerAuthResult:
 
 def _normalize_pacer_base_url(base_url: str) -> str:
     normalized = (base_url or "").strip()
-    return normalized[:-1] if normalized.endswith("/") else normalized
+    normalized = normalized[:-1] if normalized.endswith("/") else normalized
+    # Guard against misconfigured endpoint URLs. The base URL should be the host root;
+    # this client appends /services/cso-auth when authenticating.
+    normalized = re.sub(
+        r"(?i)/(?:services/cso-auth|cso-auth|services)$",
+        "",
+        normalized,
+    )
+    return normalized
 
 
 def get_configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
@@ -768,6 +776,10 @@ class PacerAuthClient:
             if status_code in {401, 403}:
                 raise ValueError(
                     "PACER authentication failed (HTTP 403/401). Verify credentials and enter a fresh 2FA code."
+                ) from exc
+            if status_code == 404:
+                raise ValueError(
+                    "PACER auth endpoint returned HTTP 404. Verify PACER_AUTH_BASE_URL is set to the host root (for example https://pacer.login.uscourts.gov)."
                 ) from exc
             if status_code >= 500:
                 raise ValueError(
