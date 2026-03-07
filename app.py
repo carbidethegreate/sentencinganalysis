@@ -793,6 +793,9 @@ class PacerAuthClient:
             if error_payload:
                 result = interpret_pacer_auth_response(error_payload, otp_code)
                 return result
+            fallback_result = self._authenticate_with_requests_fallback(payload, otp_code)
+            if fallback_result:
+                return fallback_result
             if self.logger:
                 self.logger.warning(
                     "PACER auth HTTP error with unparseable body status=%s endpoint=%s bodySnippet=%s",
@@ -828,6 +831,56 @@ class PacerAuthClient:
             raise ValueError("PACER authentication failed.")
         self._log_response(status_code, response_payload)
         return interpret_pacer_auth_response(response_payload, otp_code)
+
+    def _authenticate_with_requests_fallback(
+        self, payload: Dict[str, str], otp_code: Optional[str]
+    ) -> Optional[PacerAuthResult]:
+        # Retry with requests when urllib receives a non-JSON/XML HTTP error.
+        # This mitigates intermittent edge/CDN responses that differ by HTTP client.
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (compatible; CourtDataPro/1.0; +https://courtdatapro.com)"
+            ),
+        }
+        try:
+            response = requests.post(
+                self.auth_url,
+                data=json.dumps(payload),
+                headers=headers,
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            if self.logger:
+                self.logger.warning(
+                    "PACER auth requests fallback failed endpoint=%s error=%s",
+                    self.auth_url,
+                    str(exc),
+                )
+            return None
+
+        status_code = int(response.status_code)
+        response_body = response.text or ""
+        parsed_payload = _parse_pacer_auth_response_payload(response_body)
+        if parsed_payload:
+            if self.logger:
+                self.logger.info(
+                    "PACER auth requests fallback succeeded status=%s endpoint=%s",
+                    status_code,
+                    self.auth_url,
+                )
+            self._log_response(status_code, parsed_payload)
+            return interpret_pacer_auth_response(parsed_payload, otp_code)
+
+        if self.logger:
+            self.logger.warning(
+                "PACER auth requests fallback unparseable status=%s endpoint=%s bodySnippet=%s",
+                status_code,
+                self.auth_url,
+                _safe_log_snippet(response_body),
+            )
+        return None
 
     def _log_response(self, status_code: int, response_payload: Dict[str, Any]) -> None:
         if not self.logger:

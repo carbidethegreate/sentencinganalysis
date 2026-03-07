@@ -34,6 +34,12 @@ class DummyResponse:
         return False
 
 
+class DummyRequestsResponse:
+    def __init__(self, status_code: int, text: str):
+        self.status_code = status_code
+        self.text = text
+
+
 class PacerAuthTests(unittest.TestCase):
     def test_build_payload_includes_optional_fields(self):
         payload = build_pacer_auth_payload(
@@ -187,14 +193,45 @@ class PacerAuthTests(unittest.TestCase):
         )
 
         with patch("app.urllib.request.urlopen", side_effect=http_error):
-            client = PacerAuthClient("https://pacer.login.uscourts.gov/cso-auth")
-            with self.assertRaises(ValueError) as ctx:
-                client.authenticate("user", "pass")
+            with patch(
+                "app.requests.post",
+                return_value=DummyRequestsResponse(404, "<html>Object not found</html>"),
+            ):
+                client = PacerAuthClient("https://pacer.login.uscourts.gov/cso-auth")
+                with self.assertRaises(ValueError) as ctx:
+                    client.authenticate("user", "pass")
 
         self.assertIn(
             "https://pacer.login.uscourts.gov/services/cso-auth",
             str(ctx.exception),
         )
+
+    def test_client_404_retries_with_requests_fallback(self):
+        http_error = urllib.error.HTTPError(
+            url="https://pacer.login.uscourts.gov/services/cso-auth",
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=io.BytesIO(b"<html><body>Object not found!</body></html>"),
+        )
+        fallback_payload = json.dumps(
+            {
+                "loginResult": "0",
+                "nextGenCSO": "fallback-token",
+                "errorDescription": "",
+            }
+        )
+
+        with patch("app.urllib.request.urlopen", side_effect=http_error):
+            with patch(
+                "app.requests.post",
+                return_value=DummyRequestsResponse(200, fallback_payload),
+            ):
+                client = PacerAuthClient("https://pacer.login.uscourts.gov")
+                result = client.authenticate("user", "pass")
+
+        self.assertTrue(result.can_proceed)
+        self.assertEqual(result.token, "fallback-token")
 
     def test_interpret_success_response(self):
         response = interpret_pacer_auth_response(
