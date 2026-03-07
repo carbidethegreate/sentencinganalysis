@@ -5,6 +5,7 @@ from unittest.mock import patch
 from app import (
     PacerAuthClient,
     PacerAuthResult,
+    _parse_pacer_auth_response_payload,
     build_pacer_auth_payload,
     create_app,
     interpret_pacer_auth_response,
@@ -102,6 +103,39 @@ class PacerAuthTests(unittest.TestCase):
 
         self.assertFalse(result.can_proceed)
         self.assertTrue(result.needs_redaction_ack)
+
+    def test_client_parses_xml_response(self):
+        def fake_urlopen(request, timeout=30):
+            response_payload = (
+                b'<?xml version="1.0" encoding="UTF-8"?>'
+                b"<CsoAuth>"
+                b"<nextGenCSO>token-from-xml</nextGenCSO>"
+                b"<loginResult>0</loginResult>"
+                b"<errorDescription></errorDescription>"
+                b"</CsoAuth>"
+            )
+            return DummyResponse(response_payload)
+
+        with patch("app.urllib.request.urlopen", side_effect=fake_urlopen):
+            client = PacerAuthClient("https://qa-login.uscourts.gov")
+            result = client.authenticate("user", "pass")
+
+        self.assertTrue(result.can_proceed)
+        self.assertEqual(result.token, "token-from-xml")
+
+    def test_parse_pacer_auth_payload_from_xml(self):
+        payload = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<CsoAuth>"
+            "<nextGenCSO>xml-token</nextGenCSO>"
+            "<loginResult>13</loginResult>"
+            "<errorDescription>Invalid username, password, or one-time passcode.</errorDescription>"
+            "</CsoAuth>"
+        )
+        parsed = _parse_pacer_auth_response_payload(payload)
+        self.assertEqual(parsed["loginResult"], "13")
+        self.assertEqual(parsed["nextGenCSO"], "xml-token")
+        self.assertIn("one-time passcode", parsed["errorDescription"])
 
     def test_interpret_success_response(self):
         response = interpret_pacer_auth_response(

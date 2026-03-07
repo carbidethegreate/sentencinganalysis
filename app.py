@@ -15,6 +15,7 @@ import traceback
 import urllib.error
 import urllib.request
 import hashlib
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date, datetime
 from functools import lru_cache, wraps
@@ -579,6 +580,56 @@ def _safe_json_loads(payload: str) -> Dict[str, Any]:
         return {}
 
 
+def _extract_xml_text(root: ET.Element, local_name: str) -> str:
+    for elem in root.iter():
+        tag_name = str(elem.tag)
+        if tag_name == local_name or tag_name.endswith(f"}}{local_name}"):
+            return (elem.text or "").strip()
+    return ""
+
+
+def _safe_xml_pacer_auth_loads(payload: str) -> Dict[str, Any]:
+    if not payload:
+        return {}
+    text = payload.strip()
+    if not text or "<" not in text or ">" not in text:
+        return {}
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return {}
+    login_result = _extract_xml_text(root, "loginResult")
+    next_gen_cso = _extract_xml_text(root, "nextGenCSO")
+    error_description = _extract_xml_text(root, "errorDescription")
+    if not (login_result or next_gen_cso or error_description):
+        return {}
+    return {
+        "loginResult": login_result,
+        "nextGenCSO": next_gen_cso,
+        "errorDescription": error_description,
+    }
+
+
+def _parse_pacer_auth_response_payload(payload: str) -> Dict[str, Any]:
+    parsed_json = _safe_json_loads(payload)
+    if parsed_json:
+        return parsed_json
+    parsed_xml = _safe_xml_pacer_auth_loads(payload)
+    if parsed_xml:
+        return parsed_xml
+    return {}
+
+
+def _safe_log_snippet(payload: str, max_chars: int = 280) -> str:
+    if not payload:
+        return "<empty>"
+    compact = re.sub(r"\s+", " ", str(payload)).strip()
+    compact = redact_tokens(compact)
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3] + "..."
+
+
 def build_pacer_auth_payload(
     login_id: str,
     password: str,
@@ -703,17 +754,37 @@ class PacerAuthClient:
         except urllib.error.HTTPError as exc:
             status_code = exc.code
             error_body = exc.read().decode("utf-8", errors="ignore")
-            error_payload = _safe_json_loads(error_body)
+            error_payload = _parse_pacer_auth_response_payload(error_body)
             self._log_response(status_code, error_payload)
-            result = interpret_pacer_auth_response(error_payload, otp_code)
-            if result.error_description:
+            if error_payload:
+                result = interpret_pacer_auth_response(error_payload, otp_code)
                 return result
-            raise ValueError("PACER authentication failed.") from exc
+            if self.logger:
+                self.logger.warning(
+                    "PACER auth HTTP error with unparseable body status=%s bodySnippet=%s",
+                    status_code,
+                    _safe_log_snippet(error_body),
+                )
+            if status_code in {401, 403}:
+                raise ValueError(
+                    "PACER authentication failed (HTTP 403/401). Verify credentials and enter a fresh 2FA code."
+                ) from exc
+            if status_code >= 500:
+                raise ValueError(
+                    "PACER authentication service is temporarily unavailable. Please try again."
+                ) from exc
+            raise ValueError(f"PACER authentication failed (HTTP {status_code}).") from exc
         except urllib.error.URLError as exc:
             raise ValueError("PACER authentication failed. Please try again.") from exc
 
-        response_payload = _safe_json_loads(response_body)
+        response_payload = _parse_pacer_auth_response_payload(response_body)
         if not response_payload:
+            if self.logger:
+                self.logger.warning(
+                    "PACER auth response was unparseable status=%s bodySnippet=%s",
+                    status_code,
+                    _safe_log_snippet(response_body),
+                )
             raise ValueError("PACER authentication failed.")
         self._log_response(status_code, response_payload)
         return interpret_pacer_auth_response(response_payload, otp_code)
@@ -8038,6 +8109,7 @@ def create_app() -> Flask:
             session["pacer_redaction_required"] = False
             session["pacer_search_disabled"] = False
             session["pacer_search_disabled_reason"] = None
+            app.logger.warning("PACER auth client failure: %s", str(exc))
             _set_pacer_auth_feedback(
                 "error", "PACER authorization failed", str(exc) or "PACER authentication failed."
             )
