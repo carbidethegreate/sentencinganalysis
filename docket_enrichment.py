@@ -14,6 +14,7 @@ from xml.etree import ElementTree
 from lxml import html as lxml_html
 from lxml import etree as lxml_etree
 from sqlalchemy import Table, inspect, select, update, or_
+from sqlalchemy.exc import IntegrityError
 
 
 TERMINAL_FAILURE_MESSAGE = "endpoint not yet implemented"
@@ -3782,13 +3783,35 @@ def _upsert_case_field(
             .values(**payload)
         )
         return
-    conn.execute(
-        pcl_case_fields.insert().values(
-            case_id=case_id,
-            field_name=field_name,
-            field_value_text=field_value_text,
-            field_value_json=field_value_json,
-            created_at=now,
-            updated_at=now,
+    try:
+        conn.execute(
+            pcl_case_fields.insert().values(
+                case_id=case_id,
+                field_name=field_name,
+                field_value_text=field_value_text,
+                field_value_json=field_value_json,
+                created_at=now,
+                updated_at=now,
+            )
         )
-    )
+        return
+    except IntegrityError:
+        # Concurrent workers can race on (case_id, field_name). Recover by
+        # updating the winner row instead of crashing the worker process.
+        raced = (
+            conn.execute(
+                select(pcl_case_fields.c.id).where(
+                    (pcl_case_fields.c.case_id == case_id)
+                    & (pcl_case_fields.c.field_name == field_name)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if not raced:
+            raise
+        conn.execute(
+            update(pcl_case_fields)
+            .where(pcl_case_fields.c.id == raced["id"])
+            .values(**payload)
+        )
