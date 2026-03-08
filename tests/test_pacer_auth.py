@@ -8,6 +8,7 @@ from app import (
     PacerAuthClient,
     PacerAuthResult,
     _build_pacer_auth_url,
+    _canonicalize_pacer_auth_response_payload,
     _normalize_pacer_base_url,
     _parse_pacer_auth_response_payload,
     build_pacer_auth_payload,
@@ -149,6 +150,17 @@ class PacerAuthTests(unittest.TestCase):
         self.assertEqual(parsed["nextGenCSO"], "xml-token")
         self.assertIn("one-time passcode", parsed["errorDescription"])
 
+    def test_canonicalize_pacer_auth_payload_supports_nested_message_format(self):
+        payload = {
+            "status": 401,
+            "errors": [{"message": "Invalid one-time passcode."}],
+            "meta": {"login_result": "13"},
+        }
+        normalized = _canonicalize_pacer_auth_response_payload(payload)
+        self.assertEqual(normalized["loginResult"], "13")
+        self.assertEqual(normalized["nextGenCSO"], "")
+        self.assertEqual(normalized["errorDescription"], "Invalid one-time passcode.")
+
     def test_normalize_pacer_base_url_strips_auth_suffixes(self):
         self.assertEqual(
             _normalize_pacer_base_url("https://pacer.login.uscourts.gov/services/cso-auth"),
@@ -280,6 +292,19 @@ class PacerAuthTests(unittest.TestCase):
             None,
         )
         self.assertTrue(response.needs_otp)
+
+    def test_interpret_supports_alternative_response_keys(self):
+        response = interpret_pacer_auth_response(
+            {
+                "auth": {
+                    "login_result": "0",
+                    "token": "alt-token",
+                }
+            },
+            None,
+        )
+        self.assertTrue(response.can_proceed)
+        self.assertEqual(response.token, "alt-token")
 
 
 class FederalDataDashboardTests(unittest.TestCase):

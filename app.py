@@ -639,9 +639,12 @@ def _pacer_mentions_redaction(error_description: str) -> bool:
 
 def _safe_json_loads(payload: str) -> Dict[str, Any]:
     try:
-        return json.loads(payload)
+        parsed = json.loads(payload)
     except json.JSONDecodeError:
         return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
 
 
 def _extract_xml_text(root: ET.Element, local_name: str) -> str:
@@ -694,6 +697,80 @@ def _safe_log_snippet(payload: str, max_chars: int = 280) -> str:
     return compact[: max_chars - 3] + "..."
 
 
+def _first_non_empty_value(payload: Any, candidate_keys: Sequence[str], *, max_depth: int = 4) -> Any:
+    """Find a non-empty value by key (case-insensitive) in nested dict/list payloads."""
+
+    if max_depth < 0:
+        return None
+    lowered_candidates = {str(key).lower() for key in candidate_keys}
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if str(key).lower() in lowered_candidates:
+                if value not in (None, "", []):
+                    return value
+        for value in payload.values():
+            nested = _first_non_empty_value(value, candidate_keys, max_depth=max_depth - 1)
+            if nested not in (None, "", []):
+                return nested
+    elif isinstance(payload, list):
+        for item in payload:
+            nested = _first_non_empty_value(item, candidate_keys, max_depth=max_depth - 1)
+            if nested not in (None, "", []):
+                return nested
+    return None
+
+
+def _canonicalize_pacer_auth_response_payload(response_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize PACER auth payload variants to expected field names."""
+
+    if not isinstance(response_payload, dict) or not response_payload:
+        return {}
+
+    login_result = _first_non_empty_value(
+        response_payload,
+        (
+            "loginResult",
+            "login_result",
+            "loginresult",
+            "resultCode",
+            "result_code",
+        ),
+    )
+    token = _first_non_empty_value(
+        response_payload,
+        (
+            "nextGenCSO",
+            "nextgenCSO",
+            "next_gen_cso",
+            "token",
+            "csoToken",
+            "cso_token",
+        ),
+    )
+    error_description = _first_non_empty_value(
+        response_payload,
+        (
+            "errorDescription",
+            "error_description",
+            "errorMessage",
+            "error_message",
+            "error",
+            "message",
+            "detail",
+            "statusMessage",
+            "status_message",
+        ),
+    )
+
+    return {
+        "loginResult": str(login_result).strip() if login_result is not None else "",
+        "nextGenCSO": str(token).strip() if token is not None else "",
+        "errorDescription": str(error_description).strip()
+        if error_description is not None
+        else "",
+    }
+
+
 def build_pacer_auth_payload(
     login_id: str,
     password: str,
@@ -739,9 +816,10 @@ def _pacer_requires_client_code(error_description: str) -> bool:
 def interpret_pacer_auth_response(
     response_payload: Dict[str, Any], otp_code: Optional[str]
 ) -> PacerAuthResult:
-    login_result = str(response_payload.get("loginResult", "")).strip()
-    token = response_payload.get("nextGenCSO") or ""
-    error_description = (response_payload.get("errorDescription") or "").strip()
+    normalized_payload = _canonicalize_pacer_auth_response_payload(response_payload)
+    login_result = str(normalized_payload.get("loginResult", "")).strip()
+    token = (normalized_payload.get("nextGenCSO") or "").strip()
+    error_description = (normalized_payload.get("errorDescription") or "").strip()
     needs_otp = _pacer_requires_otp(error_description, otp_code)
     needs_client_code = _pacer_requires_client_code(error_description)
     needs_redaction_ack = bool(
@@ -824,10 +902,14 @@ class PacerAuthClient:
         except urllib.error.HTTPError as exc:
             status_code = exc.code
             error_body = exc.read().decode("utf-8", errors="ignore")
-            error_payload = _parse_pacer_auth_response_payload(error_body)
+            raw_error_payload = _parse_pacer_auth_response_payload(error_body)
+            error_payload = _canonicalize_pacer_auth_response_payload(raw_error_payload)
             self._log_response(status_code, error_payload)
-            if error_payload:
+            if error_payload and any(error_payload.values()):
                 result = interpret_pacer_auth_response(error_payload, otp_code)
+                if not result.login_result and status_code >= 400:
+                    message = result.error_description or f"HTTP {status_code}"
+                    raise ValueError(f"PACER authentication failed ({message}).") from exc
                 return result
             fallback_result = self._authenticate_with_requests_fallback(payload, otp_code)
             if fallback_result:
@@ -855,8 +937,9 @@ class PacerAuthClient:
         except urllib.error.URLError as exc:
             raise ValueError("PACER authentication failed. Please try again.") from exc
 
-        response_payload = _parse_pacer_auth_response_payload(response_body)
-        if not response_payload:
+        raw_response_payload = _parse_pacer_auth_response_payload(response_body)
+        response_payload = _canonicalize_pacer_auth_response_payload(raw_response_payload)
+        if not response_payload or not any(response_payload.values()):
             if self.logger:
                 self.logger.warning(
                     "PACER auth response was unparseable status=%s endpoint=%s bodySnippet=%s",
@@ -866,7 +949,10 @@ class PacerAuthClient:
                 )
             raise ValueError("PACER authentication failed.")
         self._log_response(status_code, response_payload)
-        return interpret_pacer_auth_response(response_payload, otp_code)
+        result = interpret_pacer_auth_response(response_payload, otp_code)
+        if not result.login_result and not result.token and not result.error_description:
+            raise ValueError("PACER authentication returned an unrecognized response format.")
+        return result
 
     def _authenticate_with_requests_fallback(
         self, payload: Dict[str, str], otp_code: Optional[str]
@@ -898,8 +984,9 @@ class PacerAuthClient:
 
         status_code = int(response.status_code)
         response_body = response.text or ""
-        parsed_payload = _parse_pacer_auth_response_payload(response_body)
-        if parsed_payload:
+        raw_parsed_payload = _parse_pacer_auth_response_payload(response_body)
+        parsed_payload = _canonicalize_pacer_auth_response_payload(raw_parsed_payload)
+        if parsed_payload and any(parsed_payload.values()):
             if self.logger:
                 self.logger.info(
                     "PACER auth requests fallback succeeded status=%s endpoint=%s",
@@ -921,8 +1008,9 @@ class PacerAuthClient:
     def _log_response(self, status_code: int, response_payload: Dict[str, Any]) -> None:
         if not self.logger:
             return
-        login_result = str(response_payload.get("loginResult", "")).strip() or "unknown"
-        token_present = bool(response_payload.get("nextGenCSO"))
+        normalized_payload = _canonicalize_pacer_auth_response_payload(response_payload)
+        login_result = str(normalized_payload.get("loginResult", "")).strip() or "unknown"
+        token_present = bool(normalized_payload.get("nextGenCSO"))
         self.logger.info(
             "PACER auth response status=%s loginResult=%s tokenPresent=%s",
             status_code,
@@ -1461,6 +1549,20 @@ def create_app() -> Flask:
         )
     except ValueError as exc:
         app.logger.error("PACER environment mismatch: %s", exc)
+        aligned_auth_base_url = pacer_auth_base_url
+        inferred_pcl_env = infer_pacer_env(pcl_base_url_candidate)
+        if inferred_pcl_env == ENV_PROD:
+            aligned_auth_base_url = DEFAULT_PACER_AUTH_BASE_URL_PROD
+        elif inferred_pcl_env == ENV_QA:
+            aligned_auth_base_url = DEFAULT_PACER_AUTH_BASE_URL
+        if aligned_auth_base_url != pacer_auth_base_url:
+            app.logger.warning(
+                "PACER auth/PCL mismatch auto-corrected: auth_base=%s -> %s (matching PCL env=%s).",
+                pacer_auth_base_url,
+                aligned_auth_base_url,
+                inferred_pcl_env,
+            )
+            pacer_auth_base_url = aligned_auth_base_url
         pacer_env_config = build_pacer_environment_config(
             pacer_auth_base_url,
             pcl_base_url_candidate,
@@ -8453,22 +8555,28 @@ def create_app() -> Flask:
                     }
                 )
             error_description = result.error_description or "PACER authentication failed."
-            login_result = result.login_result or "unknown"
+            login_result = (result.login_result or "").strip()
+            login_result_label = login_result or "unknown"
             app.logger.warning(
                 "PACER auth failed loginResult=%s needsOtp=%s needsClientCode=%s needsRedactionAck=%s searchDisabled=%s hasOtpProvided=%s",
-                login_result,
+                login_result_label,
                 bool(result.needs_otp),
                 bool(result.needs_client_code),
                 bool(result.needs_redaction_ack),
                 bool(result.search_disabled),
                 bool(otp_code),
             )
+            feedback_message = (
+                f"{error_description} (loginResult: {login_result_label})"
+                if login_result
+                else error_description
+            )
             _set_pacer_auth_feedback(
                 "error",
                 "PACER authorization failed",
-                f"{error_description} (loginResult: {login_result})",
+                feedback_message,
             )
-            flash(f"{error_description} (loginResult: {login_result})", "error")
+            flash(feedback_message, "error")
             if login_result == "13" and not otp_code:
                 flash(
                     "If your PACER account is enrolled in MFA, a one time passcode (2FA code) is required.",
