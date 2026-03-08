@@ -138,7 +138,11 @@ def _run_document_text_jobs_once(app: Any) -> int:
     if pending <= 0:
         return 0
 
-    db_url = str(app.engine.url)
+    db_url = app.engine.url.render_as_string(hide_password=False)
+    if db_url.startswith("postgresql+psycopg://"):
+        db_url = "postgresql://" + db_url.split("://", 1)[1]
+    elif db_url.startswith("postgresql+psycopg2://"):
+        db_url = "postgresql://" + db_url.split("://", 1)[1]
     script_path = PROJECT_ROOT / "scripts" / "extract_docket_document_texts.py"
     cmd = [
         sys.executable,
