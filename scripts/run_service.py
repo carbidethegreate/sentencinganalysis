@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import os
+import json
+import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 # Ensure project root is importable when this file is invoked directly.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +32,23 @@ def _as_int(name: str, default: int, minimum: int = 1) -> int:
     except ValueError:
         return default
     return max(minimum, parsed)
+
+
+def _as_float(name: str, default: float) -> float:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _as_bool(name: str, default: bool) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on", "y"}
 
 
 def _run_web() -> None:
@@ -79,6 +99,101 @@ def _run_document_jobs_once(app: Any) -> int:
     return processed
 
 
+def _run_document_text_jobs_once(app: Any) -> int:
+    if not _as_bool("DOCUMENT_TEXT_WORKER_ENABLED", True):
+        return 0
+    if app.engine.dialect.name != "postgresql":
+        return 0
+    items_table = app.pcl_tables.get("docket_document_items")
+    if items_table is None:
+        return 0
+
+    max_items = _as_int("DOCUMENT_TEXT_WORKER_LIMIT", 25, minimum=1)
+    retry_below_confidence = _as_float("DOCUMENT_TEXT_RETRY_BELOW_CONFIDENCE", 0.88)
+    openai_threshold = _as_float("DOCUMENT_TEXT_OPENAI_THRESHOLD", 0.90)
+    openai_verify = _as_bool("DOCUMENT_TEXT_OPENAI_VERIFY", True)
+
+    ocr_max_pages_raw = (os.environ.get("DOCUMENT_TEXT_OCR_MAX_PAGES") or "").strip()
+    try:
+        ocr_max_pages = int(ocr_max_pages_raw) if ocr_max_pages_raw else 0
+    except ValueError:
+        ocr_max_pages = 0
+    ocr_max_pages = max(0, ocr_max_pages)
+
+    with app.engine.begin() as conn:
+        pending = int(
+            conn.execute(
+                select(func.count()).select_from(items_table).where(
+                    items_table.c.status == "downloaded",
+                    or_(
+                        items_table.c.text_status.is_(None),
+                        items_table.c.text_status.in_(["queued", "processing", "retry"]),
+                        func.coalesce(items_table.c.text_confidence, 0.0)
+                        < retry_below_confidence,
+                    ),
+                )
+            ).scalar()
+            or 0
+        )
+    if pending <= 0:
+        return 0
+
+    db_url = str(app.engine.url)
+    script_path = PROJECT_ROOT / "scripts" / "extract_docket_document_texts.py"
+    cmd = [
+        sys.executable,
+        str(script_path),
+        "--db-url",
+        db_url,
+        "--limit",
+        str(max_items),
+        "--retry-below-confidence",
+        str(retry_below_confidence),
+        "--openai-threshold",
+        str(openai_threshold),
+        "--ocr-max-pages",
+        str(ocr_max_pages),
+    ]
+    if openai_verify:
+        cmd.append("--openai-verify")
+
+    timeout_seconds = _as_int("DOCUMENT_TEXT_WORKER_TIMEOUT_SECONDS", 1200, minimum=30)
+    done = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+    output = (done.stdout or "").strip()
+    errors = (done.stderr or "").strip()
+    summary: dict[str, Any] = {}
+    if output:
+        match = re.search(r"(\{[\s\S]*\})\s*$", output)
+        if match:
+            try:
+                summary = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                summary = {}
+    processed = int(summary.get("processed") or 0)
+    failed = int(summary.get("failed") or 0)
+    if done.returncode != 0 and processed == 0 and failed == 0:
+        app.logger.warning(
+            "Document text extraction script failed (exit=%s). stderr=%s stdout=%s",
+            done.returncode,
+            errors[-1200:],
+            output[-1200:],
+        )
+        return 0
+    if processed or failed:
+        app.logger.info(
+            "Document text extraction: processed=%s failed=%s pending_before=%s",
+            processed,
+            failed,
+            pending,
+        )
+    return processed + failed
+
+
 def _run_workers_once(app: Any) -> int:
     total_processed = 0
 
@@ -104,6 +219,7 @@ def _run_workers_once(app: Any) -> int:
     )
     total_processed += docket_worker.run_once(max_jobs=max_jobs)
     total_processed += _run_document_jobs_once(app)
+    total_processed += _run_document_text_jobs_once(app)
     return total_processed
 
 

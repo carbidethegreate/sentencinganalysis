@@ -32,9 +32,17 @@ from typing import (
     Set,
     Tuple,
 )
-from urllib.parse import quote_plus, urlencode, urlsplit
+from urllib.parse import quote, quote_plus, urlencode, urlsplit
 
 import requests
+try:
+    import boto3  # type: ignore
+except Exception:  # pragma: no cover
+    boto3 = None
+try:
+    from botocore.config import Config  # type: ignore
+except Exception:  # pragma: no cover
+    Config = None
 from flask import (
     Flask,
     abort,
@@ -46,6 +54,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     session,
     url_for,
 )
@@ -142,6 +151,7 @@ from pcl_queries import (
     estimate_docket_cost_for_filters,
 )
 from sentencing_queries import list_sentencing_events_by_judge, parse_sentencing_filters
+from judge_deep_research import DeepResearchFilters, run_deep_research
 from federal_courts_sync import (
     FEDERAL_COURTS_SOURCE_URL,
     FederalCourtsSyncError,
@@ -458,6 +468,32 @@ def _build_pacer_auth_url(base_url: str) -> str:
     if not normalized:
         return "/services/cso-auth"
     return f"{normalized}/services/cso-auth"
+
+
+def _normalize_pcl_base_url(base_url: str) -> str:
+    """Normalize PCL base URL while preserving the API path segment.
+
+    PACER auth base URLs should be reduced to host-root, but PCL requires
+    `/pcl-public-api/rest` in the base URL. This helper keeps that path.
+    """
+
+    normalized = (base_url or "").strip().strip("'").strip('"')
+    if not normalized:
+        return ""
+
+    parsed = urlsplit(normalized if "://" in normalized else f"https://{normalized}")
+    host = (parsed.netloc or parsed.path.split("/", 1)[0]).strip()
+    if not host:
+        return normalized
+
+    scheme = parsed.scheme if parsed.netloc else "https"
+    path = parsed.path if parsed.netloc else ""
+    path = (path or "").rstrip("/")
+    if not path:
+        # Host-root values are not sufficient for PCL requests.
+        path = "/pcl-public-api/rest"
+
+    return f"{scheme}://{host}{path}"
 
 
 def get_configured_pacer_credentials() -> Tuple[Optional[str], Optional[str]]:
@@ -1283,6 +1319,15 @@ def create_app() -> Flask:
         {
             "request_method": "TEXT DEFAULT 'GET' NOT NULL",
             "request_payload_json": "TEXT",
+            "text_status": "TEXT",
+            "text_path": "TEXT",
+            "text_engine": "TEXT",
+            "text_confidence": "DOUBLE PRECISION",
+            "text_content": "TEXT",
+            "text_char_count": "INTEGER",
+            "text_word_count": "INTEGER",
+            "text_meta_json": "TEXT",
+            "text_extracted_at": "TIMESTAMPTZ",
         },
         label="docket_document_items",
     )
@@ -1394,7 +1439,7 @@ def create_app() -> Flask:
     pacer_auth_base_url = _normalize_pacer_base_url(
         pacer_auth_base_url_env or DEFAULT_PACER_AUTH_BASE_URL
     )
-    pcl_base_url_candidate = _normalize_pacer_base_url(
+    pcl_base_url_candidate = _normalize_pcl_base_url(
         pcl_base_url_env or DEFAULT_PCL_BASE_URL
     )
     if not pacer_auth_base_url_env and pcl_base_url_candidate:
@@ -2848,6 +2893,114 @@ def create_app() -> Flask:
             except json.JSONDecodeError:
                 return None
         return None
+
+    def _parse_s3_uri(value: str) -> Tuple[Optional[str], Optional[str]]:
+        raw = (value or "").strip()
+        if not raw.startswith("s3://"):
+            return None, None
+        body = raw[5:]
+        if "/" not in body:
+            return None, None
+        bucket, key = body.split("/", 1)
+        bucket = bucket.strip()
+        key = key.strip()
+        if not bucket or not key:
+            return None, None
+        return bucket, key
+
+    def _build_public_s3_url(bucket: str, key: str) -> Optional[str]:
+        base = (os.environ.get("PACER_DOCUMENTS_PUBLIC_BASE_URL") or "").strip()
+        if not base:
+            return None
+        return f"{base.rstrip('/')}/{quote(key, safe='/')}"
+
+    def _build_document_s3_client():
+        if boto3 is None:
+            return None
+        endpoint_url = (
+            os.environ.get("PACER_DOCUMENTS_S3_ENDPOINT_URL")
+            or os.environ.get("AWS_ENDPOINT_URL_S3")
+            or ""
+        ).strip() or None
+        region_name = (
+            os.environ.get("PACER_DOCUMENTS_S3_REGION")
+            or os.environ.get("AWS_REGION")
+            or ""
+        ).strip() or None
+        access_key = (
+            os.environ.get("PACER_DOCUMENTS_S3_ACCESS_KEY_ID")
+            or os.environ.get("AWS_ACCESS_KEY_ID")
+            or ""
+        ).strip() or None
+        secret_key = (
+            os.environ.get("PACER_DOCUMENTS_S3_SECRET_ACCESS_KEY")
+            or os.environ.get("AWS_SECRET_ACCESS_KEY")
+            or ""
+        ).strip() or None
+
+        kwargs: Dict[str, Any] = {}
+        if endpoint_url:
+            kwargs["endpoint_url"] = endpoint_url
+        if region_name:
+            kwargs["region_name"] = region_name
+        if access_key and secret_key:
+            kwargs["aws_access_key_id"] = access_key
+            kwargs["aws_secret_access_key"] = secret_key
+        if Config is not None:
+            kwargs["config"] = Config(signature_version="s3v4")
+        try:
+            return boto3.client("s3", **kwargs)
+        except Exception:
+            app.logger.exception("Unable to build S3 client for PACER documents.")
+            return None
+
+    def _resolve_local_document_path(path_value: str) -> Optional[Path]:
+        raw = (path_value or "").strip()
+        if not raw:
+            return None
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = (Path(os.getcwd()) / path).resolve()
+        else:
+            path = path.resolve()
+        if not path.exists() or not path.is_file():
+            return None
+        return path
+
+    def _serve_document_storage_path(path_value: str, *, fallback_name: str) -> Any:
+        bucket, key = _parse_s3_uri(path_value)
+        if bucket and key:
+            public_url = _build_public_s3_url(bucket, key)
+            if public_url:
+                return redirect(public_url)
+            s3_client = _build_document_s3_client()
+            if s3_client is None:
+                abort(404)
+            expires_raw = (os.environ.get("PACER_DOCUMENTS_PRESIGN_SECONDS") or "900").strip()
+            try:
+                expires = max(60, int(expires_raw))
+            except ValueError:
+                expires = 900
+            try:
+                url = s3_client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": bucket, "Key": key},
+                    ExpiresIn=expires,
+                )
+            except Exception:
+                app.logger.exception("Unable to generate document presigned URL.")
+                abort(404)
+            return redirect(url)
+
+        local_path = _resolve_local_document_path(path_value)
+        if local_path is None:
+            abort(404)
+        return send_file(
+            local_path,
+            as_attachment=False,
+            download_name=fallback_name or local_path.name,
+            conditional=True,
+        )
 
     def _latest_job_status(
         conn: Any,
@@ -8939,10 +9092,89 @@ def create_app() -> Flask:
             build_info=build_info,
         )
 
+    def _parse_checkbox_flag(value: Optional[str], *, default: bool = False) -> bool:
+        if value is None:
+            return default
+        return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+    def _build_ask_loulou_form_defaults() -> Dict[str, Any]:
+        return {
+            "question": "",
+            "judge_name": "",
+            "person_name": "",
+            "court_id": "",
+            "date_from": "",
+            "date_to": "",
+            "criminal_only": "1",
+            "include_docket_entries": "1",
+            "include_document_text": "1",
+            "include_sentencing_events": "1",
+            "only_reduction_signals": "",
+            "min_text_confidence": "0.85",
+            "max_cases": "250",
+            "max_evidence_per_case": "8",
+        }
+
+    def _parse_ask_loulou_filters(raw: Dict[str, str]) -> Tuple[DeepResearchFilters, List[str]]:
+        errors: List[str] = []
+        question = (raw.get("question") or "").strip()
+        if not question:
+            errors.append("Enter a research question for Ask LouLou.")
+            question = "Analyze sentencing patterns and reduction signals."
+
+        judge_name = (raw.get("judge_name") or "").strip() or None
+        person_name = (raw.get("person_name") or "").strip() or None
+        court_id = (raw.get("court_id") or "").strip().lower() or None
+        date_from = _parse_iso_date((raw.get("date_from") or "").strip())
+        date_to = _parse_iso_date((raw.get("date_to") or "").strip())
+        if date_from and date_to and date_from > date_to:
+            date_from, date_to = date_to, date_from
+
+        min_text_confidence = _parse_optional_float(raw.get("min_text_confidence"))
+        if min_text_confidence is None:
+            min_text_confidence = 0.85
+        min_text_confidence = max(0.0, min(1.0, min_text_confidence))
+
+        max_cases = _parse_optional_int(raw.get("max_cases"))
+        if max_cases is None:
+            max_cases = 250
+        max_cases = max(1, min(500, max_cases))
+
+        max_evidence_per_case = _parse_optional_int(raw.get("max_evidence_per_case"))
+        if max_evidence_per_case is None:
+            max_evidence_per_case = 8
+        max_evidence_per_case = max(1, min(20, max_evidence_per_case))
+
+        filters = DeepResearchFilters(
+            question=question,
+            judge_name=judge_name,
+            person_name=person_name,
+            court_id=court_id,
+            date_from=date_from,
+            date_to=date_to,
+            criminal_only=_parse_checkbox_flag(raw.get("criminal_only"), default=True),
+            include_docket_entries=_parse_checkbox_flag(
+                raw.get("include_docket_entries"), default=True
+            ),
+            include_document_text=_parse_checkbox_flag(
+                raw.get("include_document_text"), default=True
+            ),
+            include_sentencing_events=_parse_checkbox_flag(
+                raw.get("include_sentencing_events"), default=True
+            ),
+            only_reduction_signals=_parse_checkbox_flag(
+                raw.get("only_reduction_signals"), default=False
+            ),
+            min_text_confidence=min_text_confidence,
+            max_cases=max_cases,
+            max_evidence_per_case=max_evidence_per_case,
+        )
+        return filters, errors
+
     @app.get("/admin/federal-data-dashboard/configure-ask-loulou")
     @admin_required
     def admin_federal_data_dashboard_configure_ask_loulou():
-        openai_model = os.environ.get("OPENAI_MODEL", "gpt-5.2")
+        openai_model = os.environ.get("OPENAI_DEEP_RESEARCH_MODEL", os.environ.get("OPENAI_MODEL", "gpt-5.2"))
         openai_key_configured = bool(_first_env_or_secret_file("OPENAI_API_KEY"))
         return render_template(
             "admin_federal_data_configure_ai.html",
@@ -8950,6 +9182,62 @@ def create_app() -> Flask:
             active_subnav="configure_ask_loulou",
             openai_model=openai_model,
             openai_key_configured=openai_key_configured,
+            csrf_token=get_csrf_token(),
+            ask_loulou_form=_build_ask_loulou_form_defaults(),
+            analysis_result=None,
+        )
+
+    @app.post("/admin/federal-data-dashboard/ask-loulou/analyze")
+    @admin_required
+    def admin_federal_data_dashboard_ask_loulou_analyze():
+        require_csrf()
+        openai_model = os.environ.get(
+            "OPENAI_DEEP_RESEARCH_MODEL",
+            os.environ.get("OPENAI_MODEL", "gpt-5.2"),
+        )
+        openai_key = _first_env_or_secret_file("OPENAI_API_KEY")
+        openai_key_configured = bool(openai_key)
+
+        form_values = _build_ask_loulou_form_defaults()
+        form_values.update(request.form.to_dict(flat=True))
+        filters, errors = _parse_ask_loulou_filters(form_values)
+        if errors:
+            for message in errors:
+                flash(message, "error")
+            return render_template(
+                "admin_federal_data_configure_ai.html",
+                active_page="federal_data_dashboard",
+                active_subnav="configure_ask_loulou",
+                openai_model=openai_model,
+                openai_key_configured=openai_key_configured,
+                csrf_token=get_csrf_token(),
+                ask_loulou_form=form_values,
+                analysis_result=None,
+            )
+
+        try:
+            analysis_result = run_deep_research(
+                engine,
+                pcl_tables,
+                filters,
+                openai_api_key=openai_key,
+                model=openai_model,
+                logger=app.logger,
+            )
+        except Exception as exc:
+            app.logger.exception("Ask LouLou analysis failed.")
+            flash(f"Ask LouLou analysis failed: {exc}", "error")
+            analysis_result = None
+
+        return render_template(
+            "admin_federal_data_configure_ai.html",
+            active_page="federal_data_dashboard",
+            active_subnav="configure_ask_loulou",
+            openai_model=openai_model,
+            openai_key_configured=openai_key_configured,
+            csrf_token=get_csrf_token(),
+            ask_loulou_form=form_values,
+            analysis_result=analysis_result,
         )
 
     @app.get("/admin/federal-data-dashboard/pcl-batch-search")
@@ -10645,6 +10933,64 @@ def create_app() -> Flask:
             case_id=case_id,
         )
 
+    @app.get("/admin/pcl/document-items/<int:item_id>/file")
+    @admin_required
+    def admin_pcl_document_item_file(item_id: int):
+        items_table = pcl_tables.get("docket_document_items")
+        jobs_table = pcl_tables.get("docket_document_jobs")
+        if items_table is None or jobs_table is None:
+            abort(404)
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(
+                        items_table.c.id,
+                        items_table.c.file_path,
+                        items_table.c.document_number,
+                        jobs_table.c.case_id,
+                    )
+                    .select_from(items_table.join(jobs_table, jobs_table.c.id == items_table.c.job_id))
+                    .where(items_table.c.id == item_id)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        if not row or not row.get("file_path"):
+            abort(404)
+        doc_number = (row.get("document_number") or "").strip() or str(item_id)
+        fallback_name = f"case_{row.get('case_id')}_ecf_{doc_number}"
+        return _serve_document_storage_path(str(row["file_path"]), fallback_name=fallback_name)
+
+    @app.get("/admin/pcl/document-items/<int:item_id>/text")
+    @admin_required
+    def admin_pcl_document_item_text(item_id: int):
+        items_table = pcl_tables.get("docket_document_items")
+        jobs_table = pcl_tables.get("docket_document_jobs")
+        if items_table is None or jobs_table is None:
+            abort(404)
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(
+                        items_table.c.id,
+                        items_table.c.text_path,
+                        items_table.c.document_number,
+                        jobs_table.c.case_id,
+                    )
+                    .select_from(items_table.join(jobs_table, jobs_table.c.id == items_table.c.job_id))
+                    .where(items_table.c.id == item_id)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        if not row or not row.get("text_path"):
+            abort(404)
+        doc_number = (row.get("document_number") or "").strip() or str(item_id)
+        fallback_name = f"case_{row.get('case_id')}_ecf_{doc_number}.txt"
+        return _serve_document_storage_path(str(row["text_path"]), fallback_name=fallback_name)
+
     @app.get("/admin/pcl/cases/<int:case_id>")
     @admin_required
     def admin_pcl_case_detail(case_id: int):
@@ -10687,6 +11033,20 @@ def create_app() -> Flask:
         detail["case_fields_preview"] = case_fields_preview
         detail["data_json_parsed"] = parsed_payload
         detail["harvested_info"] = harvested_info
+        for job in detail.get("document_jobs") or []:
+            for item in job.get("items") or []:
+                if item.get("file_path"):
+                    item["file_url"] = url_for(
+                        "admin_pcl_document_item_file", item_id=int(item["id"])
+                    )
+                else:
+                    item["file_url"] = None
+                if item.get("text_path"):
+                    item["text_url"] = url_for(
+                        "admin_pcl_document_item_text", item_id=int(item["id"])
+                    )
+                else:
+                    item["text_url"] = None
         return render_template(
             "admin_pcl_case_detail.html",
             active_page="federal_data_dashboard",

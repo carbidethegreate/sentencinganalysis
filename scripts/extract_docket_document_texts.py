@@ -112,6 +112,9 @@ def _ensure_columns(conn: psycopg.Connection[Any]) -> None:
         "text_path": "TEXT",
         "text_engine": "TEXT",
         "text_confidence": "DOUBLE PRECISION",
+        "text_content": "TEXT",
+        "text_char_count": "INTEGER",
+        "text_word_count": "INTEGER",
         "text_meta_json": "TEXT",
         "text_extracted_at": "TIMESTAMPTZ",
     }
@@ -135,7 +138,12 @@ def _ensure_columns(conn: psycopg.Connection[Any]) -> None:
 
 
 def _load_items(
-    conn: psycopg.Connection[Any], limit: int, item_id: Optional[int]
+    conn: psycopg.Connection[Any],
+    limit: int,
+    item_id: Optional[int],
+    *,
+    force: bool,
+    retry_below_confidence: Optional[float],
 ) -> List[Dict[str, Any]]:
     params: List[Any] = []
     where = ["i.status = 'downloaded'"]
@@ -143,7 +151,15 @@ def _load_items(
         where.append("i.id = %s")
         params.append(item_id)
     else:
-        where.append("(i.text_status is null or i.text_status <> 'completed')")
+        if force:
+            pass
+        elif retry_below_confidence is not None:
+            where.append(
+                "(i.text_status is null or i.text_status in ('queued','processing','retry') or coalesce(i.text_confidence, 0) < %s)"
+            )
+            params.append(float(retry_below_confidence))
+        else:
+            where.append("(i.text_status is null or i.text_status in ('queued','processing','retry'))")
     params.append(limit)
     sql = f"""
         select
@@ -156,7 +172,9 @@ def _load_items(
             i.content_type,
             i.bytes,
             i.downloaded_at,
-            i.text_status
+            i.text_status,
+            i.text_confidence,
+            i.description
         from docket_document_items i
         join docket_document_jobs j on j.id=i.job_id
         where {' and '.join(where)}
@@ -593,11 +611,15 @@ def _update_item_success(
     item_id: int,
     *,
     text_path: str,
+    text_content: str,
     confidence: float,
     engine: str,
     meta: Dict[str, Any],
 ) -> None:
     now = datetime.now(timezone.utc)
+    clean_text = text_content or ""
+    char_count = len(clean_text)
+    word_count = len(TOKEN_RE.findall(clean_text))
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -606,6 +628,9 @@ def _update_item_success(
                    text_path = %s,
                    text_engine = %s,
                    text_confidence = %s,
+                   text_content = %s,
+                   text_char_count = %s,
+                   text_word_count = %s,
                    text_meta_json = %s,
                    text_extracted_at = %s,
                    updated_at = %s
@@ -615,6 +640,9 @@ def _update_item_success(
                 text_path,
                 engine,
                 confidence,
+                clean_text,
+                char_count,
+                word_count,
                 json.dumps(meta, ensure_ascii=False),
                 now,
                 now,
@@ -704,6 +732,7 @@ def process_one(
                 "confidence": confidence2,
                 "engine": "pdftotext+ocr+optional_openai",
                 "meta": meta,
+                "text": merged2,
             }
 
         if html:
@@ -722,6 +751,7 @@ def process_one(
                 "confidence": confidence,
                 "engine": "html_text_extract",
                 "meta": meta,
+                "text": text,
             }
 
         text = _norm(source.read_text(encoding="utf-8", errors="replace"))
@@ -739,6 +769,7 @@ def process_one(
             "confidence": confidence,
             "engine": "plain_text_extract",
             "meta": meta,
+            "text": text,
         }
 
 
@@ -749,6 +780,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--db-url", required=True)
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--item-id", type=int, default=None)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--retry-below-confidence",
+        type=float,
+        default=None,
+        help="Also reprocess completed items when confidence is below this threshold.",
+    )
     parser.add_argument("--openai-verify", action="store_true")
     parser.add_argument("--openai-threshold", type=float, default=0.82)
     parser.add_argument(
@@ -765,7 +803,13 @@ def main() -> None:
     s3_client = _build_s3_client()
     with psycopg.connect(args.db_url) as conn:
         _ensure_columns(conn)
-        rows = _load_items(conn, limit=max(1, int(args.limit)), item_id=args.item_id)
+        rows = _load_items(
+            conn,
+            limit=max(1, int(args.limit)),
+            item_id=args.item_id,
+            force=bool(args.force),
+            retry_below_confidence=args.retry_below_confidence,
+        )
         if not rows:
             print("No downloaded document items need text extraction.")
             return
@@ -785,6 +829,7 @@ def main() -> None:
                     conn,
                     item_id,
                     text_path=text_path,
+                    text_content=str(result.get("text") or ""),
                     confidence=float(result["confidence"]),
                     engine=str(result["engine"]),
                     meta=dict(result["meta"]),
@@ -804,6 +849,8 @@ def main() -> None:
                     "processed": processed,
                     "failed": failed,
                     "total": len(rows),
+                    "force": bool(args.force),
+                    "retry_below_confidence": args.retry_below_confidence,
                     "openai_verify": bool(args.openai_verify),
                 },
                 indent=2,

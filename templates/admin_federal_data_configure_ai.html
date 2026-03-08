@@ -3,7 +3,7 @@
 {% block federal_content %}
   <section class="card stack">
     <h2>Configure Ask LouLou</h2>
-    <p class="small">Configuration status for AI-powered admin tools and prompts.</p>
+    <p class="small">Configuration status plus deep-research controls for judge/party docket and document analysis.</p>
 
     <div class="grid two">
       <article class="pcl-detail-card">
@@ -23,7 +23,7 @@
       <article class="pcl-detail-card">
         <h3>Required Environment Variables</h3>
         <pre class="code-block">OPENAI_API_KEY=...
-OPENAI_MODEL={{ openai_model }}</pre>
+OPENAI_DEEP_RESEARCH_MODEL={{ openai_model }}</pre>
         <p class="small">Set these in your Render environment group. Do not store secrets in source control.</p>
       </article>
     </div>
@@ -32,8 +32,178 @@ OPENAI_MODEL={{ openai_model }}</pre>
       <h3>Where this is used</h3>
       <ul class="pcl-list">
         <li>`/admin/case-data-one/error-prompt` uses the configured model for fix-prompt generation.</li>
-        <li>Case-level AI notes are managed in each case detail page.</li>
+        <li>Ask LouLou deep research below analyzes docket entries, extracted document text, and sentencing events.</li>
       </ul>
     </article>
+
+    <article class="pcl-detail-card">
+      <h3>Ask LouLou Deep Research</h3>
+      <p class="small">
+        Ask a question, choose filters, and run a deep analysis for sentencing behavior and reduction patterns.
+      </p>
+      <form method="post" action="{{ url_for('admin_federal_data_dashboard_ask_loulou_analyze') }}" class="stack mt-12">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="grid two">
+          <label>
+            <span class="small">Question</span>
+            <textarea name="question" rows="4" placeholder="Example: Analyze Mark A. Kearney sentencing patterns, especially reduction signals like 5K1.1 and Rule 35.">{{ ask_loulou_form.question }}</textarea>
+          </label>
+          <label>
+            <span class="small">Judge (optional)</span>
+            <input type="text" name="judge_name" value="{{ ask_loulou_form.judge_name }}" placeholder="Mark A. Kearney">
+          </label>
+          <label>
+            <span class="small">Person / Party / Attorney (optional)</span>
+            <input type="text" name="person_name" value="{{ ask_loulou_form.person_name }}" placeholder="Alexandre Mikhail Dempsey">
+          </label>
+          <label>
+            <span class="small">Court ID (optional)</span>
+            <input type="text" name="court_id" value="{{ ask_loulou_form.court_id }}" placeholder="paedc">
+          </label>
+          <label>
+            <span class="small">Filed date from</span>
+            <input type="date" name="date_from" value="{{ ask_loulou_form.date_from }}">
+          </label>
+          <label>
+            <span class="small">Filed date to</span>
+            <input type="date" name="date_to" value="{{ ask_loulou_form.date_to }}">
+          </label>
+          <label>
+            <span class="small">Min OCR confidence (0-1)</span>
+            <input type="number" step="0.01" min="0" max="1" name="min_text_confidence" value="{{ ask_loulou_form.min_text_confidence }}">
+          </label>
+          <label>
+            <span class="small">Max cases</span>
+            <input type="number" min="1" max="500" name="max_cases" value="{{ ask_loulou_form.max_cases }}">
+          </label>
+          <label>
+            <span class="small">Evidence rows per case</span>
+            <input type="number" min="1" max="20" name="max_evidence_per_case" value="{{ ask_loulou_form.max_evidence_per_case }}">
+          </label>
+        </div>
+
+        <div class="grid two mt-8">
+          <label class="inline">
+            <input type="checkbox" name="criminal_only" value="1" {% if ask_loulou_form.criminal_only %}checked{% endif %}>
+            Criminal cases only
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="include_docket_entries" value="1" {% if ask_loulou_form.include_docket_entries %}checked{% endif %}>
+            Include docket entry signals
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="include_document_text" value="1" {% if ask_loulou_form.include_document_text %}checked{% endif %}>
+            Include extracted document text
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="include_sentencing_events" value="1" {% if ask_loulou_form.include_sentencing_events %}checked{% endif %}>
+            Include sentencing events table
+          </label>
+          <label class="inline">
+            <input type="checkbox" name="only_reduction_signals" value="1" {% if ask_loulou_form.only_reduction_signals %}checked{% endif %}>
+            Focus only on reduction signals
+          </label>
+        </div>
+
+        <div>
+          <button class="primary" type="submit">Run deep analysis</button>
+        </div>
+      </form>
+    </article>
+
+    {% if analysis_result %}
+      <article class="pcl-detail-card">
+        <h3>Analysis output</h3>
+        <p class="small">Model: {{ analysis_result.analysis_model }}{% if analysis_result.analysis_error %} · Fallback reason: {{ analysis_result.analysis_error }}{% endif %}</p>
+        <pre class="code-block">{{ analysis_result.analysis_markdown }}</pre>
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Statistical summary</h3>
+        <div class="table-wrapper">
+          <table class="table compact">
+            <tbody>
+              <tr><th>Cases analyzed</th><td>{{ analysis_result.stats.case_count }}</td></tr>
+              <tr><th>Docket entries scanned</th><td>{{ analysis_result.stats.docket_entries_scanned }}</td></tr>
+              <tr><th>Documents scanned</th><td>{{ analysis_result.stats.documents_scanned }}</td></tr>
+              <tr><th>Evidence rows</th><td>{{ analysis_result.stats.evidence_row_count }}</td></tr>
+              <tr><th>Cases with sentencing signals</th><td>{{ analysis_result.stats.cases_with_sentencing_signals }}</td></tr>
+              <tr><th>Cases with reduction signals</th><td>{{ analysis_result.stats.cases_with_reduction_signals }}</td></tr>
+              <tr><th>Sentencing events</th><td>{{ analysis_result.stats.sentencing_event_count }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Reduction candidate cases</h3>
+        {% if analysis_result.candidate_cases %}
+          <div class="table-wrapper">
+            <table class="table compact">
+              <thead>
+                <tr>
+                  <th>Case</th>
+                  <th>Court</th>
+                  <th>Filed</th>
+                  <th>Reduction score</th>
+                  <th>Terms</th>
+                  <th>Sources</th>
+                  <th>Sentence months (median)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in analysis_result.candidate_cases[:120] %}
+                  <tr>
+                    <td>{{ row.case_number }}</td>
+                    <td>{{ row.court_id }}</td>
+                    <td>{{ row.date_filed or "—" }}</td>
+                    <td>{{ row.reduction_score }}</td>
+                    <td>{{ row.reduction_terms|join(", ") }}</td>
+                    <td>{{ row.source_types|join(", ") }}</td>
+                    <td>{{ row.representative_sentence_months if row.representative_sentence_months is not none else "—" }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="small">No reduction candidates found with current filters.</p>
+        {% endif %}
+      </article>
+
+      <article class="pcl-detail-card">
+        <h3>Evidence sample</h3>
+        {% if analysis_result.evidence_rows %}
+          <div class="table-wrapper">
+            <table class="table compact">
+              <thead>
+                <tr>
+                  <th>Case</th>
+                  <th>Source</th>
+                  <th>Source ID</th>
+                  <th>Signals</th>
+                  <th>Confidence</th>
+                  <th>Snippet</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in analysis_result.evidence_rows[:180] %}
+                  <tr>
+                    <td>{{ row.case_number }}</td>
+                    <td>{{ row.source_type }}</td>
+                    <td>{{ row.source_id or "—" }}</td>
+                    <td>{{ row.signal_labels|join(", ") }}</td>
+                    <td>{{ "%.2f"|format(row.confidence or 0) }}</td>
+                    <td>{{ row.snippet }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="small">No evidence rows matched your current filters.</p>
+        {% endif %}
+      </article>
+    {% endif %}
   </section>
 {% endblock %}
