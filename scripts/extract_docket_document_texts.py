@@ -800,8 +800,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    db_url = (args.db_url or "").strip()
+    if db_url.startswith("postgresql+psycopg://"):
+        db_url = "postgresql://" + db_url.split("://", 1)[1]
+    elif db_url.startswith("postgresql+psycopg2://"):
+        db_url = "postgresql://" + db_url.split("://", 1)[1]
+    elif db_url.startswith("postgres://"):
+        db_url = "postgresql://" + db_url.split("://", 1)[1]
     s3_client = _build_s3_client()
-    with psycopg.connect(args.db_url) as conn:
+    with psycopg.connect(db_url) as conn:
         _ensure_columns(conn)
         rows = _load_items(
             conn,
