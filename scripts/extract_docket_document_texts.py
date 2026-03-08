@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -198,6 +199,69 @@ def _download_s3_to_temp(path_value: str, s3_client: Any, temp_dir: Path) -> Pat
     return target
 
 
+def _download_s3_key_to_temp(
+    *,
+    bucket: str,
+    key: str,
+    s3_client: Any,
+    temp_dir: Path,
+) -> Path:
+    filename = Path(key).name or "source.bin"
+    target = temp_dir / filename
+    s3_client.download_file(bucket, key, str(target))
+    return target
+
+
+def _download_local_missing_from_s3(
+    *,
+    local_path: Path,
+    s3_client: Any,
+    temp_dir: Path,
+) -> Optional[Path]:
+    if s3_client is None:
+        return None
+    bucket = (os.environ.get("PACER_DOCUMENTS_S3_BUCKET") or "").strip()
+    if not bucket:
+        return None
+
+    normalized = str(local_path).replace("\\", "/")
+    match = re.search(r"/(case_\d+/[^/]+)$", normalized)
+    if not match:
+        return None
+    relative_key = match.group(1).strip("/")
+    if not relative_key:
+        return None
+
+    configured_prefix = (os.environ.get("PACER_DOCUMENTS_S3_PREFIX") or "").strip().strip("/")
+    candidate_keys: List[str] = []
+    if configured_prefix:
+        candidate_keys.append(f"{configured_prefix}/{relative_key}")
+    candidate_keys.append(relative_key)
+    # Historical uploads used this prefix in earlier runs.
+    if configured_prefix != "pacer_documents":
+        candidate_keys.append(f"pacer_documents/{relative_key}")
+
+    seen: set[str] = set()
+    ordered_keys: List[str] = []
+    for key in candidate_keys:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered_keys.append(key)
+
+    for key in ordered_keys:
+        try:
+            return _download_s3_key_to_temp(
+                bucket=bucket,
+                key=key,
+                s3_client=s3_client,
+                temp_dir=temp_dir,
+            )
+        except Exception:
+            continue
+    return None
+
+
 def _resolve_local_source(path_value: str, s3_client: Any, temp_dir: Path) -> Path:
     path_value = (path_value or "").strip()
     if not path_value:
@@ -210,6 +274,13 @@ def _resolve_local_source(path_value: str, s3_client: Any, temp_dir: Path) -> Pa
     if not path.is_absolute():
         path = (Path(os.getcwd()) / path).resolve()
     if not path.exists() or not path.is_file():
+        recovered = _download_local_missing_from_s3(
+            local_path=path,
+            s3_client=s3_client,
+            temp_dir=temp_dir,
+        )
+        if recovered is not None:
+            return recovered
         raise FileNotFoundError(f"File not found: {path}")
     return path
 
@@ -571,6 +642,154 @@ def _openai_reconcile_if_needed(
         }
 
 
+def _image_data_url(path: Path) -> str:
+    raw = path.read_bytes()
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _openai_transcribe_image_page(
+    image_path: Path,
+    *,
+    api_key: str,
+    model: str,
+    timeout: int = 240,
+) -> str:
+    req = {
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise legal document transcriber. "
+                    "Transcribe the page exactly as written, including headers, footers, stamps, "
+                    "case captions, page numbers, and signatures. "
+                    "Do not summarize, normalize, or omit text. Output plain text only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Transcribe this court filing page word-for-word with original line breaks "
+                            "as closely as possible."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": _image_data_url(image_path)},
+                    },
+                ],
+            },
+        ],
+    }
+    resp = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=req,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    content = (
+        payload.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    return _norm(content or "")
+
+
+def _openai_image_rewrite_if_needed(
+    pdf_path: Path,
+    merged_text: str,
+    confidence: float,
+    *,
+    threshold: float,
+    enabled: bool,
+    max_pages: int,
+) -> Tuple[str, float, Dict[str, Any]]:
+    if not enabled or confidence >= threshold:
+        return merged_text, confidence, {"openai_image_used": False}
+
+    api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    model = (os.environ.get("OPENAI_IMAGE_OCR_MODEL") or "gpt-5.4").strip()
+    if not api_key:
+        return merged_text, confidence, {"openai_image_used": False, "reason": "missing_openai_api_key"}
+
+    with tempfile.TemporaryDirectory(prefix="openai_img_ocr_") as tmp_dir:
+        prefix = Path(tmp_dir) / "page"
+        cmd = [
+            "pdftoppm",
+            "-r",
+            str(int(os.environ.get("OPENAI_IMAGE_OCR_DPI", "220"))),
+            "-png",
+            str(pdf_path),
+            str(prefix),
+        ]
+        if max_pages and max_pages > 0:
+            cmd = [
+                "pdftoppm",
+                "-f",
+                "1",
+                "-l",
+                str(max_pages),
+                "-r",
+                str(int(os.environ.get("OPENAI_IMAGE_OCR_DPI", "220"))),
+                "-png",
+                str(pdf_path),
+                str(prefix),
+            ]
+        ppm = subprocess.run(cmd, capture_output=True, text=True)
+        if ppm.returncode != 0:
+            return merged_text, confidence, {
+                "openai_image_used": False,
+                "openai_image_error": f"pdftoppm_failed: {ppm.stderr.strip()}",
+            }
+
+        images = sorted(Path(tmp_dir).glob("page-*.png"))
+        if not images:
+            return merged_text, confidence, {
+                "openai_image_used": False,
+                "openai_image_error": "no_rendered_pages",
+            }
+
+        page_texts: List[str] = []
+        for index, image in enumerate(images, start=1):
+            page_text = _openai_transcribe_image_page(
+                image,
+                api_key=api_key,
+                model=model,
+            )
+            if page_text:
+                page_texts.append(f"[PAGE {index}]\n{page_text}")
+            else:
+                page_texts.append(f"[PAGE {index}]")
+        rewritten = _norm("\n\n".join(page_texts))
+        if not rewritten:
+            return merged_text, confidence, {
+                "openai_image_used": False,
+                "openai_image_error": "empty_openai_image_transcription",
+                "openai_image_model": model,
+            }
+
+        headers = _extract_header_fields(rewritten, [])
+        boosted = max(
+            confidence,
+            _estimate_confidence(rewritten, rewritten, merged_text, headers),
+        )
+        return rewritten, boosted, {
+            "openai_image_used": True,
+            "openai_image_model": model,
+            "openai_image_pages": len(images),
+        }
+
+
 def _write_text_output(
     case_id: int,
     item_id: int,
@@ -673,7 +892,9 @@ def process_one(
     *,
     s3_client: Any,
     openai_verify: bool,
+    openai_image_rewrite: bool,
     openai_threshold: float,
+    openai_image_max_pages: int,
     ocr_max_pages: int,
 ) -> Tuple[str, Dict[str, Any]]:
     item_id = int(row["id"])
@@ -714,8 +935,22 @@ def process_one(
                 merged2,
                 confidence2,
             )
-            text_path = _write_text_output(case_id, item_id, merged2, s3_client=s3_client)
-            digest = hashlib.sha256(merged2.encode("utf-8")).hexdigest()
+            merged3, confidence3, openai_image_meta = _openai_image_rewrite_if_needed(
+                source,
+                merged2,
+                confidence2,
+                threshold=openai_threshold,
+                enabled=openai_image_rewrite,
+                max_pages=openai_image_max_pages,
+            )
+            headers_after = _extract_header_fields(merged3, ocr_headers)
+            confidence3 = _quality_floor_from_docket_description(
+                str(row.get("description") or ""),
+                merged3,
+                confidence3,
+            )
+            text_path = _write_text_output(case_id, item_id, merged3, s3_client=s3_client)
+            digest = hashlib.sha256(merged3.encode("utf-8")).hexdigest()
             meta = {
                 "source_file_path": row.get("file_path"),
                 "source_sha256_text": digest,
@@ -723,16 +958,17 @@ def process_one(
                 "page_count": page_count,
                 "pdf_text_chars": len(text_pdf),
                 "ocr_text_chars": len(text_ocr),
-                "merged_text_chars": len(merged2),
+                "merged_text_chars": len(merged3),
                 "merge_strategy": merge_strategy,
-                "header_fields": headers,
+                "header_fields": headers_after,
                 "openai": openai_meta,
+                "openai_image": openai_image_meta,
             }
             return text_path, {
-                "confidence": confidence2,
+                "confidence": confidence3,
                 "engine": "pdftotext+ocr+optional_openai",
                 "meta": meta,
-                "text": merged2,
+                "text": merged3,
             }
 
         if html:
@@ -788,7 +1024,18 @@ def parse_args() -> argparse.Namespace:
         help="Also reprocess completed items when confidence is below this threshold.",
     )
     parser.add_argument("--openai-verify", action="store_true")
+    parser.add_argument(
+        "--openai-image-rewrite",
+        action="store_true",
+        help="When confidence is below threshold, transcribe PDF page images with OpenAI to preserve headers/footers.",
+    )
     parser.add_argument("--openai-threshold", type=float, default=0.82)
+    parser.add_argument(
+        "--openai-image-max-pages",
+        type=int,
+        default=0,
+        help="0 means all pages (or OCR page cap); otherwise only first N pages for OpenAI image rewrite.",
+    )
     parser.add_argument(
         "--ocr-max-pages",
         type=int,
@@ -829,7 +1076,12 @@ def main() -> None:
                     row,
                     s3_client=s3_client,
                     openai_verify=bool(args.openai_verify),
+                    openai_image_rewrite=bool(args.openai_image_rewrite),
                     openai_threshold=float(args.openai_threshold),
+                    openai_image_max_pages=(
+                        max(0, int(args.openai_image_max_pages))
+                        or max(0, int(args.ocr_max_pages))
+                    ),
                     ocr_max_pages=max(0, int(args.ocr_max_pages)),
                 )
                 _update_item_success(
@@ -859,6 +1111,7 @@ def main() -> None:
                     "force": bool(args.force),
                     "retry_below_confidence": args.retry_below_confidence,
                     "openai_verify": bool(args.openai_verify),
+                    "openai_image_rewrite": bool(args.openai_image_rewrite),
                 },
                 indent=2,
             )
