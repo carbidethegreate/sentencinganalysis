@@ -135,7 +135,7 @@
             <div>
               <h2>{% if selected_client_profile %}{{ selected_client_profile.client_name }}{% else %}My Clients{% endif %}</h2>
               <p class="small">
-                Select a client workspace or add a new case below.
+                Keep each client’s matters, related comparison cases, and private attorney materials in one workspace.
               </p>
             </div>
             {% if selected_client_profile and selected_client_profile.last_viewed_at %}
@@ -164,9 +164,9 @@
         <article class="card dashboard-client-search-shell">
           <div class="dashboard-section-heading">
             <div>
-              <h2>Add Client Case</h2>
+              <h2>{% if selected_client_profile %}Add Matter To {{ selected_client_profile.client_name }}{% else %}Create Client And Add First Matter{% endif %}</h2>
               <p class="small">
-                Search by client, party, case number, case title, or court.
+                Search by client, party, case number, case title, or court, then attach the case to this client.
               </p>
             </div>
           </div>
@@ -252,23 +252,49 @@
 
         <article class="card dashboard-workspace-card">
           {% if selected_client_profile %}
+            <section class="dashboard-client-overview">
+              <div class="dashboard-client-overview__main">
+                <p class="dashboard-client-overview__eyebrow">Client Workspace</p>
+                <h2>{{ selected_client_profile.client_name }}</h2>
+                <p class="small">
+                  One client can contain multiple matters. Each matter can keep its own main docket, related comparison cases, and attorney-supplied research files.
+                </p>
+              </div>
+              <div class="dashboard-client-overview__stats">
+                <div class="dashboard-overview-stat">
+                  <span class="dashboard-overview-stat__label">Client matters</span>
+                  <strong>{{ my_client_cases|length }}</strong>
+                </div>
+                <div class="dashboard-overview-stat">
+                  <span class="dashboard-overview-stat__label">Related cases</span>
+                  <strong>{{ reference_cases|length if selected_client_case else 0 }}</strong>
+                </div>
+                <div class="dashboard-overview-stat">
+                  <span class="dashboard-overview-stat__label">Client files</span>
+                  <strong>{{ research_uploads|length if selected_client_case else 0 }}</strong>
+                </div>
+              </div>
+            </section>
+
             <div class="dashboard-section-heading">
               <div>
-                <h2>Client Case Workspace</h2>
+                <h2>Matters For {{ selected_client_profile.client_name }}</h2>
                 <p class="small">
-                  Use one case at a time for docket review, references, and uploaded research.
+                  Open one matter at a time for docket review, related-case research, and uploaded client materials.
                 </p>
               </div>
             </div>
 
             {% if my_client_cases %}
-              <div class="dashboard-case-tabs">
+              <div class="dashboard-case-tabs dashboard-case-tabs--workspace">
                 {% for case in my_client_cases %}
                   <a
-                    class="pill {% if selected_client_case_id and case.client_case_id == selected_client_case_id %}is-current{% endif %}"
+                    class="dashboard-matter-chip {% if selected_client_case_id and case.client_case_id == selected_client_case_id %}is-current{% endif %}"
                     href="{{ url_for('dashboard', tab='my-clients', client_profile_id=selected_client_profile_id, client_case_id=case.client_case_id, case_view=case_view, client_q=client_query or None, client_name=client_name_input or None, research_q=research_query or None) }}"
                   >
-                    {{ case.case_number_full or case.case_number or ('Case ' ~ case.case_id) }}
+                    <span class="dashboard-matter-chip__eyebrow">{{ case.court_id or 'Court N/A' }}</span>
+                    <strong>{{ case.case_number_full or case.case_number or ('Case ' ~ case.case_id) }}</strong>
+                    <span class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</span>
                   </a>
                 {% endfor %}
               </div>
@@ -279,7 +305,8 @@
             {% if selected_client_case %}
               <div class="dashboard-selected-case">
                 <div class="dashboard-selected-case__header">
-                  <div>
+                  <div class="dashboard-selected-case__headline">
+                    <p class="dashboard-client-overview__eyebrow">Active Matter</p>
                     <h3>{{ selected_client_case.case_number_full or selected_client_case.case_number or 'Case' }}</h3>
                     <p class="small">{{ selected_client_case.case_title or selected_client_case.short_title or 'No case title available.' }}</p>
                     <p class="small">
@@ -287,6 +314,20 @@
                       {% if selected_client_case.date_filed %}· Filed {{ selected_client_case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
                       {% if selected_client_case.judge_last_name %}· Judge {{ selected_client_case.judge_last_name }}{% endif %}
                     </p>
+                  </div>
+                  <div class="dashboard-selected-case__meta">
+                    <div class="dashboard-overview-stat">
+                      <span class="dashboard-overview-stat__label">Docket entries</span>
+                      <strong>{{ selected_case_docket_entry_count if selected_case_docket_entry_count is not none else 0 }}</strong>
+                    </div>
+                    <div class="dashboard-overview-stat">
+                      <span class="dashboard-overview-stat__label">Downloaded docs</span>
+                      <strong>{{ selected_case_document_file_count }}</strong>
+                    </div>
+                    <div class="dashboard-overview-stat">
+                      <span class="dashboard-overview-stat__label">Text files</span>
+                      <strong>{{ selected_case_document_text_count }}</strong>
+                    </div>
                   </div>
                   <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -313,13 +354,13 @@
                     class="pill {% if case_view == 'references' %}is-current{% endif %}"
                     href="{{ url_for('dashboard', tab='my-clients', client_profile_id=selected_client_profile_id, client_case_id=selected_client_case_id, case_view='references', client_q=client_query or None, client_name=client_name_input or None, research_q=research_query or None) }}"
                   >
-                    Referenced Cases
+                    Related Cases
                   </a>
                   <a
                     class="pill {% if case_view == 'research' %}is-current{% endif %}"
                     href="{{ url_for('dashboard', tab='my-clients', client_profile_id=selected_client_profile_id, client_case_id=selected_client_case_id, case_view='research', client_q=client_query or None, client_name=client_name_input or None, research_q=research_query or None) }}"
                   >
-                    Research Files
+                    Client Files
                   </a>
                 </div>
 
@@ -420,30 +461,71 @@
                     {% endif %}
 
                     <section class="case-docket-preview" aria-label="Main docket entries">
-                      <p class="small">
-                        <strong>Main docket</strong>
-                        {% if selected_case_docket_entry_count is not none %}<span> · {{ selected_case_docket_entry_count }} entries</span>{% endif %}
-                      </p>
+                      <div class="dashboard-docket-summary-bar">
+                        <p class="small">
+                          <strong>Main docket</strong>
+                          {% if selected_case_docket_entry_count is not none %}<span> · {{ selected_case_docket_entry_count }} entries</span>{% endif %}
+                          {% if selected_case_linked_document_count %}<span> · {{ selected_case_linked_document_count }} rows with downloadable documents</span>{% endif %}
+                        </p>
+                        <p class="small">
+                          {% if selected_case_document_file_count %}{{ selected_case_document_file_count }} PDF/HTML files{% endif %}
+                          {% if selected_case_document_text_count %}<span> · {{ selected_case_document_text_count }} extracted text files</span>{% endif %}
+                        </p>
+                      </div>
                       {% if selected_case_docket_entries %}
-                        <div class="dashboard-docket-scroll">
-                          <ul class="case-docket-list case-docket-list--full">
-                            {% for entry in selected_case_docket_entries %}
-                              <li class="case-docket-item">
-                                <div class="case-docket-item__main">
-                                  <div class="dashboard-docket-entry-head">
+                        <div class="dashboard-docket-scroll dashboard-docket-table-wrap">
+                          <table class="dashboard-docket-table">
+                            <thead>
+                              <tr>
+                                <th>Date</th>
+                                <th>ECF</th>
+                                <th>Filing / Event</th>
+                                <th>Documents</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {% for entry in selected_case_docket_entries %}
+                                <tr>
+                                  <td class="dashboard-docket-table__date">{{ entry.date_filed or '—' }}</td>
+                                  <td class="dashboard-docket-table__ecf">
                                     {% if entry.document_number %}
-                                      <span class="case-docket-doc">#{{ entry.document_number }}</span>
+                                      <span class="case-docket-doc">ECF {{ entry.document_number }}</span>
+                                    {% else %}
+                                      <span class="small">—</span>
                                     {% endif %}
-                                    <span class="case-docket-desc dashboard-docket-entry-desc">{{ entry.description or '—' }}</span>
-                                  </div>
-                                  {% if entry.docket_text and entry.docket_text != entry.description %}
-                                    <div class="dashboard-docket-entry-text">{{ entry.docket_text }}</div>
-                                  {% endif %}
-                                </div>
-                                <div class="small case-docket-date">{{ entry.date_filed or '—' }}</div>
-                              </li>
-                            {% endfor %}
-                          </ul>
+                                  </td>
+                                  <td class="dashboard-docket-table__description">
+                                    <div class="dashboard-docket-entry-head">
+                                      <span class="case-docket-desc dashboard-docket-entry-desc">{{ entry.description or '—' }}</span>
+                                    </div>
+                                    {% if entry.docket_text and entry.docket_text != entry.description %}
+                                      <div class="dashboard-docket-entry-text">{{ entry.docket_text }}</div>
+                                    {% endif %}
+                                  </td>
+                                  <td class="dashboard-docket-table__links">
+                                    <div class="dashboard-docket-links">
+                                      {% if entry.file_url %}
+                                        <a class="dashboard-link-pill" href="{{ entry.file_url }}" target="_blank" rel="noopener">PDF / File</a>
+                                      {% endif %}
+                                      {% if entry.text_url %}
+                                        <a class="dashboard-link-pill" href="{{ entry.text_url }}" target="_blank" rel="noopener">Text</a>
+                                      {% endif %}
+                                      {% if not entry.file_url and not entry.text_url %}
+                                        <span class="small">No downloaded file yet</span>
+                                      {% endif %}
+                                    </div>
+                                    {% if entry.source_links %}
+                                      <div class="dashboard-docket-source-links small">
+                                        {% for link in entry.source_links %}
+                                          <a href="{{ link.href }}" target="_blank" rel="noopener">{{ link.label }}</a>{% if not loop.last %}<span> · </span>{% endif %}
+                                        {% endfor %}
+                                      </div>
+                                    {% endif %}
+                                  </td>
+                                </tr>
+                              {% endfor %}
+                            </tbody>
+                          </table>
                         </div>
                       {% elif selected_case_docket_lines %}
                         <div class="dashboard-docket-scroll">
@@ -478,7 +560,7 @@
                       <input type="hidden" name="case_view" value="references">
                       {% if client_query %}<input type="hidden" name="client_q" value="{{ client_query }}">{% endif %}
                       {% if client_name_input %}<input type="hidden" name="client_name" value="{{ client_name_input }}">{% endif %}
-                      <label for="research_q">Search reference cases for this client case</label>
+                      <label for="research_q">Search related comparison cases for this matter</label>
                       <div class="actions" style="margin-top: 8px;">
                         <input
                           id="research_q"
@@ -528,7 +610,7 @@
                       </div>
                     {% endif %}
 
-                    <h4 class="dashboard-subsection-title">Current References</h4>
+                    <h4 class="dashboard-subsection-title">Current Related Cases</h4>
                     {% if reference_cases %}
                       <div class="dashboard-client-cards">
                         {% for ref in reference_cases %}
@@ -538,7 +620,7 @@
                             <p class="small">
                               {{ ref.court_id or 'Court N/A' }} · {{ ref.case_type or 'Type N/A' }}
                               {% if ref.date_filed %}· Filed {{ ref.date_filed.strftime('%Y-%m-%d') }}{% endif %}
-                              {% if ref.is_excluded %}· Excluded{% else %}· Included{% endif %}
+                              {% if ref.is_excluded %}· Excluded from comparisons{% else %}· Included in comparisons{% endif %}
                             </p>
                             <div class="actions">
                               <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
@@ -574,7 +656,7 @@
                         {% endfor %}
                       </div>
                     {% else %}
-                      <p class="small">No reference cases saved for this client case.</p>
+                      <p class="small">No related comparison cases saved for this matter yet.</p>
                     {% endif %}
                   </div>
                 {% elif case_view == 'research' %}
@@ -582,9 +664,9 @@
                     <article class="card dashboard-research-upload-card">
                       <div class="dashboard-section-heading">
                         <div>
-                          <h4>Upload Research Files</h4>
+                          <h4>Upload Client Files</h4>
                           <p class="small">
-                            Add PDF or image files for this client case. The dashboard will extract text and keep it with the case workspace.
+                            Add PDF or image files for this matter. The dashboard will keep the original file and extract text for later research.
                           </p>
                         </div>
                       </div>
@@ -657,10 +739,23 @@
                               <span><strong>Text</strong> {{ upload.extracted_char_count or 0 }} chars</span>
                             </div>
 
+                            <div class="dashboard-docket-links dashboard-research-links">
+                              {% if upload.file_url %}
+                                <a class="dashboard-link-pill" href="{{ upload.file_url }}" target="_blank" rel="noopener">Open original file</a>
+                              {% endif %}
+                              {% if upload.text_url %}
+                                <a class="dashboard-link-pill" href="{{ upload.text_url }}" target="_blank" rel="noopener">Open extracted text</a>
+                              {% endif %}
+                            </div>
+
                             {% if upload.notes %}
                               <p class="dashboard-research-notes">
                                 <strong>Notes</strong> {{ upload.notes }}
                               </p>
+                            {% endif %}
+
+                            {% if upload.extraction_error %}
+                              <p class="small">{{ upload.extraction_error }}</p>
                             {% endif %}
 
                             {% if upload.extracted_text %}
@@ -677,9 +772,9 @@
                         {% endfor %}
                       {% else %}
                         <article class="card dashboard-research-empty-card">
-                          <h4>No Research Files Yet</h4>
+                          <h4>No Client Files Yet</h4>
                           <p class="small">
-                            Upload PDFs or images for this client case to build a searchable research record here.
+                            Upload PDFs or images for this matter to keep private attorney materials beside the docket and related cases.
                           </p>
                         </article>
                       {% endif %}

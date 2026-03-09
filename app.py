@@ -1241,9 +1241,11 @@ def create_app() -> Flask:
         Column("file_name", String(255), nullable=False),
         Column("content_type", String(120), nullable=True),
         Column("file_size_bytes", Integer, nullable=False),
+        Column("storage_path", Text, nullable=True),
         Column("extraction_status", String(20), nullable=False, server_default=sa_text("'completed'")),
         Column("extraction_method", String(80), nullable=True),
         Column("extraction_confidence", Text, nullable=True),
+        Column("extraction_error", Text, nullable=True),
         Column("extracted_text", Text, nullable=True),
         Column("extracted_char_count", Integer, nullable=False, server_default=sa_text("0")),
         Column("uploaded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
@@ -1584,6 +1586,14 @@ def create_app() -> Flask:
             "text_extracted_at": "TIMESTAMPTZ",
         },
         label="docket_document_items",
+    )
+    _ensure_table_columns(
+        "user_dashboard_case_research_uploads",
+        {
+            "storage_path": "TEXT",
+            "extraction_error": "TEXT",
+        },
+        label="user_dashboard_case_research_uploads",
     )
     _ensure_table_columns(
         "user_dashboard_clients",
@@ -3286,6 +3296,107 @@ def create_app() -> Flask:
             download_name=fallback_name or local_path.name,
             conditional=True,
         )
+
+    def _store_dashboard_research_upload(
+        *,
+        user_id: int,
+        client_case_id: int,
+        file_name: str,
+        payload: bytes,
+        content_type: Optional[str],
+    ) -> str:
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", (file_name or "").strip()).strip("._")
+        if not safe_name:
+            safe_name = "research_upload"
+        suffix = Path(safe_name).suffix.lower()
+        stem = Path(safe_name).stem or "research_upload"
+        token = secrets.token_hex(6)
+        stored_name = f"{timestamp}_{token}_{stem[:80]}{suffix}"
+
+        bucket = (os.environ.get("PACER_DOCUMENTS_S3_BUCKET") or "").strip()
+        prefix = (
+            os.environ.get("DASHBOARD_RESEARCH_UPLOADS_S3_PREFIX")
+            or "dashboard_research_uploads"
+        ).strip().strip("/")
+        s3_client = _build_document_s3_client() if bucket else None
+        if bucket and s3_client is not None:
+            key_parts = [part for part in [prefix, f"user_{user_id}", f"client_case_{client_case_id}", stored_name] if part]
+            key = "/".join(key_parts)
+            try:
+                s3_client.put_object(
+                    Bucket=bucket,
+                    Key=key,
+                    Body=payload,
+                    ContentType=(content_type or "").strip() or "application/octet-stream",
+                )
+                return f"s3://{bucket}/{key}"
+            except Exception:
+                app.logger.exception("Unable to store dashboard research upload in S3.")
+
+        base_dir_raw = (
+            os.environ.get("DASHBOARD_RESEARCH_UPLOADS_DIR")
+            or str(Path(os.getcwd()) / "dashboard_research_uploads")
+        ).strip()
+        base_dir = Path(base_dir_raw).expanduser().resolve()
+        target_dir = base_dir / f"user_{user_id}" / f"client_case_{client_case_id}"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / stored_name
+        target_path.write_bytes(payload)
+        return str(target_path)
+
+    def _user_has_dashboard_case_access(conn: Any, *, user_id: int, case_id: int) -> bool:
+        direct_case = (
+            conn.execute(
+                select(user_dashboard_client_cases.c.id)
+                .select_from(
+                    user_dashboard_client_cases.join(
+                        user_dashboard_client_profiles,
+                        user_dashboard_client_profiles.c.id
+                        == user_dashboard_client_cases.c.client_profile_id,
+                    )
+                )
+                .where(user_dashboard_client_profiles.c.user_id == user_id)
+                .where(user_dashboard_client_cases.c.pcl_case_id == case_id)
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        if direct_case:
+            return True
+
+        reference_case = (
+            conn.execute(
+                select(user_dashboard_case_references.c.id)
+                .select_from(
+                    user_dashboard_case_references.join(
+                        user_dashboard_client_cases,
+                        user_dashboard_client_cases.c.id
+                        == user_dashboard_case_references.c.client_case_id,
+                    ).join(
+                        user_dashboard_client_profiles,
+                        user_dashboard_client_profiles.c.id
+                        == user_dashboard_client_cases.c.client_profile_id,
+                    )
+                )
+                .where(user_dashboard_client_profiles.c.user_id == user_id)
+                .where(user_dashboard_case_references.c.reference_case_id == case_id)
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return reference_case is not None
+
+    def _document_number_lookup_keys(value: Any) -> Tuple[Optional[str], Optional[str]]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None, None
+        lowered = raw.lower().replace("ecf", " ").replace("document", " ")
+        compact = re.sub(r"[^a-z0-9.-]+", "", lowered).strip(".-")
+        digits = re.sub(r"\D+", "", raw)
+        return (compact or None, digits or None)
 
     def _latest_job_status(
         conn: Any,
@@ -6112,11 +6223,31 @@ def create_app() -> Flask:
                 extraction_method = "none"
                 extracted_text = ""
                 extraction_error = ""
+                storage_path = ""
                 with tempfile.TemporaryDirectory(prefix="dashboard_upload_") as tmp_dir:
                     temp_path = Path(tmp_dir) / f"{secrets.token_hex(8)}{extension}"
                     temp_path.write_bytes(payload)
                     extraction_status, extraction_method, extracted_text, extraction_error = (
                         _extract_research_upload_text(temp_path, extension)
+                    )
+                try:
+                    storage_path = _store_dashboard_research_upload(
+                        user_id=int(user["id"]),
+                        client_case_id=target_client_case_id,
+                        file_name=original_name,
+                        payload=payload,
+                        content_type=(uploaded_file.mimetype or "").strip() or None,
+                    )
+                except Exception:
+                    app.logger.exception("Unable to persist dashboard research upload.")
+                    flash(
+                        f"Uploaded text could not be stored for {original_name}. Please try again.",
+                        "error",
+                    )
+                    return _redirect_my_clients_post(
+                        profile_id=int(owner_row["client_profile_id"]),
+                        client_case_id=target_client_case_id,
+                        case_view_param="research",
                     )
 
                 extraction_confidence = (
@@ -6134,9 +6265,11 @@ def create_app() -> Flask:
                             file_name=original_name,
                             content_type=(uploaded_file.mimetype or "").strip() or None,
                             file_size_bytes=file_size_bytes,
+                            storage_path=storage_path or None,
                             extraction_status=extraction_status,
                             extraction_method=extraction_method,
                             extraction_confidence=extraction_confidence,
+                            extraction_error=extraction_error or None,
                             extracted_text=extracted_text or None,
                             extracted_char_count=extracted_char_count,
                             uploaded_at=func.now(),
@@ -6694,6 +6827,10 @@ def create_app() -> Flask:
             selected_case_docket_assigned_judges: List[str] = []
             selected_case_docket_referred_judges: List[str] = []
             selected_case_docket_judges: List[str] = []
+            selected_case_document_count = 0
+            selected_case_document_file_count = 0
+            selected_case_document_text_count = 0
+            selected_case_linked_document_count = 0
 
             def _normalize_list_labels(value: Any) -> List[str]:
                 if value is None:
@@ -6716,6 +6853,65 @@ def create_app() -> Flask:
                 return deduped
 
             if selected_client_case:
+                document_item_exact_lookup: Dict[str, Dict[str, Any]] = {}
+                document_item_digit_lookup: Dict[str, List[Dict[str, Any]]] = {}
+                items_table = pcl_tables.get("docket_document_items")
+                jobs_table = pcl_tables.get("docket_document_jobs")
+                if items_table is not None and jobs_table is not None:
+                    document_item_rows = (
+                        conn.execute(
+                            select(
+                                items_table.c.id,
+                                items_table.c.document_number,
+                                items_table.c.description,
+                                items_table.c.status,
+                                items_table.c.file_path,
+                                items_table.c.text_path,
+                                items_table.c.text_status,
+                                items_table.c.text_confidence,
+                                items_table.c.text_char_count,
+                                items_table.c.downloaded_at,
+                            )
+                            .select_from(
+                                items_table.join(
+                                    jobs_table,
+                                    jobs_table.c.id == items_table.c.job_id,
+                                )
+                            )
+                            .where(jobs_table.c.case_id == selected_client_case["case_id"])
+                            .order_by(desc(items_table.c.downloaded_at), desc(items_table.c.id))
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    selected_case_document_count = len(document_item_rows)
+                    selected_case_document_file_count = sum(
+                        1 for row in document_item_rows if row.get("file_path")
+                    )
+                    selected_case_document_text_count = sum(
+                        1 for row in document_item_rows if row.get("text_path")
+                    )
+                    for row in document_item_rows:
+                        item = dict(row)
+                        item_id = int(item["id"])
+                        item["file_url"] = (
+                            url_for("dashboard_document_item_file", item_id=item_id)
+                            if item.get("file_path")
+                            else None
+                        )
+                        item["text_url"] = (
+                            url_for("dashboard_document_item_text", item_id=item_id)
+                            if item.get("text_path")
+                            else None
+                        )
+                        exact_key, digits_key = _document_number_lookup_keys(
+                            item.get("document_number")
+                        )
+                        if exact_key and exact_key not in document_item_exact_lookup:
+                            document_item_exact_lookup[exact_key] = item
+                        if digits_key:
+                            document_item_digit_lookup.setdefault(digits_key, []).append(item)
+
                 field_rows = (
                     conn.execute(
                         select(
@@ -6796,16 +6992,54 @@ def create_app() -> Flask:
                     docket_text_value = str(
                         entry.get("docketText") or entry.get("docket_text") or ""
                     ).strip()
+                    source_links: List[Dict[str, str]] = []
+                    raw_links = entry.get("documentLinks") or entry.get("document_links") or []
+                    if isinstance(raw_links, list):
+                        for raw_link in raw_links:
+                            if not isinstance(raw_link, Mapping):
+                                continue
+                            href = str(raw_link.get("href") or "").strip()
+                            label = str(
+                                raw_link.get("label")
+                                or raw_link.get("text")
+                                or raw_link.get("title")
+                                or href
+                            ).strip()
+                            if href:
+                                source_links.append({"href": href, "label": label or href})
                     if not desc_value:
                         desc_value = docket_text_value
                     if not any([date_value, doc_value, desc_value, docket_text_value]):
                         continue
+                    matched_item: Optional[Dict[str, Any]] = None
+                    exact_key, digits_key = _document_number_lookup_keys(doc_value)
+                    if exact_key:
+                        matched_item = document_item_exact_lookup.get(exact_key)
+                    if matched_item is None and digits_key:
+                        digit_matches = document_item_digit_lookup.get(digits_key) or []
+                        unique_exact_matches = {
+                            _document_number_lookup_keys(item.get("document_number"))[0]
+                            for item in digit_matches
+                            if _document_number_lookup_keys(item.get("document_number"))[0]
+                        }
+                        if len(unique_exact_matches) == 1 and digit_matches:
+                            matched_item = digit_matches[0]
+                    if matched_item is not None and (
+                        matched_item.get("file_url") or matched_item.get("text_url")
+                    ):
+                        selected_case_linked_document_count += 1
                     selected_case_docket_entries.append(
                         {
                             "date_filed": date_value,
                             "document_number": doc_value,
                             "description": desc_value,
                             "docket_text": docket_text_value,
+                            "file_url": matched_item.get("file_url") if matched_item else None,
+                            "text_url": matched_item.get("text_url") if matched_item else None,
+                            "text_status": matched_item.get("text_status") if matched_item else None,
+                            "text_confidence": matched_item.get("text_confidence") if matched_item else None,
+                            "document_item_id": matched_item.get("id") if matched_item else None,
+                            "source_links": source_links,
                         }
                     )
 
@@ -6976,9 +7210,11 @@ def create_app() -> Flask:
                             user_dashboard_case_research_uploads.c.file_name,
                             user_dashboard_case_research_uploads.c.content_type,
                             user_dashboard_case_research_uploads.c.file_size_bytes,
+                            user_dashboard_case_research_uploads.c.storage_path,
                             user_dashboard_case_research_uploads.c.extraction_status,
                             user_dashboard_case_research_uploads.c.extraction_method,
                             user_dashboard_case_research_uploads.c.extraction_confidence,
+                            user_dashboard_case_research_uploads.c.extraction_error,
                             user_dashboard_case_research_uploads.c.extracted_text,
                             user_dashboard_case_research_uploads.c.extracted_char_count,
                             user_dashboard_case_research_uploads.c.notes,
@@ -6996,6 +7232,18 @@ def create_app() -> Flask:
                         .limit(80)
                     ).mappings()
                 ]
+                for row in research_uploads:
+                    upload_id = int(row["id"])
+                    row["file_url"] = (
+                        url_for("dashboard_research_upload_file", upload_id=upload_id)
+                        if row.get("storage_path")
+                        else None
+                    )
+                    row["text_url"] = (
+                        url_for("dashboard_research_upload_text", upload_id=upload_id)
+                        if row.get("extracted_text")
+                        else None
+                    )
 
             all_user_case_ids = {
                 int(row[0])
@@ -7057,6 +7305,10 @@ def create_app() -> Flask:
             selected_case_docket_assigned_judges=selected_case_docket_assigned_judges,
             selected_case_docket_referred_judges=selected_case_docket_referred_judges,
             selected_case_docket_judges=selected_case_docket_judges,
+            selected_case_document_count=selected_case_document_count,
+            selected_case_document_file_count=selected_case_document_file_count,
+            selected_case_document_text_count=selected_case_document_text_count,
+            selected_case_linked_document_count=selected_case_linked_document_count,
             case_view=case_view,
             client_query=client_query,
             client_name_input=client_name_input,
@@ -7066,6 +7318,175 @@ def create_app() -> Flask:
             reference_cases=reference_cases,
             research_uploads=research_uploads,
         )
+
+    @app.get("/dashboard/document-items/<int:item_id>/file")
+    @login_required
+    def dashboard_document_item_file(item_id: int):
+        user = g.current_user
+        assert user is not None
+
+        items_table = pcl_tables.get("docket_document_items")
+        jobs_table = pcl_tables.get("docket_document_jobs")
+        if items_table is None or jobs_table is None:
+            abort(404)
+
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(
+                        items_table.c.id,
+                        items_table.c.file_path,
+                        items_table.c.document_number,
+                        jobs_table.c.case_id,
+                    )
+                    .select_from(
+                        items_table.join(jobs_table, jobs_table.c.id == items_table.c.job_id)
+                    )
+                    .where(items_table.c.id == item_id)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if not row:
+                abort(404)
+            if not _user_has_dashboard_case_access(
+                conn,
+                user_id=int(user["id"]),
+                case_id=int(row["case_id"]),
+            ):
+                abort(403)
+
+        if not row.get("file_path"):
+            abort(404)
+        doc_number = (row.get("document_number") or "").strip() or str(item_id)
+        fallback_name = f"case_{row.get('case_id')}_ecf_{doc_number}"
+        return _serve_document_storage_path(str(row["file_path"]), fallback_name=fallback_name)
+
+    @app.get("/dashboard/document-items/<int:item_id>/text")
+    @login_required
+    def dashboard_document_item_text(item_id: int):
+        user = g.current_user
+        assert user is not None
+
+        items_table = pcl_tables.get("docket_document_items")
+        jobs_table = pcl_tables.get("docket_document_jobs")
+        if items_table is None or jobs_table is None:
+            abort(404)
+
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(
+                        items_table.c.id,
+                        items_table.c.text_path,
+                        items_table.c.document_number,
+                        jobs_table.c.case_id,
+                    )
+                    .select_from(
+                        items_table.join(jobs_table, jobs_table.c.id == items_table.c.job_id)
+                    )
+                    .where(items_table.c.id == item_id)
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if not row:
+                abort(404)
+            if not _user_has_dashboard_case_access(
+                conn,
+                user_id=int(user["id"]),
+                case_id=int(row["case_id"]),
+            ):
+                abort(403)
+
+        if not row.get("text_path"):
+            abort(404)
+        doc_number = (row.get("document_number") or "").strip() or str(item_id)
+        fallback_name = f"case_{row.get('case_id')}_ecf_{doc_number}.txt"
+        return _serve_document_storage_path(str(row["text_path"]), fallback_name=fallback_name)
+
+    @app.get("/dashboard/research-uploads/<int:upload_id>/file")
+    @login_required
+    def dashboard_research_upload_file(upload_id: int):
+        user = g.current_user
+        assert user is not None
+
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(
+                        user_dashboard_case_research_uploads.c.id,
+                        user_dashboard_case_research_uploads.c.file_name,
+                        user_dashboard_case_research_uploads.c.storage_path,
+                    )
+                    .select_from(
+                        user_dashboard_case_research_uploads.join(
+                            user_dashboard_client_cases,
+                            user_dashboard_client_cases.c.id
+                            == user_dashboard_case_research_uploads.c.client_case_id,
+                        ).join(
+                            user_dashboard_client_profiles,
+                            user_dashboard_client_profiles.c.id
+                            == user_dashboard_client_cases.c.client_profile_id,
+                        )
+                    )
+                    .where(user_dashboard_case_research_uploads.c.id == upload_id)
+                    .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        if not row or not row.get("storage_path"):
+            abort(404)
+        return _serve_document_storage_path(
+            str(row["storage_path"]),
+            fallback_name=str(row.get("file_name") or f"research_upload_{upload_id}"),
+        )
+
+    @app.get("/dashboard/research-uploads/<int:upload_id>/text")
+    @login_required
+    def dashboard_research_upload_text(upload_id: int):
+        user = g.current_user
+        assert user is not None
+
+        with engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(
+                        user_dashboard_case_research_uploads.c.id,
+                        user_dashboard_case_research_uploads.c.file_name,
+                        user_dashboard_case_research_uploads.c.extracted_text,
+                    )
+                    .select_from(
+                        user_dashboard_case_research_uploads.join(
+                            user_dashboard_client_cases,
+                            user_dashboard_client_cases.c.id
+                            == user_dashboard_case_research_uploads.c.client_case_id,
+                        ).join(
+                            user_dashboard_client_profiles,
+                            user_dashboard_client_profiles.c.id
+                            == user_dashboard_client_cases.c.client_profile_id,
+                        )
+                    )
+                    .where(user_dashboard_case_research_uploads.c.id == upload_id)
+                    .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+        if not row or not row.get("extracted_text"):
+            abort(404)
+        response = make_response(str(row["extracted_text"]))
+        response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        base_name = Path(str(row.get("file_name") or f"research_upload_{upload_id}")).stem
+        response.headers["Content-Disposition"] = (
+            f'inline; filename="{base_name or f"research_upload_{upload_id}"}.txt"'
+        )
+        return response
 
     @app.get("/attorneys")
     @login_required
