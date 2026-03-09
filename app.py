@@ -1108,6 +1108,39 @@ def create_app() -> Flask:
         Column("attorney_work_product_saved_at", DateTime(timezone=True), nullable=True),
     )
 
+    user_dashboard_attorney_work_products = Table(
+        "user_dashboard_attorney_work_products",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("user_id", Integer, ForeignKey("users.id"), nullable=False, index=True),
+        Column("attorney_name", String(255), nullable=False),
+        Column("saved_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+    user_dashboard_clients = Table(
+        "user_dashboard_clients",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("user_id", Integer, ForeignKey("users.id"), nullable=False, index=True),
+        Column("pcl_case_id", Integer, nullable=False, index=True),
+    )
+
     case_stage1 = Table(
         "case_stage1",
         metadata,
@@ -1234,6 +1267,8 @@ def create_app() -> Flask:
                     users,
                     newsletter_subscriptions,
                     user_dashboard_preferences,
+                    user_dashboard_attorney_work_products,
+                    user_dashboard_clients,
                     case_stage1,
                     case_data_one,
                     pacer_tokens,
@@ -5283,21 +5318,145 @@ def create_app() -> Flask:
     def dashboard():
         user = g.current_user
         assert user is not None
+        pcl_cases = pcl_tables["pcl_cases"]
+        valid_tabs = {"work-product", "my-clients"}
+        active_tab = (request.args.get("tab") or "work-product").strip().lower()
+        if active_tab not in valid_tabs:
+            active_tab = "work-product"
+        client_query = (request.args.get("client_q") or "").strip()
 
         if request.method == "POST":
             require_csrf()
-            attorney_name = (request.form.get("attorney_name") or "").strip()
+            action = (request.form.get("action") or "").strip().lower()
+            next_tab = (request.form.get("tab") or active_tab).strip().lower()
+            if next_tab not in valid_tabs:
+                next_tab = "work-product"
 
-            if not attorney_name:
-                flash("Attorney name is required.", "error")
-                return redirect(url_for("dashboard"))
+            if action == "save_attorney_name":
+                attorney_name = (request.form.get("attorney_name") or "").strip()
+                if not attorney_name:
+                    flash("Attorney name is required.", "error")
+                    return redirect(url_for("dashboard", tab="work-product"))
+                if len(attorney_name) > 255:
+                    flash("Attorney name must be 255 characters or fewer.", "error")
+                    return redirect(url_for("dashboard", tab="work-product"))
 
-            if len(attorney_name) > 255:
-                flash("Attorney name must be 255 characters or fewer.", "error")
-                return redirect(url_for("dashboard"))
+                with engine.begin() as conn:
+                    conn.execute(
+                        insert(user_dashboard_attorney_work_products).values(
+                            user_id=user["id"],
+                            attorney_name=attorney_name,
+                            saved_at=func.now(),
+                        )
+                    )
+                    # Keep legacy single-value preference in sync for backward compatibility.
+                    existing_pref = (
+                        conn.execute(
+                            select(user_dashboard_preferences)
+                            .where(user_dashboard_preferences.c.user_id == user["id"])
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if existing_pref:
+                        conn.execute(
+                            update(user_dashboard_preferences)
+                            .where(user_dashboard_preferences.c.id == existing_pref["id"])
+                            .values(
+                                attorney_work_product_name=attorney_name,
+                                attorney_work_product_saved_at=func.now(),
+                            )
+                        )
+                    else:
+                        conn.execute(
+                            insert(user_dashboard_preferences).values(
+                                user_id=user["id"],
+                                attorney_work_product_name=attorney_name,
+                                attorney_work_product_saved_at=func.now(),
+                            )
+                        )
 
-            with engine.begin() as conn:
-                existing = (
+                flash("Attorney name saved.", "success")
+                return redirect(url_for("dashboard", tab="work-product"))
+
+            if action == "add_client_case":
+                raw_case_id = (request.form.get("case_id") or "").strip()
+                try:
+                    case_id = int(raw_case_id)
+                except (TypeError, ValueError):
+                    flash("Select a valid case to add.", "error")
+                    return redirect(url_for("dashboard", tab="my-clients"))
+
+                with engine.begin() as conn:
+                    case_exists = conn.execute(
+                        select(pcl_cases.c.id).where(pcl_cases.c.id == case_id).limit(1)
+                    ).first()
+                    if not case_exists:
+                        flash("That case could not be found.", "error")
+                        return redirect(url_for("dashboard", tab="my-clients"))
+
+                    existing_link = conn.execute(
+                        select(user_dashboard_clients.c.id)
+                        .where(user_dashboard_clients.c.user_id == user["id"])
+                        .where(user_dashboard_clients.c.pcl_case_id == case_id)
+                        .limit(1)
+                    ).first()
+                    if existing_link:
+                        flash("That case is already in My Clients.", "info")
+                    else:
+                        conn.execute(
+                            insert(user_dashboard_clients).values(
+                                user_id=user["id"],
+                                pcl_case_id=case_id,
+                            )
+                        )
+                        flash("Case added to My Clients.", "success")
+
+                return redirect(url_for("dashboard", tab="my-clients"))
+
+            if action == "remove_client_case":
+                raw_case_id = (request.form.get("case_id") or "").strip()
+                try:
+                    case_id = int(raw_case_id)
+                except (TypeError, ValueError):
+                    flash("Select a valid case to remove.", "error")
+                    return redirect(url_for("dashboard", tab="my-clients"))
+
+                with engine.begin() as conn:
+                    conn.execute(
+                        delete(user_dashboard_clients)
+                        .where(user_dashboard_clients.c.user_id == user["id"])
+                        .where(user_dashboard_clients.c.pcl_case_id == case_id)
+                    )
+                flash("Case removed from My Clients.", "success")
+                return redirect(url_for("dashboard", tab="my-clients"))
+
+            flash("Unknown dashboard action.", "error")
+            return redirect(url_for("dashboard", tab=next_tab))
+
+        with engine.connect() as conn:
+            attorney_work_products = (
+                conn.execute(
+                    select(
+                        user_dashboard_attorney_work_products.c.id,
+                        user_dashboard_attorney_work_products.c.attorney_name,
+                        user_dashboard_attorney_work_products.c.saved_at,
+                    )
+                    .where(user_dashboard_attorney_work_products.c.user_id == user["id"])
+                    .order_by(
+                        desc(user_dashboard_attorney_work_products.c.saved_at),
+                        desc(user_dashboard_attorney_work_products.c.id),
+                    )
+                    .limit(100)
+                )
+                .mappings()
+                .all()
+            )
+
+            if not attorney_work_products:
+                # One-time migration from the legacy single-value table.
+                legacy_pref = (
                     conn.execute(
                         select(user_dashboard_preferences)
                         .where(user_dashboard_preferences.c.user_id == user["id"])
@@ -5306,51 +5465,122 @@ def create_app() -> Flask:
                     .mappings()
                     .first()
                 )
-                if existing:
-                    conn.execute(
-                        update(user_dashboard_preferences)
-                        .where(user_dashboard_preferences.c.id == existing["id"])
-                        .values(
-                            attorney_work_product_name=attorney_name,
-                            attorney_work_product_saved_at=func.now(),
-                        )
+                legacy_name = (
+                    str(legacy_pref.get("attorney_work_product_name") or "").strip()
+                    if legacy_pref
+                    else ""
+                )
+                if legacy_name:
+                    legacy_saved_at = (
+                        legacy_pref.get("attorney_work_product_saved_at")
+                        or legacy_pref.get("updated_at")
                     )
-                else:
-                    conn.execute(
-                        insert(user_dashboard_preferences).values(
-                            user_id=user["id"],
-                            attorney_work_product_name=attorney_name,
-                            attorney_work_product_saved_at=func.now(),
+                    with engine.begin() as write_conn:
+                        write_conn.execute(
+                            insert(user_dashboard_attorney_work_products).values(
+                                user_id=user["id"],
+                                attorney_name=legacy_name,
+                                saved_at=legacy_saved_at or func.now(),
+                            )
                         )
-                    )
+                    attorney_work_products = [
+                        {
+                            "id": -1,
+                            "attorney_name": legacy_name,
+                            "saved_at": legacy_saved_at or datetime.utcnow(),
+                        }
+                    ]
 
-            flash("Attorney work product label saved.", "success")
-            return redirect(url_for("dashboard"))
-
-        with engine.connect() as conn:
-            dashboard_pref = (
+            my_client_cases = (
                 conn.execute(
-                    select(user_dashboard_preferences)
-                    .where(user_dashboard_preferences.c.user_id == user["id"])
-                    .limit(1)
+                    select(
+                        user_dashboard_clients.c.pcl_case_id.label("case_id"),
+                        user_dashboard_clients.c.created_at.label("saved_at"),
+                        pcl_cases.c.court_id,
+                        pcl_cases.c.case_number,
+                        pcl_cases.c.case_number_full,
+                        pcl_cases.c.case_title,
+                        pcl_cases.c.short_title,
+                        pcl_cases.c.case_type,
+                        pcl_cases.c.date_filed,
+                        pcl_cases.c.date_closed,
+                        pcl_cases.c.judge_last_name,
+                    )
+                    .select_from(
+                        user_dashboard_clients.join(
+                            pcl_cases,
+                            pcl_cases.c.id == user_dashboard_clients.c.pcl_case_id,
+                        )
+                    )
+                    .where(user_dashboard_clients.c.user_id == user["id"])
+                    .order_by(
+                        desc(user_dashboard_clients.c.created_at),
+                        desc(user_dashboard_clients.c.id),
+                    )
                 )
                 .mappings()
-                .first()
+                .all()
             )
+
+            my_client_case_ids = {
+                int(row["case_id"])
+                for row in my_client_cases
+                if row.get("case_id") is not None
+            }
+
+            client_search_results: List[Dict[str, Any]] = []
+            if client_query:
+                search_value = f"%{client_query.lower()}%"
+                client_search_results = [
+                    dict(row)
+                    for row in conn.execute(
+                        select(
+                            pcl_cases.c.id.label("case_id"),
+                            pcl_cases.c.court_id,
+                            pcl_cases.c.case_number,
+                            pcl_cases.c.case_number_full,
+                            pcl_cases.c.case_title,
+                            pcl_cases.c.short_title,
+                            pcl_cases.c.case_type,
+                            pcl_cases.c.date_filed,
+                            pcl_cases.c.date_closed,
+                            pcl_cases.c.judge_last_name,
+                        )
+                        .where(
+                            or_(
+                                func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(
+                                    search_value
+                                ),
+                                func.lower(
+                                    func.coalesce(pcl_cases.c.case_number_full, "")
+                                ).like(search_value),
+                                func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(
+                                    search_value
+                                ),
+                                func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(
+                                    search_value
+                                ),
+                                func.lower(func.coalesce(pcl_cases.c.court_id, "")).like(
+                                    search_value
+                                ),
+                            )
+                        )
+                        .order_by(desc(pcl_cases.c.date_filed), desc(pcl_cases.c.id))
+                        .limit(30)
+                    ).mappings()
+                ]
+
+            for row in client_search_results:
+                row["is_saved_client"] = int(row.get("case_id") or 0) in my_client_case_ids
 
         return render_template(
             "dashboard.html",
             active_page="dashboard",
-            attorney_work_product_name=(
-                str(dashboard_pref.get("attorney_work_product_name") or "").strip()
-                if dashboard_pref
-                else ""
-            ),
-            attorney_work_product_saved_at=(
-                dashboard_pref.get("attorney_work_product_saved_at")
-                if dashboard_pref
-                else None
-            ),
+            active_tab=active_tab,
+            attorney_work_products=attorney_work_products,
+            client_query=client_query,
+            client_search_results=client_search_results,
+            my_client_cases=my_client_cases,
         )
 
     @app.get("/attorneys")

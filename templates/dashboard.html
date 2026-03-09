@@ -5,43 +5,176 @@
 {% block content %}
   <div class="card">
     <h1>Dashboard</h1>
-    <p class="dashboard-work-product-line">
-      Attorney Client Work Product For
-      <strong>
-        {% if attorney_work_product_name %}
-          {{ attorney_work_product_name }}
-        {% else %}
-          [enter name of attorney]
-        {% endif %}
-      </strong>
-      {% if attorney_work_product_saved_at %}
-        <span class="dashboard-work-product-stamp">
-          {{ attorney_work_product_saved_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
-        </span>
-      {% endif %}
-    </p>
     <p class="small">
       This is the initial dashboard placeholder. Next we can add your analytics, saved searches, and report tools.
     </p>
 
-    <form method="post" action="{{ url_for('dashboard') }}" class="dashboard-work-product-form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label for="attorney_name">Attorney name</label>
-      <div class="actions" style="margin-top: 8px;">
-        <input
-          id="attorney_name"
-          name="attorney_name"
-          value="{{ attorney_work_product_name or '' }}"
-          placeholder="Enter attorney name"
-          maxlength="255"
-          required
+    <div class="dashboard-tabs" style="margin-top: 16px;">
+      <a
+        class="pill {% if active_tab == 'work-product' %}is-current{% endif %}"
+        href="{{ url_for('dashboard', tab='work-product') }}"
+      >
+        Attorney Work Product
+      </a>
+      <a
+        class="pill {% if active_tab == 'my-clients' %}is-current{% endif %}"
+        href="{{ url_for('dashboard', tab='my-clients') }}"
+      >
+        My Clients
+      </a>
+    </div>
+
+    {% if active_tab == 'work-product' %}
+      <section class="dashboard-section">
+        {% if attorney_work_products %}
+          <div class="dashboard-work-product-list">
+            {% for item in attorney_work_products %}
+              <p class="dashboard-work-product-line">
+                Attorney Client Work Product For <strong>{{ item.attorney_name }}</strong>
+                {% if item.saved_at %}
+                  <span class="dashboard-work-product-stamp">
+                    {{ item.saved_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+                  </span>
+                {% endif %}
+              </p>
+            {% endfor %}
+          </div>
+          <button
+            type="button"
+            class="pill dashboard-add-attorney-btn"
+            id="dashboard-add-attorney-btn"
+          >
+            + Add attorney
+          </button>
+        {% else %}
+          <p class="dashboard-work-product-line">
+            Attorney Client Work Product For <strong>[enter name of attorney]</strong>
+          </p>
+        {% endif %}
+
+        <form
+          method="post"
+          action="{{ url_for('dashboard', tab='work-product') }}"
+          class="dashboard-work-product-form"
+          id="dashboard-attorney-form"
+          {% if attorney_work_products %}hidden{% endif %}
         >
-        <button class="primary" type="submit">Save</button>
-      </div>
-    </form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="action" value="save_attorney_name">
+          <input type="hidden" name="tab" value="work-product">
+          <label for="attorney_name">Attorney name</label>
+          <div class="actions" style="margin-top: 8px;">
+            <input
+              id="attorney_name"
+              name="attorney_name"
+              placeholder="Enter attorney name"
+              maxlength="255"
+              required
+            >
+            <button class="primary" type="submit">Save</button>
+          </div>
+        </form>
+      </section>
+    {% elif active_tab == 'my-clients' %}
+      <section class="dashboard-section">
+        <form method="get" action="{{ url_for('dashboard') }}" class="dashboard-client-search-form">
+          <input type="hidden" name="tab" value="my-clients">
+          <label for="client_q">Search for your client case</label>
+          <div class="actions" style="margin-top: 8px;">
+            <input
+              id="client_q"
+              name="client_q"
+              value="{{ client_query or '' }}"
+              placeholder="Case number, client name, title, or court"
+            >
+            <button class="primary" type="submit">Search</button>
+          </div>
+        </form>
+
+        {% if client_query %}
+          <div class="dashboard-client-search-results">
+            {% if client_search_results %}
+              {% for case in client_search_results %}
+                <article class="card dashboard-client-search-card">
+                  <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
+                  <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
+                  <p class="small">
+                    {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
+                    {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
+                    {% if case.judge_last_name %}· Judge {{ case.judge_last_name }}{% endif %}
+                  </p>
+                  <div class="actions">
+                    {% if case.is_saved_client %}
+                      <span class="small">Already in My Clients</span>
+                    {% else %}
+                      <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="action" value="add_client_case">
+                        <input type="hidden" name="tab" value="my-clients">
+                        <input type="hidden" name="case_id" value="{{ case.case_id }}">
+                        <button class="primary" type="submit">Add to My Clients</button>
+                      </form>
+                    {% endif %}
+                  </div>
+                </article>
+              {% endfor %}
+            {% else %}
+              <p class="small">No cases matched your search.</p>
+            {% endif %}
+          </div>
+        {% endif %}
+
+        <h2 style="margin-top: 20px;">My Clients</h2>
+        {% if my_client_cases %}
+          <div class="dashboard-client-cards">
+            {% for case in my_client_cases %}
+              <article class="card dashboard-client-card">
+                <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
+                <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
+                <p class="small">
+                  {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
+                  {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
+                  {% if case.judge_last_name %}· Judge {{ case.judge_last_name }}{% endif %}
+                </p>
+                <div class="actions">
+                  <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="remove_client_case">
+                    <input type="hidden" name="tab" value="my-clients">
+                    <input type="hidden" name="case_id" value="{{ case.case_id }}">
+                    <button class="secondary" type="submit">Remove</button>
+                  </form>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="small">No client cases saved yet. Search above and add one.</p>
+        {% endif %}
+      </section>
+    {% endif %}
 
     <div class="actions" style="margin-top: 16px;">
       <a class="pill" href="{{ url_for('profile') }}">Go to profile</a>
     </div>
   </div>
+
+  <script>
+    (function () {
+      const addButton = document.getElementById("dashboard-add-attorney-btn");
+      const form = document.getElementById("dashboard-attorney-form");
+      const input = document.getElementById("attorney_name");
+      if (!addButton || !form) {
+        return;
+      }
+
+      addButton.addEventListener("click", function () {
+        form.hidden = false;
+        addButton.hidden = true;
+        if (input) {
+          input.focus();
+        }
+      });
+    })();
+  </script>
 {% endblock %}
