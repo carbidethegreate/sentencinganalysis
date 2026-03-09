@@ -713,6 +713,27 @@ input[type="submit"].danger:disabled {
 
 .small { color: var(--muted); font-size: 0.9rem; }
 
+.dashboard-work-product-line {
+  margin-top: 6px;
+  margin-bottom: 12px;
+}
+
+.dashboard-work-product-stamp {
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.dashboard-work-product-form {
+  margin-top: 14px;
+}
+
+.dashboard-work-product-form .actions input {
+  flex: 1 1 280px;
+  max-width: 460px;
+}
+
 .coming-soon-card {
   width: min(960px, 100%);
   background: rgba(242, 242, 242, 0.9);

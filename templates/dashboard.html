@@ -5,9 +5,40 @@
 {% block content %}
   <div class="card">
     <h1>Dashboard</h1>
+    <p class="dashboard-work-product-line">
+      Attorney Client Work Product For
+      <strong>
+        {% if attorney_work_product_name %}
+          {{ attorney_work_product_name }}
+        {% else %}
+          [enter name of attorney]
+        {% endif %}
+      </strong>
+      {% if attorney_work_product_saved_at %}
+        <span class="dashboard-work-product-stamp">
+          {{ attorney_work_product_saved_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC
+        </span>
+      {% endif %}
+    </p>
     <p class="small">
       This is the initial dashboard placeholder. Next we can add your analytics, saved searches, and report tools.
     </p>
+
+    <form method="post" action="{{ url_for('dashboard') }}" class="dashboard-work-product-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="attorney_name">Attorney name</label>
+      <div class="actions" style="margin-top: 8px;">
+        <input
+          id="attorney_name"
+          name="attorney_name"
+          value="{{ attorney_work_product_name or '' }}"
+          placeholder="Enter attorney name"
+          maxlength="255"
+          required
+        >
+        <button class="primary" type="submit">Save</button>
+      </div>
+    </form>
 
     <div class="actions" style="margin-top: 16px;">
       <a class="pill" href="{{ url_for('profile') }}">Go to profile</a>

@@ -1091,6 +1091,23 @@ def create_app() -> Flask:
         Column("unsubscribed_at", DateTime(timezone=True), nullable=True),
     )
 
+    user_dashboard_preferences = Table(
+        "user_dashboard_preferences",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("user_id", Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True),
+        Column("attorney_work_product_name", String(255), nullable=True),
+        Column("attorney_work_product_saved_at", DateTime(timezone=True), nullable=True),
+    )
+
     case_stage1 = Table(
         "case_stage1",
         metadata,
@@ -1216,6 +1233,7 @@ def create_app() -> Flask:
                 tables=[
                     users,
                     newsletter_subscriptions,
+                    user_dashboard_preferences,
                     case_stage1,
                     case_data_one,
                     pacer_tokens,
@@ -5260,10 +5278,80 @@ def create_app() -> Flask:
     # User pages
     # -----------------
 
-    @app.route("/dashboard")
+    @app.route("/dashboard", methods=["GET", "POST"])
     @login_required
     def dashboard():
-        return render_template("dashboard.html", active_page="dashboard")
+        user = g.current_user
+        assert user is not None
+
+        if request.method == "POST":
+            require_csrf()
+            attorney_name = (request.form.get("attorney_name") or "").strip()
+
+            if not attorney_name:
+                flash("Attorney name is required.", "error")
+                return redirect(url_for("dashboard"))
+
+            if len(attorney_name) > 255:
+                flash("Attorney name must be 255 characters or fewer.", "error")
+                return redirect(url_for("dashboard"))
+
+            with engine.begin() as conn:
+                existing = (
+                    conn.execute(
+                        select(user_dashboard_preferences)
+                        .where(user_dashboard_preferences.c.user_id == user["id"])
+                        .limit(1)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if existing:
+                    conn.execute(
+                        update(user_dashboard_preferences)
+                        .where(user_dashboard_preferences.c.id == existing["id"])
+                        .values(
+                            attorney_work_product_name=attorney_name,
+                            attorney_work_product_saved_at=func.now(),
+                        )
+                    )
+                else:
+                    conn.execute(
+                        insert(user_dashboard_preferences).values(
+                            user_id=user["id"],
+                            attorney_work_product_name=attorney_name,
+                            attorney_work_product_saved_at=func.now(),
+                        )
+                    )
+
+            flash("Attorney work product label saved.", "success")
+            return redirect(url_for("dashboard"))
+
+        with engine.connect() as conn:
+            dashboard_pref = (
+                conn.execute(
+                    select(user_dashboard_preferences)
+                    .where(user_dashboard_preferences.c.user_id == user["id"])
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+
+        return render_template(
+            "dashboard.html",
+            active_page="dashboard",
+            attorney_work_product_name=(
+                str(dashboard_pref.get("attorney_work_product_name") or "").strip()
+                if dashboard_pref
+                else ""
+            ),
+            attorney_work_product_saved_at=(
+                dashboard_pref.get("attorney_work_product_saved_at")
+                if dashboard_pref
+                else None
+            ),
+        )
 
     @app.get("/attorneys")
     @login_required
