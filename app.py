@@ -1147,6 +1147,75 @@ def create_app() -> Flask:
         ),
     )
 
+    user_dashboard_client_profiles = Table(
+        "user_dashboard_client_profiles",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("user_id", Integer, ForeignKey("users.id"), nullable=False, index=True),
+        Column("client_name", String(255), nullable=False),
+        Column("client_name_normalized", String(255), nullable=False, index=True),
+        Column("last_viewed_at", DateTime(timezone=True), nullable=True),
+    )
+
+    user_dashboard_client_cases = Table(
+        "user_dashboard_client_cases",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column(
+            "client_profile_id",
+            Integer,
+            ForeignKey("user_dashboard_client_profiles.id"),
+            nullable=False,
+            index=True,
+        ),
+        Column("pcl_case_id", Integer, nullable=False, index=True),
+        Column("last_viewed_at", DateTime(timezone=True), nullable=True),
+    )
+
+    user_dashboard_case_references = Table(
+        "user_dashboard_case_references",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column(
+            "client_case_id",
+            Integer,
+            ForeignKey("user_dashboard_client_cases.id"),
+            nullable=False,
+            index=True,
+        ),
+        Column("reference_case_id", Integer, nullable=False, index=True),
+        Column(
+            "is_excluded",
+            Boolean,
+            nullable=False,
+            server_default=sa_text("false"),
+        ),
+    )
+
     case_stage1 = Table(
         "case_stage1",
         metadata,
@@ -1275,6 +1344,9 @@ def create_app() -> Flask:
                     user_dashboard_preferences,
                     user_dashboard_attorney_work_products,
                     user_dashboard_clients,
+                    user_dashboard_client_profiles,
+                    user_dashboard_client_cases,
+                    user_dashboard_case_references,
                     case_stage1,
                     case_data_one,
                     pacer_tokens,
@@ -1516,6 +1588,15 @@ def create_app() -> Flask:
             "ix_pcl_case_result_raw_court_case": "CREATE INDEX IF NOT EXISTS ix_pcl_case_result_raw_court_case ON pcl_case_result_raw (court_id, case_number)",
         },
         label="pcl",
+    )
+    _ensure_indexes(
+        {
+            "ix_user_dashboard_client_profiles_user_last_viewed": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_client_profiles_user_last_viewed ON user_dashboard_client_profiles (user_id, last_viewed_at DESC)",
+            "ix_user_dashboard_client_cases_profile_last_viewed": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_client_cases_profile_last_viewed ON user_dashboard_client_cases (client_profile_id, last_viewed_at DESC)",
+            "ix_user_dashboard_case_references_client_case": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_case_references_client_case ON user_dashboard_case_references (client_case_id)",
+            "ix_user_dashboard_case_references_reference_case": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_case_references_reference_case ON user_dashboard_case_references (reference_case_id)",
+        },
+        label="dashboard client workspace",
     )
     if engine.dialect.name == "sqlite":
         _ensure_indexes(
@@ -5331,136 +5412,137 @@ def create_app() -> Flask:
     def dashboard():
         user = g.current_user
         assert user is not None
+
         pcl_cases = pcl_tables["pcl_cases"]
+        pcl_case_fields = pcl_tables["pcl_case_fields"]
         case_entities = pcl_tables["case_entities"]
         pcl_parties = pcl_tables["pcl_parties"]
+
         valid_tabs = {"work-product", "my-clients"}
         active_tab = (request.args.get("tab") or "work-product").strip().lower()
         if active_tab not in valid_tabs:
             active_tab = "work-product"
+
         client_query = (request.args.get("client_q") or "").strip()
+        client_name_input = (request.args.get("client_name") or "").strip()
         research_query = (request.args.get("research_q") or "").strip()
 
-        if request.method == "POST":
-            require_csrf()
-            action = (request.form.get("action") or "").strip().lower()
-            next_tab = (request.form.get("tab") or active_tab).strip().lower()
-            if next_tab not in valid_tabs:
-                next_tab = "work-product"
+        case_view = (request.args.get("case_view") or "docket").strip().lower()
+        if case_view not in {"docket", "references"}:
+            case_view = "docket"
 
-            if action == "save_attorney_name":
-                attorney_name = (request.form.get("attorney_name") or "").strip()
-                if not attorney_name:
-                    flash("Attorney name is required.", "error")
-                    return redirect(url_for("dashboard", tab="work-product"))
-                if len(attorney_name) > 255:
-                    flash("Attorney name must be 255 characters or fewer.", "error")
-                    return redirect(url_for("dashboard", tab="work-product"))
+        def _parse_positive_int(raw_value: Any) -> Optional[int]:
+            try:
+                parsed = int(str(raw_value).strip())
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed > 0 else None
 
-                with engine.begin() as conn:
+        def _normalize_client_name(value: str) -> str:
+            return " ".join((value or "").strip().lower().split())
+
+        def _extract_client_name_from_case(case_row: Mapping[str, Any]) -> str:
+            candidates = [
+                str(case_row.get("case_title") or "").strip(),
+                str(case_row.get("short_title") or "").strip(),
+            ]
+            for title in candidates:
+                if not title:
+                    continue
+                if " - " in title:
+                    tail = title.rsplit(" - ", 1)[1].strip()
+                    if tail:
+                        return tail
+            for title in candidates:
+                if title:
+                    return title
+            return str(
+                case_row.get("case_number_full")
+                or case_row.get("case_number")
+                or "Client"
+            ).strip()
+
+        def _ensure_client_profile(conn: Any, user_id: int, client_name: str) -> Tuple[int, str]:
+            normalized = _normalize_client_name(client_name)
+            display = " ".join((client_name or "").strip().split())
+            if not normalized:
+                normalized = "client"
+            if not display:
+                display = "Client"
+
+            existing = (
+                conn.execute(
+                    select(
+                        user_dashboard_client_profiles.c.id,
+                        user_dashboard_client_profiles.c.client_name,
+                    )
+                    .where(user_dashboard_client_profiles.c.user_id == user_id)
+                    .where(
+                        user_dashboard_client_profiles.c.client_name_normalized == normalized
+                    )
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
+            if existing:
+                return int(existing["id"]), str(existing.get("client_name") or display)
+
+            created = conn.execute(
+                insert(user_dashboard_client_profiles).values(
+                    user_id=user_id,
+                    client_name=display,
+                    client_name_normalized=normalized,
+                    last_viewed_at=func.now(),
+                )
+            )
+            created_id = created.inserted_primary_key[0]
+            if created_id is None:
+                fallback = (
                     conn.execute(
-                        insert(user_dashboard_attorney_work_products).values(
-                            user_id=user["id"],
-                            attorney_name=attorney_name,
-                            saved_at=func.now(),
+                        select(user_dashboard_client_profiles.c.id)
+                        .where(user_dashboard_client_profiles.c.user_id == user_id)
+                        .where(
+                            user_dashboard_client_profiles.c.client_name_normalized
+                            == normalized
                         )
-                    )
-                    # Keep legacy single-value preference in sync for backward compatibility.
-                    existing_pref = (
-                        conn.execute(
-                            select(user_dashboard_preferences)
-                            .where(user_dashboard_preferences.c.user_id == user["id"])
-                            .limit(1)
-                        )
-                        .mappings()
-                        .first()
-                    )
-                    if existing_pref:
-                        conn.execute(
-                            update(user_dashboard_preferences)
-                            .where(user_dashboard_preferences.c.id == existing_pref["id"])
-                            .values(
-                                attorney_work_product_name=attorney_name,
-                                attorney_work_product_saved_at=func.now(),
-                            )
-                        )
-                    else:
-                        conn.execute(
-                            insert(user_dashboard_preferences).values(
-                                user_id=user["id"],
-                                attorney_work_product_name=attorney_name,
-                                attorney_work_product_saved_at=func.now(),
-                            )
-                        )
-
-                flash("Attorney name saved.", "success")
-                return redirect(url_for("dashboard", tab="work-product"))
-
-            if action in {"add_client_case", "add_research_case"}:
-                raw_case_id = (request.form.get("case_id") or "").strip()
-                collection_type = "research" if action == "add_research_case" else "my_client"
-                collection_label = "Research" if collection_type == "research" else "My Clients"
-                try:
-                    case_id = int(raw_case_id)
-                except (TypeError, ValueError):
-                    flash("Select a valid case to add.", "error")
-                    return redirect(url_for("dashboard", tab="my-clients"))
-
-                with engine.begin() as conn:
-                    case_exists = conn.execute(
-                        select(pcl_cases.c.id).where(pcl_cases.c.id == case_id).limit(1)
-                    ).first()
-                    if not case_exists:
-                        flash("That case could not be found.", "error")
-                        return redirect(url_for("dashboard", tab="my-clients"))
-
-                    existing_link = conn.execute(
-                        select(user_dashboard_clients.c.id)
-                        .where(user_dashboard_clients.c.user_id == user["id"])
-                        .where(user_dashboard_clients.c.pcl_case_id == case_id)
-                        .where(user_dashboard_clients.c.collection_type == collection_type)
+                        .order_by(desc(user_dashboard_client_profiles.c.id))
                         .limit(1)
-                    ).first()
-                    if existing_link:
-                        flash(f"That case is already in {collection_label}.", "info")
-                    else:
-                        conn.execute(
-                            insert(user_dashboard_clients).values(
-                                user_id=user["id"],
-                                pcl_case_id=case_id,
-                                collection_type=collection_type,
-                            )
-                        )
-                        flash(f"Case added to {collection_label}.", "success")
-
-                return redirect(url_for("dashboard", tab="my-clients"))
-
-            if action == "remove_client_case":
-                raw_case_id = (request.form.get("case_id") or "").strip()
-                collection_type = (request.form.get("collection_type") or "my_client").strip()
-                if collection_type not in {"my_client", "research"}:
-                    collection_type = "my_client"
-                collection_label = "Research" if collection_type == "research" else "My Clients"
-                try:
-                    case_id = int(raw_case_id)
-                except (TypeError, ValueError):
-                    flash("Select a valid case to remove.", "error")
-                    return redirect(url_for("dashboard", tab="my-clients"))
-
-                with engine.begin() as conn:
-                    conn.execute(
-                        delete(user_dashboard_clients)
-                        .where(user_dashboard_clients.c.user_id == user["id"])
-                        .where(user_dashboard_clients.c.pcl_case_id == case_id)
-                        .where(user_dashboard_clients.c.collection_type == collection_type)
                     )
-                flash(f"Case removed from {collection_label}.", "success")
-                return redirect(url_for("dashboard", tab="my-clients"))
+                    .mappings()
+                    .first()
+                )
+                if not fallback:
+                    raise RuntimeError("Unable to create client profile.")
+                created_id = fallback["id"]
+            return int(created_id), display
 
-            flash("Unknown dashboard action.", "error")
-            return redirect(url_for("dashboard", tab=next_tab))
+        def _my_clients_url(
+            *,
+            profile_id: Optional[int] = None,
+            client_case_id: Optional[int] = None,
+            case_view_param: Optional[str] = None,
+            client_q_param: Optional[str] = None,
+            client_name_param: Optional[str] = None,
+            research_q_param: Optional[str] = None,
+        ) -> str:
+            params: Dict[str, Any] = {"tab": "my-clients"}
+            if profile_id:
+                params["client_profile_id"] = profile_id
+            if client_case_id:
+                params["client_case_id"] = client_case_id
+            selected_view = case_view_param or case_view
+            if selected_view in {"docket", "references"}:
+                params["case_view"] = selected_view
+            if client_q_param:
+                params["client_q"] = client_q_param
+            if client_name_param:
+                params["client_name"] = client_name_param
+            if research_q_param:
+                params["research_q"] = research_q_param
+            return url_for("dashboard", **params)
 
-        def _search_cases_by_text(conn: Any, query_text: str, *, limit: int = 30) -> List[Dict[str, Any]]:
+        def _search_cases_by_text(conn: Any, query_text: str, *, limit: int = 40) -> List[Dict[str, Any]]:
             normalized_query = " ".join(query_text.strip().lower().split())
             if not normalized_query:
                 return []
@@ -5476,9 +5558,12 @@ def create_app() -> Flask:
                     + func.coalesce(pcl_parties.c.last_name, "")
                 )
             )
+
             phrase_match = or_(
                 func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(search_value),
-                func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(search_value),
+                func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(
+                    search_value
+                ),
                 func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(search_value),
                 func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(search_value),
                 func.lower(func.coalesce(pcl_cases.c.court_id, "")).like(search_value),
@@ -5505,15 +5590,15 @@ def create_app() -> Flask:
                                 func.lower(func.coalesce(pcl_parties.c.party_name, "")).like(
                                     search_value
                                 ),
-                                func.lower(func.coalesce(pcl_parties.c.first_name, "")).like(
-                                    search_value
-                                ),
-                                func.lower(func.coalesce(pcl_parties.c.middle_name, "")).like(
-                                    search_value
-                                ),
-                                func.lower(func.coalesce(pcl_parties.c.last_name, "")).like(
-                                    search_value
-                                ),
+                                func.lower(
+                                    func.coalesce(pcl_parties.c.first_name, "")
+                                ).like(search_value),
+                                func.lower(
+                                    func.coalesce(pcl_parties.c.middle_name, "")
+                                ).like(search_value),
+                                func.lower(
+                                    func.coalesce(pcl_parties.c.last_name, "")
+                                ).like(search_value),
                                 party_full_name.like(search_value),
                             ),
                         )
@@ -5530,8 +5615,12 @@ def create_app() -> Flask:
                         func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(
                             token_value
                         ),
-                        func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(token_value),
-                        func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(token_value),
+                        func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(
+                            token_value
+                        ),
+                        func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(
+                            token_value
+                        ),
                         func.lower(func.coalesce(pcl_cases.c.court_id, "")).like(token_value),
                         exists(
                             select(case_entities.c.id).where(
@@ -5541,9 +5630,9 @@ def create_app() -> Flask:
                                         func.lower(
                                             func.coalesce(case_entities.c.value_normalized, "")
                                         ).like(token_value),
-                                        func.lower(func.coalesce(case_entities.c.value, "")).like(
-                                            token_value
-                                        ),
+                                        func.lower(
+                                            func.coalesce(case_entities.c.value, "")
+                                        ).like(token_value),
                                     ),
                                 )
                             )
@@ -5596,6 +5685,474 @@ def create_app() -> Flask:
             )
             return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
+        def _migrate_legacy_client_cases(conn: Any, user_id: int) -> None:
+            existing_profiles = int(
+                conn.execute(
+                    select(func.count())
+                    .select_from(user_dashboard_client_profiles)
+                    .where(user_dashboard_client_profiles.c.user_id == user_id)
+                ).scalar_one()
+            )
+            if existing_profiles > 0:
+                return
+
+            legacy_rows = (
+                conn.execute(
+                    select(user_dashboard_clients.c.pcl_case_id)
+                    .where(user_dashboard_clients.c.user_id == user_id)
+                    .where(user_dashboard_clients.c.collection_type == "my_client")
+                    .order_by(desc(user_dashboard_clients.c.created_at))
+                    .limit(500)
+                )
+                .mappings()
+                .all()
+            )
+            if not legacy_rows:
+                return
+
+            seen_case_ids: Set[int] = set()
+            for legacy_row in legacy_rows:
+                case_id_raw = legacy_row.get("pcl_case_id")
+                if case_id_raw is None:
+                    continue
+                case_id = int(case_id_raw)
+                if case_id in seen_case_ids:
+                    continue
+                seen_case_ids.add(case_id)
+
+                case_row = (
+                    conn.execute(
+                        select(
+                            pcl_cases.c.id,
+                            pcl_cases.c.case_number,
+                            pcl_cases.c.case_number_full,
+                            pcl_cases.c.case_title,
+                            pcl_cases.c.short_title,
+                        )
+                        .where(pcl_cases.c.id == case_id)
+                        .limit(1)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if not case_row:
+                    continue
+
+                guessed_name = _extract_client_name_from_case(case_row)
+                profile_id, _ = _ensure_client_profile(conn, user_id, guessed_name)
+                existing_case = (
+                    conn.execute(
+                        select(user_dashboard_client_cases.c.id)
+                        .where(user_dashboard_client_cases.c.client_profile_id == profile_id)
+                        .where(user_dashboard_client_cases.c.pcl_case_id == case_id)
+                        .limit(1)
+                    )
+                    .mappings()
+                    .first()
+                )
+                if existing_case:
+                    continue
+                conn.execute(
+                    insert(user_dashboard_client_cases).values(
+                        client_profile_id=profile_id,
+                        pcl_case_id=case_id,
+                        last_viewed_at=func.now(),
+                    )
+                )
+
+        if request.method == "POST":
+            require_csrf()
+            action = (request.form.get("action") or "").strip().lower()
+            next_tab = (request.form.get("tab") or active_tab).strip().lower()
+            if next_tab not in valid_tabs:
+                next_tab = "work-product"
+
+            if action == "save_attorney_name":
+                attorney_name = (request.form.get("attorney_name") or "").strip()
+                if not attorney_name:
+                    flash("Attorney name is required.", "error")
+                    return redirect(url_for("dashboard", tab="work-product"))
+                if len(attorney_name) > 255:
+                    flash("Attorney name must be 255 characters or fewer.", "error")
+                    return redirect(url_for("dashboard", tab="work-product"))
+
+                with engine.begin() as conn:
+                    conn.execute(
+                        insert(user_dashboard_attorney_work_products).values(
+                            user_id=user["id"],
+                            attorney_name=attorney_name,
+                            saved_at=func.now(),
+                        )
+                    )
+                    existing_pref = (
+                        conn.execute(
+                            select(user_dashboard_preferences)
+                            .where(user_dashboard_preferences.c.user_id == user["id"])
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if existing_pref:
+                        conn.execute(
+                            update(user_dashboard_preferences)
+                            .where(user_dashboard_preferences.c.id == existing_pref["id"])
+                            .values(
+                                attorney_work_product_name=attorney_name,
+                                attorney_work_product_saved_at=func.now(),
+                            )
+                        )
+                    else:
+                        conn.execute(
+                            insert(user_dashboard_preferences).values(
+                                user_id=user["id"],
+                                attorney_work_product_name=attorney_name,
+                                attorney_work_product_saved_at=func.now(),
+                            )
+                        )
+
+                flash("Attorney name saved.", "success")
+                return redirect(url_for("dashboard", tab="work-product"))
+
+            if action == "add_client_case":
+                target_case_id = _parse_positive_int(request.form.get("case_id"))
+                if not target_case_id:
+                    flash("Select a valid case to add.", "error")
+                    return redirect(_my_clients_url())
+
+                requested_profile_id = _parse_positive_int(request.form.get("client_profile_id"))
+                requested_client_name = (request.form.get("client_name") or "").strip()
+                redirect_query = (request.form.get("client_q") or "").strip()
+
+                with engine.begin() as conn:
+                    case_row = (
+                        conn.execute(
+                            select(
+                                pcl_cases.c.id,
+                                pcl_cases.c.case_number,
+                                pcl_cases.c.case_number_full,
+                                pcl_cases.c.case_title,
+                                pcl_cases.c.short_title,
+                            )
+                            .where(pcl_cases.c.id == target_case_id)
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if not case_row:
+                        flash("That case could not be found.", "error")
+                        return redirect(_my_clients_url(client_q_param=redirect_query))
+
+                    profile_id: Optional[int] = None
+                    if requested_profile_id:
+                        profile_row = (
+                            conn.execute(
+                                select(user_dashboard_client_profiles.c.id)
+                                .where(user_dashboard_client_profiles.c.id == requested_profile_id)
+                                .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                                .limit(1)
+                            )
+                            .mappings()
+                            .first()
+                        )
+                        if profile_row:
+                            profile_id = int(profile_row["id"])
+
+                    if profile_id is None:
+                        fallback_name = (
+                            requested_client_name
+                            or _extract_client_name_from_case(case_row)
+                            or "Client"
+                        )
+                        profile_id, _ = _ensure_client_profile(
+                            conn,
+                            int(user["id"]),
+                            fallback_name,
+                        )
+
+                    existing_case = (
+                        conn.execute(
+                            select(user_dashboard_client_cases.c.id)
+                            .where(user_dashboard_client_cases.c.client_profile_id == profile_id)
+                            .where(user_dashboard_client_cases.c.pcl_case_id == target_case_id)
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if existing_case:
+                        client_case_id = int(existing_case["id"])
+                        conn.execute(
+                            update(user_dashboard_client_cases)
+                            .where(user_dashboard_client_cases.c.id == client_case_id)
+                            .values(last_viewed_at=func.now())
+                        )
+                        flash("That case is already attached to this client.", "info")
+                    else:
+                        conn.execute(
+                            insert(user_dashboard_clients).values(
+                                user_id=int(user["id"]),
+                                pcl_case_id=target_case_id,
+                                collection_type="my_client",
+                            )
+                        )
+                        created_link = conn.execute(
+                            insert(user_dashboard_client_cases).values(
+                                client_profile_id=profile_id,
+                                pcl_case_id=target_case_id,
+                                last_viewed_at=func.now(),
+                            )
+                        )
+                        inserted_link_id = created_link.inserted_primary_key[0]
+                        if inserted_link_id is None:
+                            fallback_link = (
+                                conn.execute(
+                                    select(user_dashboard_client_cases.c.id)
+                                    .where(
+                                        user_dashboard_client_cases.c.client_profile_id
+                                        == profile_id
+                                    )
+                                    .where(
+                                        user_dashboard_client_cases.c.pcl_case_id
+                                        == target_case_id
+                                    )
+                                    .order_by(desc(user_dashboard_client_cases.c.id))
+                                    .limit(1)
+                                )
+                                .mappings()
+                                .first()
+                            )
+                            inserted_link_id = int(fallback_link["id"]) if fallback_link else None
+                        client_case_id = int(inserted_link_id) if inserted_link_id else None
+                        flash("Case added to My Clients.", "success")
+
+                    conn.execute(
+                        update(user_dashboard_client_profiles)
+                        .where(user_dashboard_client_profiles.c.id == profile_id)
+                        .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                        .values(last_viewed_at=func.now())
+                    )
+
+                return redirect(
+                    _my_clients_url(
+                        profile_id=profile_id,
+                        client_case_id=client_case_id,
+                        case_view_param="docket",
+                        client_q_param=redirect_query,
+                        client_name_param=requested_client_name,
+                    )
+                )
+
+            if action == "add_reference_case":
+                target_client_case_id = _parse_positive_int(request.form.get("client_case_id"))
+                reference_case_id = _parse_positive_int(request.form.get("case_id"))
+                redirect_research_query = (request.form.get("research_q") or "").strip()
+                if not target_client_case_id or not reference_case_id:
+                    flash("Select a valid reference case.", "error")
+                    return redirect(
+                        _my_clients_url(
+                            case_view_param="references",
+                            research_q_param=redirect_research_query,
+                        )
+                    )
+
+                with engine.begin() as conn:
+                    owner_row = (
+                        conn.execute(
+                            select(
+                                user_dashboard_client_cases.c.id,
+                                user_dashboard_client_cases.c.client_profile_id,
+                            )
+                            .select_from(
+                                user_dashboard_client_cases.join(
+                                    user_dashboard_client_profiles,
+                                    user_dashboard_client_profiles.c.id
+                                    == user_dashboard_client_cases.c.client_profile_id,
+                                )
+                            )
+                            .where(user_dashboard_client_cases.c.id == target_client_case_id)
+                            .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if not owner_row:
+                        flash("Client case not found.", "error")
+                        return redirect(_my_clients_url())
+
+                    case_exists = conn.execute(
+                        select(pcl_cases.c.id)
+                        .where(pcl_cases.c.id == reference_case_id)
+                        .limit(1)
+                    ).first()
+                    if not case_exists:
+                        flash("Reference case could not be found.", "error")
+                        return redirect(
+                            _my_clients_url(
+                                profile_id=int(owner_row["client_profile_id"]),
+                                client_case_id=target_client_case_id,
+                                case_view_param="references",
+                                research_q_param=redirect_research_query,
+                            )
+                        )
+
+                    existing_ref = (
+                        conn.execute(
+                            select(user_dashboard_case_references.c.id)
+                            .where(
+                                user_dashboard_case_references.c.client_case_id
+                                == target_client_case_id
+                            )
+                            .where(
+                                user_dashboard_case_references.c.reference_case_id
+                                == reference_case_id
+                            )
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if existing_ref:
+                        flash("That reference case is already linked.", "info")
+                    else:
+                        conn.execute(
+                            insert(user_dashboard_case_references).values(
+                                client_case_id=target_client_case_id,
+                                reference_case_id=reference_case_id,
+                                is_excluded=False,
+                            )
+                        )
+                        flash("Reference case added.", "success")
+
+                return redirect(
+                    _my_clients_url(
+                        profile_id=int(owner_row["client_profile_id"]),
+                        client_case_id=target_client_case_id,
+                        case_view_param="references",
+                        research_q_param=redirect_research_query,
+                    )
+                )
+
+            if action == "remove_client_case":
+                target_client_case_id = _parse_positive_int(request.form.get("client_case_id"))
+                if not target_client_case_id:
+                    flash("Select a valid case to remove.", "error")
+                    return redirect(_my_clients_url())
+
+                with engine.begin() as conn:
+                    row = (
+                        conn.execute(
+                            select(
+                                user_dashboard_client_cases.c.id,
+                                user_dashboard_client_cases.c.client_profile_id,
+                            )
+                            .select_from(
+                                user_dashboard_client_cases.join(
+                                    user_dashboard_client_profiles,
+                                    user_dashboard_client_profiles.c.id
+                                    == user_dashboard_client_cases.c.client_profile_id,
+                                )
+                            )
+                            .where(user_dashboard_client_cases.c.id == target_client_case_id)
+                            .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if not row:
+                        flash("Client case not found.", "error")
+                        return redirect(_my_clients_url())
+
+                    conn.execute(
+                        delete(user_dashboard_case_references).where(
+                            user_dashboard_case_references.c.client_case_id
+                            == target_client_case_id
+                        )
+                    )
+                    conn.execute(
+                        delete(user_dashboard_client_cases).where(
+                            user_dashboard_client_cases.c.id == target_client_case_id
+                        )
+                    )
+
+                flash("Case removed from this client.", "success")
+                return redirect(_my_clients_url(profile_id=int(row["client_profile_id"])))
+
+            if action in {"remove_reference_case", "toggle_reference_case"}:
+                reference_id = _parse_positive_int(request.form.get("reference_id"))
+                if not reference_id:
+                    flash("Reference case selection is invalid.", "error")
+                    return redirect(_my_clients_url(case_view_param="references"))
+
+                with engine.begin() as conn:
+                    ref_row = (
+                        conn.execute(
+                            select(
+                                user_dashboard_case_references.c.id,
+                                user_dashboard_case_references.c.client_case_id,
+                                user_dashboard_case_references.c.is_excluded,
+                                user_dashboard_client_cases.c.client_profile_id,
+                            )
+                            .select_from(
+                                user_dashboard_case_references.join(
+                                    user_dashboard_client_cases,
+                                    user_dashboard_client_cases.c.id
+                                    == user_dashboard_case_references.c.client_case_id,
+                                ).join(
+                                    user_dashboard_client_profiles,
+                                    user_dashboard_client_profiles.c.id
+                                    == user_dashboard_client_cases.c.client_profile_id,
+                                )
+                            )
+                            .where(user_dashboard_case_references.c.id == reference_id)
+                            .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if not ref_row:
+                        flash("Reference case not found.", "error")
+                        return redirect(_my_clients_url(case_view_param="references"))
+
+                    if action == "remove_reference_case":
+                        conn.execute(
+                            delete(user_dashboard_case_references).where(
+                                user_dashboard_case_references.c.id == reference_id
+                            )
+                        )
+                        flash("Reference case removed.", "success")
+                    else:
+                        next_excluded = not bool(ref_row.get("is_excluded"))
+                        conn.execute(
+                            update(user_dashboard_case_references)
+                            .where(user_dashboard_case_references.c.id == reference_id)
+                            .values(is_excluded=next_excluded)
+                        )
+                        flash(
+                            "Reference case excluded for this client case."
+                            if next_excluded
+                            else "Reference case included for this client case.",
+                            "success",
+                        )
+
+                return redirect(
+                    _my_clients_url(
+                        profile_id=int(ref_row["client_profile_id"]),
+                        client_case_id=int(ref_row["client_case_id"]),
+                        case_view_param="references",
+                    )
+                )
+
+            flash("Unknown dashboard action.", "error")
+            return redirect(url_for("dashboard", tab=next_tab))
+
+        with engine.begin() as conn:
+            _migrate_legacy_client_cases(conn, int(user["id"]))
+
         with engine.connect() as conn:
             attorney_work_products = (
                 conn.execute(
@@ -5616,7 +6173,6 @@ def create_app() -> Flask:
             )
 
             if not attorney_work_products:
-                # One-time migration from the legacy single-value table.
                 legacy_pref = (
                     conn.execute(
                         select(user_dashboard_preferences)
@@ -5652,105 +6208,285 @@ def create_app() -> Flask:
                         }
                     ]
 
-            my_client_cases = (
+            client_profiles = (
                 conn.execute(
                     select(
-                        user_dashboard_clients.c.pcl_case_id.label("case_id"),
-                        user_dashboard_clients.c.created_at.label("saved_at"),
-                        pcl_cases.c.court_id,
-                        pcl_cases.c.case_number,
-                        pcl_cases.c.case_number_full,
-                        pcl_cases.c.case_title,
-                        pcl_cases.c.short_title,
-                        pcl_cases.c.case_type,
-                        pcl_cases.c.date_filed,
-                        pcl_cases.c.date_closed,
-                        pcl_cases.c.judge_last_name,
+                        user_dashboard_client_profiles.c.id,
+                        user_dashboard_client_profiles.c.client_name,
+                        user_dashboard_client_profiles.c.last_viewed_at,
+                        user_dashboard_client_profiles.c.created_at,
                     )
-                    .select_from(
-                        user_dashboard_clients.join(
-                            pcl_cases,
-                            pcl_cases.c.id == user_dashboard_clients.c.pcl_case_id,
-                        )
-                    )
-                    .where(user_dashboard_clients.c.user_id == user["id"])
-                    .where(user_dashboard_clients.c.collection_type == "my_client")
+                    .where(user_dashboard_client_profiles.c.user_id == user["id"])
                     .order_by(
-                        desc(user_dashboard_clients.c.created_at),
-                        desc(user_dashboard_clients.c.id),
+                        desc(
+                            func.coalesce(
+                                user_dashboard_client_profiles.c.last_viewed_at,
+                                user_dashboard_client_profiles.c.created_at,
+                            )
+                        ),
+                        desc(user_dashboard_client_profiles.c.id),
                     )
                 )
                 .mappings()
                 .all()
             )
 
-            research_cases = (
-                conn.execute(
-                    select(
-                        user_dashboard_clients.c.pcl_case_id.label("case_id"),
-                        user_dashboard_clients.c.created_at.label("saved_at"),
-                        pcl_cases.c.court_id,
-                        pcl_cases.c.case_number,
-                        pcl_cases.c.case_number_full,
-                        pcl_cases.c.case_title,
-                        pcl_cases.c.short_title,
-                        pcl_cases.c.case_type,
-                        pcl_cases.c.date_filed,
-                        pcl_cases.c.date_closed,
-                        pcl_cases.c.judge_last_name,
+            selected_client_profile_id = _parse_positive_int(
+                request.args.get("client_profile_id")
+            )
+            profile_ids = {int(row["id"]) for row in client_profiles}
+            if selected_client_profile_id not in profile_ids:
+                selected_client_profile_id = int(client_profiles[0]["id"]) if client_profiles else None
+
+            selected_client_profile = None
+            for profile_row in client_profiles:
+                if (
+                    selected_client_profile_id
+                    and int(profile_row["id"]) == selected_client_profile_id
+                ):
+                    selected_client_profile = dict(profile_row)
+                    break
+
+            my_client_cases: List[Dict[str, Any]] = []
+            if selected_client_profile_id:
+                my_client_cases = [
+                    dict(row)
+                    for row in conn.execute(
+                        select(
+                            user_dashboard_client_cases.c.id.label("client_case_id"),
+                            user_dashboard_client_cases.c.pcl_case_id.label("case_id"),
+                            user_dashboard_client_cases.c.created_at.label("saved_at"),
+                            user_dashboard_client_cases.c.last_viewed_at,
+                            user_dashboard_client_profiles.c.client_name,
+                            pcl_cases.c.court_id,
+                            pcl_cases.c.case_number,
+                            pcl_cases.c.case_number_full,
+                            pcl_cases.c.case_title,
+                            pcl_cases.c.short_title,
+                            pcl_cases.c.case_type,
+                            pcl_cases.c.date_filed,
+                            pcl_cases.c.date_closed,
+                            pcl_cases.c.judge_last_name,
+                        )
+                        .select_from(
+                            user_dashboard_client_cases.join(
+                                user_dashboard_client_profiles,
+                                user_dashboard_client_profiles.c.id
+                                == user_dashboard_client_cases.c.client_profile_id,
+                            ).join(
+                                pcl_cases,
+                                pcl_cases.c.id == user_dashboard_client_cases.c.pcl_case_id,
+                            )
+                        )
+                        .where(
+                            user_dashboard_client_cases.c.client_profile_id
+                            == selected_client_profile_id
+                        )
+                        .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                        .order_by(
+                            desc(
+                                func.coalesce(
+                                    user_dashboard_client_cases.c.last_viewed_at,
+                                    user_dashboard_client_cases.c.created_at,
+                                )
+                            ),
+                            desc(user_dashboard_client_cases.c.id),
+                        )
+                    ).mappings()
+                ]
+
+            selected_client_case_id = _parse_positive_int(request.args.get("client_case_id"))
+            case_link_ids = {
+                int(row["client_case_id"])
+                for row in my_client_cases
+                if row.get("client_case_id") is not None
+            }
+            if selected_client_case_id not in case_link_ids:
+                selected_client_case_id = int(my_client_cases[0]["client_case_id"]) if my_client_cases else None
+
+            selected_client_case = None
+            for case_row in my_client_cases:
+                if selected_client_case_id and int(case_row["client_case_id"]) == selected_client_case_id:
+                    selected_client_case = dict(case_row)
+                    break
+
+            if selected_client_profile_id:
+                with engine.begin() as write_conn:
+                    write_conn.execute(
+                        update(user_dashboard_client_profiles)
+                        .where(user_dashboard_client_profiles.c.id == selected_client_profile_id)
+                        .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                        .values(last_viewed_at=func.now())
                     )
-                    .select_from(
-                        user_dashboard_clients.join(
-                            pcl_cases,
-                            pcl_cases.c.id == user_dashboard_clients.c.pcl_case_id,
+                    if selected_client_case_id:
+                        write_conn.execute(
+                            update(user_dashboard_client_cases)
+                            .where(user_dashboard_client_cases.c.id == selected_client_case_id)
+                            .values(last_viewed_at=func.now())
+                        )
+
+            selected_case_docket_text = ""
+            selected_case_docket_entry_count = None
+            selected_case_docket_fetched_at = None
+            if selected_client_case:
+                field_rows = (
+                    conn.execute(
+                        select(
+                            pcl_case_fields.c.field_name,
+                            pcl_case_fields.c.field_value_text,
+                            pcl_case_fields.c.field_value_json,
+                        )
+                        .where(pcl_case_fields.c.case_id == selected_client_case["case_id"])
+                        .where(
+                            pcl_case_fields.c.field_name.in_(
+                                [
+                                    "docket_text",
+                                    "docket_entry_count",
+                                    "docket_fetched_at",
+                                    "docket_entries",
+                                ]
+                            )
                         )
                     )
-                    .where(user_dashboard_clients.c.user_id == user["id"])
-                    .where(user_dashboard_clients.c.collection_type == "research")
-                    .order_by(
-                        desc(user_dashboard_clients.c.created_at),
-                        desc(user_dashboard_clients.c.id),
-                    )
+                    .mappings()
+                    .all()
                 )
-                .mappings()
-                .all()
-            )
+                field_map = {str(row["field_name"]): row for row in field_rows}
+                selected_case_docket_text = str(
+                    (field_map.get("docket_text") or {}).get("field_value_text") or ""
+                ).strip()
+                selected_case_docket_entry_count = (
+                    (field_map.get("docket_entry_count") or {}).get("field_value_text")
+                    if field_map.get("docket_entry_count")
+                    else None
+                )
+                selected_case_docket_fetched_at = (
+                    (field_map.get("docket_fetched_at") or {}).get("field_value_text")
+                    if field_map.get("docket_fetched_at")
+                    else None
+                )
+                if not selected_case_docket_text:
+                    entries_payload = (field_map.get("docket_entries") or {}).get(
+                        "field_value_json"
+                    )
+                    entries = entries_payload if isinstance(entries_payload, list) else []
+                    lines: List[str] = []
+                    for entry in entries:
+                        if not isinstance(entry, Mapping):
+                            continue
+                        date_value = str(entry.get("date_filed") or "").strip()
+                        doc_value = str(entry.get("document_number") or "").strip()
+                        desc_value = str(entry.get("description") or "").strip()
+                        line = " | ".join(
+                            part for part in [date_value, doc_value, desc_value] if part
+                        ).strip()
+                        if line:
+                            lines.append(line)
+                    selected_case_docket_text = "\\n".join(lines)
 
-            my_client_case_ids = {
+            reference_cases: List[Dict[str, Any]] = []
+            reference_case_ids: Set[int] = set()
+            if selected_client_case_id:
+                reference_cases = [
+                    dict(row)
+                    for row in conn.execute(
+                        select(
+                            user_dashboard_case_references.c.id.label("reference_id"),
+                            user_dashboard_case_references.c.reference_case_id.label("case_id"),
+                            user_dashboard_case_references.c.is_excluded,
+                            user_dashboard_case_references.c.created_at.label("saved_at"),
+                            pcl_cases.c.court_id,
+                            pcl_cases.c.case_number,
+                            pcl_cases.c.case_number_full,
+                            pcl_cases.c.case_title,
+                            pcl_cases.c.short_title,
+                            pcl_cases.c.case_type,
+                            pcl_cases.c.date_filed,
+                            pcl_cases.c.date_closed,
+                            pcl_cases.c.judge_last_name,
+                        )
+                        .select_from(
+                            user_dashboard_case_references.join(
+                                pcl_cases,
+                                pcl_cases.c.id
+                                == user_dashboard_case_references.c.reference_case_id,
+                            )
+                        )
+                        .where(
+                            user_dashboard_case_references.c.client_case_id
+                            == selected_client_case_id
+                        )
+                        .order_by(
+                            user_dashboard_case_references.c.is_excluded.asc(),
+                            desc(user_dashboard_case_references.c.created_at),
+                            desc(user_dashboard_case_references.c.id),
+                        )
+                    ).mappings()
+                ]
+                reference_case_ids = {
+                    int(row["case_id"])
+                    for row in reference_cases
+                    if row.get("case_id") is not None
+                }
+
+            all_user_case_ids = {
+                int(row[0])
+                for row in conn.execute(
+                    select(user_dashboard_client_cases.c.pcl_case_id)
+                    .select_from(
+                        user_dashboard_client_cases.join(
+                            user_dashboard_client_profiles,
+                            user_dashboard_client_profiles.c.id
+                            == user_dashboard_client_cases.c.client_profile_id,
+                        )
+                    )
+                    .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                ).all()
+            }
+            selected_profile_case_ids = {
                 int(row["case_id"])
                 for row in my_client_cases
                 if row.get("case_id") is not None
             }
-            research_case_ids = {
-                int(row["case_id"])
-                for row in research_cases
-                if row.get("case_id") is not None
-            }
 
-            client_search_results = _search_cases_by_text(conn, client_query, limit=30)
-            research_search_results = _search_cases_by_text(conn, research_query, limit=30)
-
+            client_search_results = _search_cases_by_text(conn, client_query, limit=40)
             for row in client_search_results:
                 row_case_id = int(row.get("case_id") or 0)
-                row["is_saved_client"] = row_case_id in my_client_case_ids
-                row["is_saved_research"] = row_case_id in research_case_ids
+                row["is_in_selected_client"] = row_case_id in selected_profile_case_ids
+                row["is_in_any_client"] = row_case_id in all_user_case_ids
 
+            research_search_results = _search_cases_by_text(conn, research_query, limit=40)
             for row in research_search_results:
                 row_case_id = int(row.get("case_id") or 0)
-                row["is_saved_client"] = row_case_id in my_client_case_ids
-                row["is_saved_research"] = row_case_id in research_case_ids
+                row["is_reference_for_selected_case"] = row_case_id in reference_case_ids
+
+            if not client_name_input:
+                if selected_client_profile:
+                    client_name_input = str(selected_client_profile.get("client_name") or "")
+                elif client_query:
+                    client_name_input = client_query
 
         return render_template(
             "dashboard.html",
             active_page="dashboard",
             active_tab=active_tab,
             attorney_work_products=attorney_work_products,
-            client_query=client_query,
-            research_query=research_query,
-            client_search_results=client_search_results,
-            research_search_results=research_search_results,
+            client_profiles=client_profiles,
+            selected_client_profile=selected_client_profile,
+            selected_client_profile_id=selected_client_profile_id,
             my_client_cases=my_client_cases,
-            research_cases=research_cases,
+            selected_client_case=selected_client_case,
+            selected_client_case_id=selected_client_case_id,
+            selected_case_docket_text=selected_case_docket_text,
+            selected_case_docket_entry_count=selected_case_docket_entry_count,
+            selected_case_docket_fetched_at=selected_case_docket_fetched_at,
+            case_view=case_view,
+            client_query=client_query,
+            client_name_input=client_name_input,
+            client_search_results=client_search_results,
+            research_query=research_query,
+            research_search_results=research_search_results,
+            reference_cases=reference_cases,
         )
 
     @app.get("/attorneys")

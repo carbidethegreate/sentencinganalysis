@@ -761,6 +761,54 @@ input[type="submit"].danger:disabled {
   gap: 10px;
 }
 
+.dashboard-client-layout {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 12px;
+}
+
+.dashboard-client-list {
+  align-self: start;
+}
+
+.dashboard-client-list-items {
+  display: grid;
+  gap: 8px;
+}
+
+.dashboard-client-list-stamp {
+  margin-left: 4px;
+}
+
+.dashboard-client-main {
+  display: grid;
+  gap: 12px;
+}
+
+.dashboard-case-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dashboard-docket-panel {
+  border: 1px solid rgba(140, 132, 128, 0.22);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.dashboard-docket-text {
+  margin: 0;
+  max-height: 520px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
 .dashboard-client-search-card h3,
 .dashboard-client-card h3 {
   margin-bottom: 6px;
@@ -771,6 +819,12 @@ input[type="submit"].danger:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
+}
+
+@media (max-width: 960px) {
+  .dashboard-client-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 .coming-soon-card {

@@ -6,7 +6,7 @@
   <div class="card">
     <h1>Dashboard</h1>
     <p class="small">
-      This is the initial dashboard placeholder. Next we can add your analytics, saved searches, and report tools.
+      Keep this simple: select a client, select the active case, then review docket and references.
     </p>
 
     <div class="dashboard-tabs" style="margin-top: 16px;">
@@ -77,173 +77,275 @@
       </section>
     {% elif active_tab == 'my-clients' %}
       <section class="dashboard-section">
-        <form method="get" action="{{ url_for('dashboard') }}" class="dashboard-client-search-form">
-          <input type="hidden" name="tab" value="my-clients">
-          {% if research_query %}<input type="hidden" name="research_q" value="{{ research_query }}">{% endif %}
-          <label for="client_q">Search for your client case</label>
-          <div class="actions" style="margin-top: 8px;">
-            <input
-              id="client_q"
-              name="client_q"
-              value="{{ client_query or '' }}"
-              placeholder="Case number, client name, title, or court"
-            >
-            <button class="primary" type="submit">Search</button>
-          </div>
-        </form>
+        <div class="dashboard-client-layout">
+          <aside class="dashboard-client-list card">
+            <h2>Clients</h2>
+            {% if client_profiles %}
+              <div class="dashboard-client-list-items">
+                {% for client in client_profiles %}
+                  <a
+                    class="pill {% if selected_client_profile_id and client.id == selected_client_profile_id %}is-current{% endif %}"
+                    href="{{ url_for('dashboard', tab='my-clients', client_profile_id=client.id, case_view=case_view) }}"
+                  >
+                    {{ client.client_name }}
+                  </a>
+                  {% if client.last_viewed_at %}
+                    <div class="small dashboard-client-list-stamp">
+                      Last opened {{ client.last_viewed_at.strftime('%Y-%m-%d %H:%M') }} UTC
+                    </div>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            {% else %}
+              <p class="small">No clients yet. Search and add a case below.</p>
+            {% endif %}
+          </aside>
 
-        {% if client_query %}
-          <div class="dashboard-client-search-results">
-            {% if client_search_results %}
-              {% for case in client_search_results %}
-                <article class="card dashboard-client-search-card">
-                  <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
-                  <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
-                  <p class="small">
-                    {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
-                    {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
-                    {% if case.judge_last_name %}· Judge {{ case.judge_last_name }}{% endif %}
-                  </p>
-                  <div class="actions">
-                    {% if case.is_saved_client and case.is_saved_research %}
-                      <span class="small">Already in My Clients and Research</span>
-                    {% elif case.is_saved_client %}
-                      <span class="small">Already in My Clients</span>
-                    {% elif case.is_saved_research %}
-                      <span class="small">Already in Research</span>
-                    {% endif %}
-                    {% if not case.is_saved_client %}
+          <div class="dashboard-client-main">
+            <article class="card dashboard-client-search-shell">
+              <h2>Add Client Case</h2>
+              <form method="get" action="{{ url_for('dashboard') }}" class="dashboard-client-search-form">
+                <input type="hidden" name="tab" value="my-clients">
+                {% if selected_client_profile_id %}
+                  <input type="hidden" name="client_profile_id" value="{{ selected_client_profile_id }}">
+                {% endif %}
+                <input type="hidden" name="case_view" value="{{ case_view }}">
+                {% if research_query %}
+                  <input type="hidden" name="research_q" value="{{ research_query }}">
+                {% endif %}
+
+                <label for="client_q">Search case by client/case/court</label>
+                <div class="actions" style="margin-top: 8px;">
+                  <input
+                    id="client_q"
+                    name="client_q"
+                    value="{{ client_query or '' }}"
+                    placeholder="Example: David Whitaker"
+                  >
+                  <button class="primary" type="submit">Search</button>
+                </div>
+
+                <label for="client_name" style="margin-top: 10px;">Client name to save under</label>
+                <input
+                  id="client_name"
+                  name="client_name"
+                  value="{{ client_name_input or '' }}"
+                  placeholder="Client full name"
+                >
+              </form>
+
+              {% if client_query %}
+                <div class="dashboard-client-search-results">
+                  {% if client_search_results %}
+                    {% for case in client_search_results %}
+                      <article class="card dashboard-client-search-card">
+                        <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
+                        <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
+                        <p class="small">
+                          {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
+                          {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
+                          {% if case.judge_last_name %}· Judge {{ case.judge_last_name }}{% endif %}
+                        </p>
+                        <div class="actions">
+                          {% if case.is_in_selected_client %}
+                            <span class="small">Already in selected client</span>
+                          {% elif case.is_in_any_client %}
+                            <span class="small">Already in another client</span>
+                          {% endif %}
+                          {% if not case.is_in_selected_client %}
+                            <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
+                              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                              <input type="hidden" name="action" value="add_client_case">
+                              <input type="hidden" name="tab" value="my-clients">
+                              <input type="hidden" name="case_id" value="{{ case.case_id }}">
+                              {% if selected_client_profile_id %}
+                                <input type="hidden" name="client_profile_id" value="{{ selected_client_profile_id }}">
+                              {% endif %}
+                              <input type="hidden" name="client_name" value="{{ client_name_input or '' }}">
+                              <input type="hidden" name="client_q" value="{{ client_query or '' }}">
+                              <button class="primary" type="submit">
+                                {% if selected_client_profile %}
+                                  Add to {{ selected_client_profile.client_name }}
+                                {% else %}
+                                  Add and Create Client
+                                {% endif %}
+                              </button>
+                            </form>
+                          {% endif %}
+                        </div>
+                      </article>
+                    {% endfor %}
+                  {% else %}
+                    <p class="small">No cases matched your search.</p>
+                  {% endif %}
+                </div>
+              {% endif %}
+            </article>
+
+            <article class="card" style="margin-top: 12px;">
+              {% if selected_client_profile %}
+                <h2>{{ selected_client_profile.client_name }}</h2>
+
+                {% if my_client_cases %}
+                  <div class="dashboard-case-tabs" style="margin-top: 10px;">
+                    {% for case in my_client_cases %}
+                      <a
+                        class="pill {% if selected_client_case_id and case.client_case_id == selected_client_case_id %}is-current{% endif %}"
+                        href="{{ url_for('dashboard', tab='my-clients', client_profile_id=selected_client_profile_id, client_case_id=case.client_case_id, case_view=case_view) }}"
+                      >
+                        {{ case.case_number_full or case.case_number or ('Case ' ~ case.case_id) }}
+                      </a>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <p class="small">No cases for this client yet.</p>
+                {% endif %}
+
+                {% if selected_client_case %}
+                  <div class="dashboard-selected-case" style="margin-top: 12px;">
+                    <h3>{{ selected_client_case.case_number_full or selected_client_case.case_number or 'Case' }}</h3>
+                    <p class="small">{{ selected_client_case.case_title or selected_client_case.short_title or 'No case title available.' }}</p>
+                    <p class="small">
+                      {{ selected_client_case.court_id or 'Court N/A' }} · {{ selected_client_case.case_type or 'Type N/A' }}
+                      {% if selected_client_case.date_filed %}· Filed {{ selected_client_case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
+                      {% if selected_client_case.judge_last_name %}· Judge {{ selected_client_case.judge_last_name }}{% endif %}
+                    </p>
+                    <div class="actions" style="margin-top: 8px;">
+                      <a
+                        class="pill {% if case_view == 'docket' %}is-current{% endif %}"
+                        href="{{ url_for('dashboard', tab='my-clients', client_profile_id=selected_client_profile_id, client_case_id=selected_client_case_id, case_view='docket', client_q=client_query or None, client_name=client_name_input or None, research_q=research_query or None) }}"
+                      >
+                        Main Docket
+                      </a>
+                      <a
+                        class="pill {% if case_view == 'references' %}is-current{% endif %}"
+                        href="{{ url_for('dashboard', tab='my-clients', client_profile_id=selected_client_profile_id, client_case_id=selected_client_case_id, case_view='references', client_q=client_query or None, client_name=client_name_input or None, research_q=research_query or None) }}"
+                      >
+                        Referenced Cases
+                      </a>
                       <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="action" value="add_client_case">
+                        <input type="hidden" name="action" value="remove_client_case">
                         <input type="hidden" name="tab" value="my-clients">
-                        <input type="hidden" name="case_id" value="{{ case.case_id }}">
-                        <button class="primary" type="submit">Add to My Clients</button>
+                        <input type="hidden" name="client_case_id" value="{{ selected_client_case_id }}">
+                        <button class="secondary" type="submit">Remove Case</button>
                       </form>
-                    {% endif %}
-                    {% if not case.is_saved_research %}
-                      <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="action" value="add_research_case">
-                        <input type="hidden" name="tab" value="my-clients">
-                        <input type="hidden" name="case_id" value="{{ case.case_id }}">
-                        <button class="secondary" type="submit">Add to Research</button>
-                      </form>
+                    </div>
+
+                    {% if case_view == 'docket' %}
+                      <div class="dashboard-docket-panel" style="margin-top: 12px;">
+                        <p class="small">
+                          {% if selected_case_docket_entry_count %}Entries: {{ selected_case_docket_entry_count }} · {% endif %}
+                          {% if selected_case_docket_fetched_at %}Last docket fetch: {{ selected_case_docket_fetched_at }}{% endif %}
+                        </p>
+                        {% if selected_case_docket_text %}
+                          <pre class="dashboard-docket-text">{{ selected_case_docket_text }}</pre>
+                        {% else %}
+                          <p class="small">No docket text is available for this case yet.</p>
+                        {% endif %}
+                      </div>
+                    {% elif case_view == 'references' %}
+                      <div class="dashboard-references-panel" style="margin-top: 12px;">
+                        <form method="get" action="{{ url_for('dashboard') }}" class="dashboard-client-search-form">
+                          <input type="hidden" name="tab" value="my-clients">
+                          <input type="hidden" name="client_profile_id" value="{{ selected_client_profile_id }}">
+                          <input type="hidden" name="client_case_id" value="{{ selected_client_case_id }}">
+                          <input type="hidden" name="case_view" value="references">
+                          {% if client_query %}<input type="hidden" name="client_q" value="{{ client_query }}">{% endif %}
+                          {% if client_name_input %}<input type="hidden" name="client_name" value="{{ client_name_input }}">{% endif %}
+                          <label for="research_q">Search reference cases for this client case</label>
+                          <div class="actions" style="margin-top: 8px;">
+                            <input
+                              id="research_q"
+                              name="research_q"
+                              value="{{ research_query or '' }}"
+                              placeholder="Search by client/case/court"
+                            >
+                            <button class="primary" type="submit">Search References</button>
+                          </div>
+                        </form>
+
+                        {% if research_query %}
+                          <div class="dashboard-client-search-results">
+                            {% if research_search_results %}
+                              {% for case in research_search_results %}
+                                <article class="card dashboard-client-search-card">
+                                  <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
+                                  <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
+                                  <p class="small">
+                                    {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
+                                    {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
+                                  </p>
+                                  <div class="actions">
+                                    {% if case.is_reference_for_selected_case %}
+                                      <span class="small">Already referenced for this case</span>
+                                    {% else %}
+                                      <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <input type="hidden" name="action" value="add_reference_case">
+                                        <input type="hidden" name="tab" value="my-clients">
+                                        <input type="hidden" name="client_case_id" value="{{ selected_client_case_id }}">
+                                        <input type="hidden" name="case_id" value="{{ case.case_id }}">
+                                        <input type="hidden" name="research_q" value="{{ research_query or '' }}">
+                                        <button class="primary" type="submit">Add Reference</button>
+                                      </form>
+                                    {% endif %}
+                                  </div>
+                                </article>
+                              {% endfor %}
+                            {% else %}
+                              <p class="small">No reference cases matched your search.</p>
+                            {% endif %}
+                          </div>
+                        {% endif %}
+
+                        <h4 style="margin-top: 14px;">Current References</h4>
+                        {% if reference_cases %}
+                          <div class="dashboard-client-cards">
+                            {% for ref in reference_cases %}
+                              <article class="card dashboard-client-card">
+                                <h3>{{ ref.case_number_full or ref.case_number or 'Case' }}</h3>
+                                <p class="small">{{ ref.case_title or ref.short_title or 'No case title available.' }}</p>
+                                <p class="small">
+                                  {{ ref.court_id or 'Court N/A' }} · {{ ref.case_type or 'Type N/A' }}
+                                  {% if ref.date_filed %}· Filed {{ ref.date_filed.strftime('%Y-%m-%d') }}{% endif %}
+                                  {% if ref.is_excluded %}· Excluded{% else %}· Included{% endif %}
+                                </p>
+                                <div class="actions">
+                                  <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <input type="hidden" name="action" value="toggle_reference_case">
+                                    <input type="hidden" name="tab" value="my-clients">
+                                    <input type="hidden" name="reference_id" value="{{ ref.reference_id }}">
+                                    <button class="secondary" type="submit">
+                                      {% if ref.is_excluded %}Include{% else %}Exclude{% endif %}
+                                    </button>
+                                  </form>
+                                  <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <input type="hidden" name="action" value="remove_reference_case">
+                                    <input type="hidden" name="tab" value="my-clients">
+                                    <input type="hidden" name="reference_id" value="{{ ref.reference_id }}">
+                                    <button class="secondary" type="submit">Remove</button>
+                                  </form>
+                                </div>
+                              </article>
+                            {% endfor %}
+                          </div>
+                        {% else %}
+                          <p class="small">No reference cases saved for this client case.</p>
+                        {% endif %}
+                      </div>
                     {% endif %}
                   </div>
-                </article>
-              {% endfor %}
-            {% else %}
-              <p class="small">No cases matched your search.</p>
-            {% endif %}
+                {% endif %}
+              {% else %}
+                <h2>My Clients</h2>
+                <p class="small">Add a client case from search results to create your first client dashboard.</p>
+              {% endif %}
+            </article>
           </div>
-        {% endif %}
-
-        <h2 style="margin-top: 20px;">My Clients</h2>
-        {% if my_client_cases %}
-          <div class="dashboard-client-cards">
-            {% for case in my_client_cases %}
-              <article class="card dashboard-client-card">
-                <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
-                <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
-                <p class="small">
-                  {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
-                  {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
-                  {% if case.judge_last_name %}· Judge {{ case.judge_last_name }}{% endif %}
-                </p>
-                <div class="actions">
-                  <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="action" value="remove_client_case">
-                    <input type="hidden" name="tab" value="my-clients">
-                    <input type="hidden" name="case_id" value="{{ case.case_id }}">
-                    <input type="hidden" name="collection_type" value="my_client">
-                    <button class="secondary" type="submit">Remove</button>
-                  </form>
-                </div>
-              </article>
-            {% endfor %}
-          </div>
-        {% else %}
-          <p class="small">No client cases saved yet. Search above and add one.</p>
-        {% endif %}
-
-        <h2 style="margin-top: 20px;">Research Cases</h2>
-        <form method="get" action="{{ url_for('dashboard') }}" class="dashboard-client-search-form">
-          <input type="hidden" name="tab" value="my-clients">
-          {% if client_query %}<input type="hidden" name="client_q" value="{{ client_query }}">{% endif %}
-          <label for="research_q">Search additional cases for research</label>
-          <div class="actions" style="margin-top: 8px;">
-            <input
-              id="research_q"
-              name="research_q"
-              value="{{ research_query or '' }}"
-              placeholder="Search related cases by party/client name, case number, title, or court"
-            >
-            <button class="primary" type="submit">Search Research</button>
-          </div>
-        </form>
-
-        {% if research_query %}
-          <div class="dashboard-client-search-results">
-            {% if research_search_results %}
-              {% for case in research_search_results %}
-                <article class="card dashboard-client-search-card">
-                  <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
-                  <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
-                  <p class="small">
-                    {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
-                    {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
-                    {% if case.judge_last_name %}· Judge {{ case.judge_last_name }}{% endif %}
-                  </p>
-                  <div class="actions">
-                    {% if case.is_saved_research %}
-                      <span class="small">Already in Research</span>
-                    {% else %}
-                      <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                        <input type="hidden" name="action" value="add_research_case">
-                        <input type="hidden" name="tab" value="my-clients">
-                        <input type="hidden" name="case_id" value="{{ case.case_id }}">
-                        <button class="primary" type="submit">Add to Research</button>
-                      </form>
-                    {% endif %}
-                  </div>
-                </article>
-              {% endfor %}
-            {% else %}
-              <p class="small">No research cases matched your search.</p>
-            {% endif %}
-          </div>
-        {% endif %}
-
-        {% if research_cases %}
-          <div class="dashboard-client-cards">
-            {% for case in research_cases %}
-              <article class="card dashboard-client-card">
-                <h3>{{ case.case_number_full or case.case_number or 'Case' }}</h3>
-                <p class="small">{{ case.case_title or case.short_title or 'No case title available.' }}</p>
-                <p class="small">
-                  {{ case.court_id or 'Court N/A' }} · {{ case.case_type or 'Type N/A' }}
-                  {% if case.date_filed %}· Filed {{ case.date_filed.strftime('%Y-%m-%d') }}{% endif %}
-                  {% if case.judge_last_name %}· Judge {{ case.judge_last_name }}{% endif %}
-                </p>
-                <div class="actions">
-                  <form method="post" action="{{ url_for('dashboard', tab='my-clients') }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="action" value="remove_client_case">
-                    <input type="hidden" name="tab" value="my-clients">
-                    <input type="hidden" name="case_id" value="{{ case.case_id }}">
-                    <input type="hidden" name="collection_type" value="research">
-                    <button class="secondary" type="submit">Remove</button>
-                  </form>
-                </div>
-              </article>
-            {% endfor %}
-          </div>
-        {% else %}
-          <p class="small">No research cases saved yet.</p>
-        {% endif %}
+        </div>
       </section>
     {% endif %}
 
