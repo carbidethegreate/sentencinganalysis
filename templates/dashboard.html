@@ -490,8 +490,8 @@
                                 <tr>
                                   <td class="dashboard-docket-table__date">{{ entry.date_filed or '—' }}</td>
                                   <td class="dashboard-docket-table__ecf">
-                                    {% if entry.display_document_numbers %}
-                                      <span class="case-docket-doc">ECF {{ entry.display_document_numbers|join(', ') }}</span>
+                                    {% if entry.document_number %}
+                                      <span class="case-docket-doc">ECF {{ entry.document_number }}</span>
                                     {% else %}
                                       <span class="small">—</span>
                                     {% endif %}
@@ -509,7 +509,7 @@
                                       <div class="dashboard-docket-document-list">
                                         {% for link in entry.source_links %}
                                           <div class="dashboard-docket-document-row">
-                                            <span class="dashboard-docket-document-label">ECF {{ link.label }}</span>
+                                            <span class="dashboard-docket-document-label">PACER link {{ link.label }}</span>
                                             <div class="dashboard-docket-links">
                                               {% if link.file_url %}
                                                 <a class="dashboard-link-pill" href="{{ link.file_url }}" target="_blank" rel="noopener">PDF / File</a>
