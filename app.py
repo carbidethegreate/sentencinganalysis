@@ -1139,6 +1139,12 @@ def create_app() -> Flask:
         ),
         Column("user_id", Integer, ForeignKey("users.id"), nullable=False, index=True),
         Column("pcl_case_id", Integer, nullable=False, index=True),
+        Column(
+            "collection_type",
+            String(30),
+            nullable=False,
+            server_default=sa_text("'my_client'"),
+        ),
     )
 
     case_stage1 = Table(
@@ -1471,6 +1477,13 @@ def create_app() -> Flask:
             "text_extracted_at": "TIMESTAMPTZ",
         },
         label="docket_document_items",
+    )
+    _ensure_table_columns(
+        "user_dashboard_clients",
+        {
+            "collection_type": "VARCHAR(30) NOT NULL DEFAULT 'my_client'",
+        },
+        label="user_dashboard_clients",
     )
 
     def _ensure_indexes(
@@ -5319,11 +5332,14 @@ def create_app() -> Flask:
         user = g.current_user
         assert user is not None
         pcl_cases = pcl_tables["pcl_cases"]
+        case_entities = pcl_tables["case_entities"]
+        pcl_parties = pcl_tables["pcl_parties"]
         valid_tabs = {"work-product", "my-clients"}
         active_tab = (request.args.get("tab") or "work-product").strip().lower()
         if active_tab not in valid_tabs:
             active_tab = "work-product"
         client_query = (request.args.get("client_q") or "").strip()
+        research_query = (request.args.get("research_q") or "").strip()
 
         if request.method == "POST":
             require_csrf()
@@ -5380,8 +5396,10 @@ def create_app() -> Flask:
                 flash("Attorney name saved.", "success")
                 return redirect(url_for("dashboard", tab="work-product"))
 
-            if action == "add_client_case":
+            if action in {"add_client_case", "add_research_case"}:
                 raw_case_id = (request.form.get("case_id") or "").strip()
+                collection_type = "research" if action == "add_research_case" else "my_client"
+                collection_label = "Research" if collection_type == "research" else "My Clients"
                 try:
                     case_id = int(raw_case_id)
                 except (TypeError, ValueError):
@@ -5400,23 +5418,29 @@ def create_app() -> Flask:
                         select(user_dashboard_clients.c.id)
                         .where(user_dashboard_clients.c.user_id == user["id"])
                         .where(user_dashboard_clients.c.pcl_case_id == case_id)
+                        .where(user_dashboard_clients.c.collection_type == collection_type)
                         .limit(1)
                     ).first()
                     if existing_link:
-                        flash("That case is already in My Clients.", "info")
+                        flash(f"That case is already in {collection_label}.", "info")
                     else:
                         conn.execute(
                             insert(user_dashboard_clients).values(
                                 user_id=user["id"],
                                 pcl_case_id=case_id,
+                                collection_type=collection_type,
                             )
                         )
-                        flash("Case added to My Clients.", "success")
+                        flash(f"Case added to {collection_label}.", "success")
 
                 return redirect(url_for("dashboard", tab="my-clients"))
 
             if action == "remove_client_case":
                 raw_case_id = (request.form.get("case_id") or "").strip()
+                collection_type = (request.form.get("collection_type") or "my_client").strip()
+                if collection_type not in {"my_client", "research"}:
+                    collection_type = "my_client"
+                collection_label = "Research" if collection_type == "research" else "My Clients"
                 try:
                     case_id = int(raw_case_id)
                 except (TypeError, ValueError):
@@ -5428,12 +5452,149 @@ def create_app() -> Flask:
                         delete(user_dashboard_clients)
                         .where(user_dashboard_clients.c.user_id == user["id"])
                         .where(user_dashboard_clients.c.pcl_case_id == case_id)
+                        .where(user_dashboard_clients.c.collection_type == collection_type)
                     )
-                flash("Case removed from My Clients.", "success")
+                flash(f"Case removed from {collection_label}.", "success")
                 return redirect(url_for("dashboard", tab="my-clients"))
 
             flash("Unknown dashboard action.", "error")
             return redirect(url_for("dashboard", tab=next_tab))
+
+        def _search_cases_by_text(conn: Any, query_text: str, *, limit: int = 30) -> List[Dict[str, Any]]:
+            normalized_query = " ".join(query_text.strip().lower().split())
+            if not normalized_query:
+                return []
+
+            search_value = f"%{normalized_query}%"
+            tokens = [token for token in normalized_query.split() if token]
+            party_full_name = func.lower(
+                func.trim(
+                    func.coalesce(pcl_parties.c.first_name, "")
+                    + " "
+                    + func.coalesce(pcl_parties.c.middle_name, "")
+                    + " "
+                    + func.coalesce(pcl_parties.c.last_name, "")
+                )
+            )
+            phrase_match = or_(
+                func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(search_value),
+                func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(search_value),
+                func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(search_value),
+                func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(search_value),
+                func.lower(func.coalesce(pcl_cases.c.court_id, "")).like(search_value),
+                exists(
+                    select(case_entities.c.id).where(
+                        and_(
+                            case_entities.c.case_id == pcl_cases.c.id,
+                            or_(
+                                func.lower(
+                                    func.coalesce(case_entities.c.value_normalized, "")
+                                ).like(search_value),
+                                func.lower(func.coalesce(case_entities.c.value, "")).like(
+                                    search_value
+                                ),
+                            ),
+                        )
+                    )
+                ),
+                exists(
+                    select(pcl_parties.c.id).where(
+                        and_(
+                            pcl_parties.c.case_id == pcl_cases.c.id,
+                            or_(
+                                func.lower(func.coalesce(pcl_parties.c.party_name, "")).like(
+                                    search_value
+                                ),
+                                func.lower(func.coalesce(pcl_parties.c.first_name, "")).like(
+                                    search_value
+                                ),
+                                func.lower(func.coalesce(pcl_parties.c.middle_name, "")).like(
+                                    search_value
+                                ),
+                                func.lower(func.coalesce(pcl_parties.c.last_name, "")).like(
+                                    search_value
+                                ),
+                                party_full_name.like(search_value),
+                            ),
+                        )
+                    )
+                ),
+            )
+
+            token_clauses: List[Any] = []
+            for token in tokens:
+                token_value = f"%{token}%"
+                token_clauses.append(
+                    or_(
+                        func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(token_value),
+                        func.lower(func.coalesce(pcl_cases.c.case_number_full, "")).like(
+                            token_value
+                        ),
+                        func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(token_value),
+                        func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(token_value),
+                        func.lower(func.coalesce(pcl_cases.c.court_id, "")).like(token_value),
+                        exists(
+                            select(case_entities.c.id).where(
+                                and_(
+                                    case_entities.c.case_id == pcl_cases.c.id,
+                                    or_(
+                                        func.lower(
+                                            func.coalesce(case_entities.c.value_normalized, "")
+                                        ).like(token_value),
+                                        func.lower(func.coalesce(case_entities.c.value, "")).like(
+                                            token_value
+                                        ),
+                                    ),
+                                )
+                            )
+                        ),
+                        exists(
+                            select(pcl_parties.c.id).where(
+                                and_(
+                                    pcl_parties.c.case_id == pcl_cases.c.id,
+                                    or_(
+                                        func.lower(
+                                            func.coalesce(pcl_parties.c.party_name, "")
+                                        ).like(token_value),
+                                        func.lower(
+                                            func.coalesce(pcl_parties.c.first_name, "")
+                                        ).like(token_value),
+                                        func.lower(
+                                            func.coalesce(pcl_parties.c.middle_name, "")
+                                        ).like(token_value),
+                                        func.lower(
+                                            func.coalesce(pcl_parties.c.last_name, "")
+                                        ).like(token_value),
+                                        party_full_name.like(token_value),
+                                    ),
+                                )
+                            )
+                        ),
+                    )
+                )
+
+            where_expr = phrase_match
+            if token_clauses:
+                where_expr = or_(phrase_match, and_(*token_clauses))
+
+            stmt = (
+                select(
+                    pcl_cases.c.id.label("case_id"),
+                    pcl_cases.c.court_id,
+                    pcl_cases.c.case_number,
+                    pcl_cases.c.case_number_full,
+                    pcl_cases.c.case_title,
+                    pcl_cases.c.short_title,
+                    pcl_cases.c.case_type,
+                    pcl_cases.c.date_filed,
+                    pcl_cases.c.date_closed,
+                    pcl_cases.c.judge_last_name,
+                )
+                .where(where_expr)
+                .order_by(desc(pcl_cases.c.date_filed), desc(pcl_cases.c.id))
+                .limit(max(1, min(100, limit)))
+            )
+            return [dict(row) for row in conn.execute(stmt).mappings().all()]
 
         with engine.connect() as conn:
             attorney_work_products = (
@@ -5513,6 +5674,39 @@ def create_app() -> Flask:
                         )
                     )
                     .where(user_dashboard_clients.c.user_id == user["id"])
+                    .where(user_dashboard_clients.c.collection_type == "my_client")
+                    .order_by(
+                        desc(user_dashboard_clients.c.created_at),
+                        desc(user_dashboard_clients.c.id),
+                    )
+                )
+                .mappings()
+                .all()
+            )
+
+            research_cases = (
+                conn.execute(
+                    select(
+                        user_dashboard_clients.c.pcl_case_id.label("case_id"),
+                        user_dashboard_clients.c.created_at.label("saved_at"),
+                        pcl_cases.c.court_id,
+                        pcl_cases.c.case_number,
+                        pcl_cases.c.case_number_full,
+                        pcl_cases.c.case_title,
+                        pcl_cases.c.short_title,
+                        pcl_cases.c.case_type,
+                        pcl_cases.c.date_filed,
+                        pcl_cases.c.date_closed,
+                        pcl_cases.c.judge_last_name,
+                    )
+                    .select_from(
+                        user_dashboard_clients.join(
+                            pcl_cases,
+                            pcl_cases.c.id == user_dashboard_clients.c.pcl_case_id,
+                        )
+                    )
+                    .where(user_dashboard_clients.c.user_id == user["id"])
+                    .where(user_dashboard_clients.c.collection_type == "research")
                     .order_by(
                         desc(user_dashboard_clients.c.created_at),
                         desc(user_dashboard_clients.c.id),
@@ -5527,51 +5721,24 @@ def create_app() -> Flask:
                 for row in my_client_cases
                 if row.get("case_id") is not None
             }
+            research_case_ids = {
+                int(row["case_id"])
+                for row in research_cases
+                if row.get("case_id") is not None
+            }
 
-            client_search_results: List[Dict[str, Any]] = []
-            if client_query:
-                search_value = f"%{client_query.lower()}%"
-                client_search_results = [
-                    dict(row)
-                    for row in conn.execute(
-                        select(
-                            pcl_cases.c.id.label("case_id"),
-                            pcl_cases.c.court_id,
-                            pcl_cases.c.case_number,
-                            pcl_cases.c.case_number_full,
-                            pcl_cases.c.case_title,
-                            pcl_cases.c.short_title,
-                            pcl_cases.c.case_type,
-                            pcl_cases.c.date_filed,
-                            pcl_cases.c.date_closed,
-                            pcl_cases.c.judge_last_name,
-                        )
-                        .where(
-                            or_(
-                                func.lower(func.coalesce(pcl_cases.c.case_number, "")).like(
-                                    search_value
-                                ),
-                                func.lower(
-                                    func.coalesce(pcl_cases.c.case_number_full, "")
-                                ).like(search_value),
-                                func.lower(func.coalesce(pcl_cases.c.case_title, "")).like(
-                                    search_value
-                                ),
-                                func.lower(func.coalesce(pcl_cases.c.short_title, "")).like(
-                                    search_value
-                                ),
-                                func.lower(func.coalesce(pcl_cases.c.court_id, "")).like(
-                                    search_value
-                                ),
-                            )
-                        )
-                        .order_by(desc(pcl_cases.c.date_filed), desc(pcl_cases.c.id))
-                        .limit(30)
-                    ).mappings()
-                ]
+            client_search_results = _search_cases_by_text(conn, client_query, limit=30)
+            research_search_results = _search_cases_by_text(conn, research_query, limit=30)
 
             for row in client_search_results:
-                row["is_saved_client"] = int(row.get("case_id") or 0) in my_client_case_ids
+                row_case_id = int(row.get("case_id") or 0)
+                row["is_saved_client"] = row_case_id in my_client_case_ids
+                row["is_saved_research"] = row_case_id in research_case_ids
+
+            for row in research_search_results:
+                row_case_id = int(row.get("case_id") or 0)
+                row["is_saved_client"] = row_case_id in my_client_case_ids
+                row["is_saved_research"] = row_case_id in research_case_ids
 
         return render_template(
             "dashboard.html",
@@ -5579,8 +5746,11 @@ def create_app() -> Flask:
             active_tab=active_tab,
             attorney_work_products=attorney_work_products,
             client_query=client_query,
+            research_query=research_query,
             client_search_results=client_search_results,
+            research_search_results=research_search_results,
             my_client_cases=my_client_cases,
+            research_cases=research_cases,
         )
 
     @app.get("/attorneys")
