@@ -7,7 +7,9 @@ import math
 import os
 import re
 import secrets
+import shutil
 import struct
+import subprocess
 import time
 import tempfile
 import threading
@@ -1216,6 +1218,38 @@ def create_app() -> Flask:
         ),
     )
 
+    user_dashboard_case_research_uploads = Table(
+        "user_dashboard_case_research_uploads",
+        metadata,
+        Column("id", Integer, primary_key=True),
+        Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
+        Column(
+            "updated_at",
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
+        ),
+        Column("user_id", Integer, ForeignKey("users.id"), nullable=False, index=True),
+        Column(
+            "client_case_id",
+            Integer,
+            ForeignKey("user_dashboard_client_cases.id"),
+            nullable=False,
+            index=True,
+        ),
+        Column("file_name", String(255), nullable=False),
+        Column("content_type", String(120), nullable=True),
+        Column("file_size_bytes", Integer, nullable=False),
+        Column("extraction_status", String(20), nullable=False, server_default=sa_text("'completed'")),
+        Column("extraction_method", String(80), nullable=True),
+        Column("extraction_confidence", Text, nullable=True),
+        Column("extracted_text", Text, nullable=True),
+        Column("extracted_char_count", Integer, nullable=False, server_default=sa_text("0")),
+        Column("uploaded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+        Column("notes", Text, nullable=True),
+    )
+
     case_stage1 = Table(
         "case_stage1",
         metadata,
@@ -1347,6 +1381,7 @@ def create_app() -> Flask:
                     user_dashboard_client_profiles,
                     user_dashboard_client_cases,
                     user_dashboard_case_references,
+                    user_dashboard_case_research_uploads,
                     case_stage1,
                     case_data_one,
                     pacer_tokens,
@@ -1595,6 +1630,7 @@ def create_app() -> Flask:
             "ix_user_dashboard_client_cases_profile_last_viewed": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_client_cases_profile_last_viewed ON user_dashboard_client_cases (client_profile_id, last_viewed_at DESC)",
             "ix_user_dashboard_case_references_client_case": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_case_references_client_case ON user_dashboard_case_references (client_case_id)",
             "ix_user_dashboard_case_references_reference_case": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_case_references_reference_case ON user_dashboard_case_references (reference_case_id)",
+            "ix_user_dashboard_case_research_uploads_user_case": "CREATE INDEX IF NOT EXISTS ix_user_dashboard_case_research_uploads_user_case ON user_dashboard_case_research_uploads (user_id, client_case_id, uploaded_at DESC)",
         },
         label="dashboard client workspace",
     )
@@ -5428,7 +5464,7 @@ def create_app() -> Flask:
         research_query = (request.args.get("research_q") or "").strip()
 
         case_view = (request.args.get("case_view") or "docket").strip().lower()
-        if case_view not in {"docket", "references"}:
+        if case_view not in {"docket", "references", "research"}:
             case_view = "docket"
 
         def _parse_positive_int(raw_value: Any) -> Optional[int]:
@@ -5532,7 +5568,7 @@ def create_app() -> Flask:
             if client_case_id:
                 params["client_case_id"] = client_case_id
             selected_view = case_view_param or case_view
-            if selected_view in {"docket", "references"}:
+            if selected_view in {"docket", "references", "research"}:
                 params["case_view"] = selected_view
             if client_q_param:
                 params["client_q"] = client_q_param
@@ -5541,6 +5577,148 @@ def create_app() -> Flask:
             if research_q_param:
                 params["research_q"] = research_q_param
             return url_for("dashboard", **params)
+
+        research_upload_max_bytes = 30 * 1024 * 1024
+        allowed_research_upload_exts = {
+            ".pdf",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".tif",
+            ".tiff",
+            ".webp",
+        }
+
+        def _sanitize_upload_filename(filename: str) -> str:
+            cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "_", (filename or "").strip())
+            cleaned = cleaned.strip(" .")
+            if not cleaned:
+                cleaned = "research_upload"
+            return cleaned[:255]
+
+        def _estimate_extraction_confidence(text: str) -> str:
+            normalized = re.sub(r"\s+", " ", (text or "")).strip()
+            if not normalized:
+                return "0.0000"
+            length = len(normalized)
+            alpha_count = sum(1 for char in normalized if char.isalpha())
+            digit_count = sum(1 for char in normalized if char.isdigit())
+            printable_count = sum(1 for char in normalized if char.isprintable())
+            alpha_ratio = alpha_count / max(length, 1)
+            digit_ratio = digit_count / max(length, 1)
+            printable_ratio = printable_count / max(length, 1)
+            length_score = min(1.0, length / 1200.0)
+            confidence = (
+                0.40
+                + (0.35 * alpha_ratio)
+                + (0.10 * digit_ratio)
+                + (0.10 * printable_ratio)
+                + (0.05 * length_score)
+            )
+            if length < 180:
+                confidence -= 0.12
+            confidence = max(0.0, min(0.995, confidence))
+            return f"{confidence:.4f}"
+
+        def _extract_research_upload_text(file_path: Path, suffix: str) -> Tuple[str, str, str, str]:
+            suffix_value = (suffix or "").lower()
+            pdftotext_bin = shutil.which("pdftotext")
+            pdftoppm_bin = shutil.which("pdftoppm")
+            tesseract_bin = shutil.which("tesseract")
+            text_chunks: List[str] = []
+            method = "none"
+            warnings: List[str] = []
+
+            if suffix_value == ".pdf" and pdftotext_bin:
+                try:
+                    extract = subprocess.run(
+                        [pdftotext_bin, "-layout", str(file_path), "-"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if extract.returncode == 0 and extract.stdout:
+                        text_chunks.append(extract.stdout)
+                        method = "pdftotext_layout"
+                    elif extract.stderr:
+                        warnings.append(extract.stderr.strip())
+                except Exception as exc:
+                    warnings.append(str(exc))
+
+            combined_text = "\n".join(chunk for chunk in text_chunks if chunk).strip()
+            needs_ocr = len(combined_text) < 220
+
+            if suffix_value == ".pdf" and needs_ocr and pdftoppm_bin and tesseract_bin:
+                try:
+                    with tempfile.TemporaryDirectory(prefix="dashboard_pdf_ocr_") as tmp_dir:
+                        output_prefix = Path(tmp_dir) / "page"
+                        convert = subprocess.run(
+                            [
+                                pdftoppm_bin,
+                                "-f",
+                                "1",
+                                "-l",
+                                "25",
+                                "-r",
+                                "300",
+                                "-png",
+                                str(file_path),
+                                str(output_prefix),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if convert.returncode == 0:
+                            ocr_chunks: List[str] = []
+                            for image_path in sorted(Path(tmp_dir).glob("page-*.png")):
+                                ocr = subprocess.run(
+                                    [tesseract_bin, str(image_path), "stdout", "--psm", "6"],
+                                    capture_output=True,
+                                    text=True,
+                                    check=False,
+                                )
+                                if ocr.returncode == 0 and ocr.stdout:
+                                    ocr_chunks.append(ocr.stdout)
+                            if ocr_chunks:
+                                ocr_text = "\n".join(ocr_chunks).strip()
+                                if len(ocr_text) > len(combined_text):
+                                    combined_text = ocr_text
+                                    method = "pdf_ocr_tesseract"
+                        elif convert.stderr:
+                            warnings.append(convert.stderr.strip())
+                except Exception as exc:
+                    warnings.append(str(exc))
+
+            if suffix_value in {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}:
+                if tesseract_bin:
+                    try:
+                        ocr = subprocess.run(
+                            [tesseract_bin, str(file_path), "stdout", "--psm", "6"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if ocr.returncode == 0 and ocr.stdout:
+                            combined_text = ocr.stdout.strip()
+                            method = "image_ocr_tesseract"
+                        elif ocr.stderr:
+                            warnings.append(ocr.stderr.strip())
+                    except Exception as exc:
+                        warnings.append(str(exc))
+                else:
+                    warnings.append("tesseract is not available on this service.")
+
+            if not combined_text and suffix_value == ".pdf" and not pdftotext_bin:
+                warnings.append("pdftotext is not available on this service.")
+
+            if combined_text:
+                return "completed", method or "text_extracted", combined_text, ""
+
+            error_text = "Text extraction failed."
+            if warnings:
+                error_text = f"{error_text} {' | '.join(warnings[:2])}"
+            return "failed", method or "none", "", error_text
 
         def _search_cases_by_text(conn: Any, query_text: str, *, limit: int = 40) -> List[Dict[str, Any]]:
             normalized_query = " ".join(query_text.strip().lower().split())
@@ -5766,14 +5944,64 @@ def create_app() -> Flask:
             next_tab = (request.form.get("tab") or active_tab).strip().lower()
             if next_tab not in valid_tabs:
                 next_tab = "work-product"
+            posted_profile_id = _parse_positive_int(request.form.get("client_profile_id"))
+            posted_client_case_id = _parse_positive_int(request.form.get("client_case_id"))
+            posted_case_view = (request.form.get("case_view") or case_view).strip().lower()
+            if posted_case_view not in {"docket", "references", "research"}:
+                posted_case_view = case_view
+            posted_client_q = (request.form.get("client_q") or "").strip()
+            posted_client_name = (request.form.get("client_name") or "").strip()
+            posted_research_q = (request.form.get("research_q") or "").strip()
+
+            def _redirect_my_clients_post(
+                *,
+                profile_id: Optional[int] = None,
+                client_case_id: Optional[int] = None,
+                case_view_param: Optional[str] = None,
+                client_q_param: Optional[str] = None,
+                client_name_param: Optional[str] = None,
+                research_q_param: Optional[str] = None,
+            ) -> Any:
+                resolved_profile_id = (
+                    posted_profile_id if profile_id is None else profile_id
+                )
+                resolved_client_case_id = (
+                    posted_client_case_id if client_case_id is None else client_case_id
+                )
+                return redirect(
+                    _my_clients_url(
+                        profile_id=resolved_profile_id,
+                        client_case_id=resolved_client_case_id,
+                        case_view_param=case_view_param or posted_case_view,
+                        client_q_param=(
+                            posted_client_q
+                            if client_q_param is None
+                            else client_q_param
+                        ),
+                        client_name_param=(
+                            posted_client_name
+                            if client_name_param is None
+                            else client_name_param
+                        ),
+                        research_q_param=(
+                            posted_research_q
+                            if research_q_param is None
+                            else research_q_param
+                        ),
+                    )
+                )
 
             if action == "save_attorney_name":
                 attorney_name = (request.form.get("attorney_name") or "").strip()
                 if not attorney_name:
                     flash("Attorney name is required.", "error")
+                    if next_tab == "my-clients":
+                        return _redirect_my_clients_post()
                     return redirect(url_for("dashboard", tab="work-product"))
                 if len(attorney_name) > 255:
                     flash("Attorney name must be 255 characters or fewer.", "error")
+                    if next_tab == "my-clients":
+                        return _redirect_my_clients_post()
                     return redirect(url_for("dashboard", tab="work-product"))
 
                 with engine.begin() as conn:
@@ -5812,17 +6040,137 @@ def create_app() -> Flask:
                         )
 
                 flash("Attorney name saved.", "success")
+                if next_tab == "my-clients":
+                    return _redirect_my_clients_post()
                 return redirect(url_for("dashboard", tab="work-product"))
+
+            if action == "upload_research_file":
+                target_client_case_id = _parse_positive_int(request.form.get("client_case_id"))
+                if not target_client_case_id:
+                    flash("Select a valid client case before uploading.", "error")
+                    return _redirect_my_clients_post(case_view_param="research")
+
+                uploaded_file = request.files.get("research_file")
+                upload_notes = (request.form.get("research_notes") or "").strip()
+                if not uploaded_file or not str(uploaded_file.filename or "").strip():
+                    flash("Choose a PDF or image file to upload.", "error")
+                    return _redirect_my_clients_post(
+                        client_case_id=target_client_case_id,
+                        case_view_param="research",
+                    )
+
+                original_name = _sanitize_upload_filename(str(uploaded_file.filename))
+                extension = Path(original_name).suffix.lower()
+                if extension not in allowed_research_upload_exts:
+                    flash("Only PDF, PNG, JPG, JPEG, TIFF, and WEBP files are supported.", "error")
+                    return _redirect_my_clients_post(
+                        client_case_id=target_client_case_id,
+                        case_view_param="research",
+                    )
+
+                payload = uploaded_file.read()
+                file_size_bytes = len(payload or b"")
+                if file_size_bytes <= 0:
+                    flash("Uploaded file is empty.", "error")
+                    return _redirect_my_clients_post(
+                        client_case_id=target_client_case_id,
+                        case_view_param="research",
+                    )
+                if file_size_bytes > research_upload_max_bytes:
+                    flash("File is too large. Maximum size is 30 MB.", "error")
+                    return _redirect_my_clients_post(
+                        client_case_id=target_client_case_id,
+                        case_view_param="research",
+                    )
+
+                with engine.begin() as conn:
+                    owner_row = (
+                        conn.execute(
+                            select(
+                                user_dashboard_client_cases.c.id,
+                                user_dashboard_client_cases.c.client_profile_id,
+                            )
+                            .select_from(
+                                user_dashboard_client_cases.join(
+                                    user_dashboard_client_profiles,
+                                    user_dashboard_client_profiles.c.id
+                                    == user_dashboard_client_cases.c.client_profile_id,
+                                )
+                            )
+                            .where(user_dashboard_client_cases.c.id == target_client_case_id)
+                            .where(user_dashboard_client_profiles.c.user_id == user["id"])
+                            .limit(1)
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if not owner_row:
+                        flash("Client case not found.", "error")
+                        return _redirect_my_clients_post(case_view_param="research")
+
+                extraction_status = "failed"
+                extraction_method = "none"
+                extracted_text = ""
+                extraction_error = ""
+                with tempfile.TemporaryDirectory(prefix="dashboard_upload_") as tmp_dir:
+                    temp_path = Path(tmp_dir) / f"{secrets.token_hex(8)}{extension}"
+                    temp_path.write_bytes(payload)
+                    extraction_status, extraction_method, extracted_text, extraction_error = (
+                        _extract_research_upload_text(temp_path, extension)
+                    )
+
+                extraction_confidence = (
+                    _estimate_extraction_confidence(extracted_text)
+                    if extraction_status == "completed"
+                    else "0.0000"
+                )
+                extracted_char_count = len(extracted_text or "")
+
+                with engine.begin() as conn:
+                    conn.execute(
+                        insert(user_dashboard_case_research_uploads).values(
+                            user_id=int(user["id"]),
+                            client_case_id=target_client_case_id,
+                            file_name=original_name,
+                            content_type=(uploaded_file.mimetype or "").strip() or None,
+                            file_size_bytes=file_size_bytes,
+                            extraction_status=extraction_status,
+                            extraction_method=extraction_method,
+                            extraction_confidence=extraction_confidence,
+                            extracted_text=extracted_text or None,
+                            extracted_char_count=extracted_char_count,
+                            uploaded_at=func.now(),
+                            notes=upload_notes or None,
+                        )
+                    )
+
+                if extraction_status == "completed":
+                    flash(
+                        f"Uploaded {original_name}. Extracted {extracted_char_count} characters for research.",
+                        "success",
+                    )
+                else:
+                    flash(
+                        f"Uploaded {original_name}, but extraction failed. {extraction_error}",
+                        "error",
+                    )
+
+                return _redirect_my_clients_post(
+                    profile_id=int(owner_row["client_profile_id"]),
+                    client_case_id=target_client_case_id,
+                    case_view_param="research",
+                )
 
             if action == "add_client_case":
                 target_case_id = _parse_positive_int(request.form.get("case_id"))
                 if not target_case_id:
                     flash("Select a valid case to add.", "error")
-                    return redirect(_my_clients_url())
+                    return _redirect_my_clients_post()
 
                 requested_profile_id = _parse_positive_int(request.form.get("client_profile_id"))
                 requested_client_name = (request.form.get("client_name") or "").strip()
                 redirect_query = (request.form.get("client_q") or "").strip()
+                redirect_research_query = (request.form.get("research_q") or "").strip()
 
                 with engine.begin() as conn:
                     case_row = (
@@ -5842,7 +6190,10 @@ def create_app() -> Flask:
                     )
                     if not case_row:
                         flash("That case could not be found.", "error")
-                        return redirect(_my_clients_url(client_q_param=redirect_query))
+                        return _redirect_my_clients_post(
+                            client_q_param=redirect_query,
+                            research_q_param=redirect_research_query,
+                        )
 
                     profile_id: Optional[int] = None
                     if requested_profile_id:
@@ -5941,6 +6292,7 @@ def create_app() -> Flask:
                         case_view_param="docket",
                         client_q_param=redirect_query,
                         client_name_param=requested_client_name,
+                        research_q_param=redirect_research_query,
                     )
                 )
 
@@ -5950,11 +6302,10 @@ def create_app() -> Flask:
                 redirect_research_query = (request.form.get("research_q") or "").strip()
                 if not target_client_case_id or not reference_case_id:
                     flash("Select a valid reference case.", "error")
-                    return redirect(
-                        _my_clients_url(
-                            case_view_param="references",
-                            research_q_param=redirect_research_query,
-                        )
+                    return _redirect_my_clients_post(
+                        client_case_id=target_client_case_id,
+                        case_view_param="references",
+                        research_q_param=redirect_research_query,
                     )
 
                 with engine.begin() as conn:
@@ -5980,7 +6331,7 @@ def create_app() -> Flask:
                     )
                     if not owner_row:
                         flash("Client case not found.", "error")
-                        return redirect(_my_clients_url())
+                        return _redirect_my_clients_post()
 
                     case_exists = conn.execute(
                         select(pcl_cases.c.id)
@@ -5989,13 +6340,11 @@ def create_app() -> Flask:
                     ).first()
                     if not case_exists:
                         flash("Reference case could not be found.", "error")
-                        return redirect(
-                            _my_clients_url(
-                                profile_id=int(owner_row["client_profile_id"]),
-                                client_case_id=target_client_case_id,
-                                case_view_param="references",
-                                research_q_param=redirect_research_query,
-                            )
+                        return _redirect_my_clients_post(
+                            profile_id=int(owner_row["client_profile_id"]),
+                            client_case_id=target_client_case_id,
+                            case_view_param="references",
+                            research_q_param=redirect_research_query,
                         )
 
                     existing_ref = (
@@ -6026,20 +6375,18 @@ def create_app() -> Flask:
                         )
                         flash("Reference case added.", "success")
 
-                return redirect(
-                    _my_clients_url(
-                        profile_id=int(owner_row["client_profile_id"]),
-                        client_case_id=target_client_case_id,
-                        case_view_param="references",
-                        research_q_param=redirect_research_query,
-                    )
+                return _redirect_my_clients_post(
+                    profile_id=int(owner_row["client_profile_id"]),
+                    client_case_id=target_client_case_id,
+                    case_view_param="references",
+                    research_q_param=redirect_research_query,
                 )
 
             if action == "remove_client_case":
                 target_client_case_id = _parse_positive_int(request.form.get("client_case_id"))
                 if not target_client_case_id:
                     flash("Select a valid case to remove.", "error")
-                    return redirect(_my_clients_url())
+                    return _redirect_my_clients_post()
 
                 with engine.begin() as conn:
                     row = (
@@ -6064,8 +6411,14 @@ def create_app() -> Flask:
                     )
                     if not row:
                         flash("Client case not found.", "error")
-                        return redirect(_my_clients_url())
+                        return _redirect_my_clients_post()
 
+                    conn.execute(
+                        delete(user_dashboard_case_research_uploads).where(
+                            user_dashboard_case_research_uploads.c.client_case_id
+                            == target_client_case_id
+                        )
+                    )
                     conn.execute(
                         delete(user_dashboard_case_references).where(
                             user_dashboard_case_references.c.client_case_id
@@ -6079,13 +6432,17 @@ def create_app() -> Flask:
                     )
 
                 flash("Case removed from this client.", "success")
-                return redirect(_my_clients_url(profile_id=int(row["client_profile_id"])))
+                return _redirect_my_clients_post(
+                    profile_id=int(row["client_profile_id"]),
+                    client_case_id=None,
+                    case_view_param="docket",
+                )
 
             if action in {"remove_reference_case", "toggle_reference_case"}:
                 reference_id = _parse_positive_int(request.form.get("reference_id"))
                 if not reference_id:
                     flash("Reference case selection is invalid.", "error")
-                    return redirect(_my_clients_url(case_view_param="references"))
+                    return _redirect_my_clients_post(case_view_param="references")
 
                 with engine.begin() as conn:
                     ref_row = (
@@ -6116,7 +6473,7 @@ def create_app() -> Flask:
                     )
                     if not ref_row:
                         flash("Reference case not found.", "error")
-                        return redirect(_my_clients_url(case_view_param="references"))
+                        return _redirect_my_clients_post(case_view_param="references")
 
                     if action == "remove_reference_case":
                         conn.execute(
@@ -6139,15 +6496,15 @@ def create_app() -> Flask:
                             "success",
                         )
 
-                return redirect(
-                    _my_clients_url(
-                        profile_id=int(ref_row["client_profile_id"]),
-                        client_case_id=int(ref_row["client_case_id"]),
-                        case_view_param="references",
-                    )
+                return _redirect_my_clients_post(
+                    profile_id=int(ref_row["client_profile_id"]),
+                    client_case_id=int(ref_row["client_case_id"]),
+                    case_view_param="references",
                 )
 
             flash("Unknown dashboard action.", "error")
+            if next_tab == "my-clients":
+                return _redirect_my_clients_post()
             return redirect(url_for("dashboard", tab=next_tab))
 
         with engine.begin() as conn:
@@ -6609,6 +6966,37 @@ def create_app() -> Flask:
                     if row.get("case_id") is not None
                 }
 
+            research_uploads: List[Dict[str, Any]] = []
+            if selected_client_case_id:
+                research_uploads = [
+                    dict(row)
+                    for row in conn.execute(
+                        select(
+                            user_dashboard_case_research_uploads.c.id,
+                            user_dashboard_case_research_uploads.c.file_name,
+                            user_dashboard_case_research_uploads.c.content_type,
+                            user_dashboard_case_research_uploads.c.file_size_bytes,
+                            user_dashboard_case_research_uploads.c.extraction_status,
+                            user_dashboard_case_research_uploads.c.extraction_method,
+                            user_dashboard_case_research_uploads.c.extraction_confidence,
+                            user_dashboard_case_research_uploads.c.extracted_text,
+                            user_dashboard_case_research_uploads.c.extracted_char_count,
+                            user_dashboard_case_research_uploads.c.notes,
+                            user_dashboard_case_research_uploads.c.uploaded_at,
+                        )
+                        .where(user_dashboard_case_research_uploads.c.user_id == user["id"])
+                        .where(
+                            user_dashboard_case_research_uploads.c.client_case_id
+                            == selected_client_case_id
+                        )
+                        .order_by(
+                            desc(user_dashboard_case_research_uploads.c.uploaded_at),
+                            desc(user_dashboard_case_research_uploads.c.id),
+                        )
+                        .limit(80)
+                    ).mappings()
+                ]
+
             all_user_case_ids = {
                 int(row[0])
                 for row in conn.execute(
@@ -6676,6 +7064,7 @@ def create_app() -> Flask:
             research_query=research_query,
             research_search_results=research_search_results,
             reference_cases=reference_cases,
+            research_uploads=research_uploads,
         )
 
     @app.get("/attorneys")
