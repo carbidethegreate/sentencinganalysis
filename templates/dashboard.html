@@ -233,17 +233,151 @@
                     </div>
 
                     {% if case_view == 'docket' %}
-                      <div class="dashboard-docket-panel" style="margin-top: 12px;">
-                        <p class="small">
-                          {% if selected_case_docket_entry_count %}Entries: {{ selected_case_docket_entry_count }} · {% endif %}
-                          {% if selected_case_docket_fetched_at %}Last docket fetch: {{ selected_case_docket_fetched_at }}{% endif %}
-                        </p>
-                        {% if selected_case_docket_text %}
-                          <pre class="dashboard-docket-text">{{ selected_case_docket_text }}</pre>
-                        {% else %}
-                          <p class="small">No docket text is available for this case yet.</p>
+                      {% set closed_date = selected_client_case.date_closed %}
+                      {% set case_status = 'Closed' if closed_date else 'Open' %}
+                      {% set primary_judge = (selected_case_docket_judges[0] if selected_case_docket_judges else (selected_client_case.judge_last_name or '—')) %}
+                      {% set party_preview = selected_case_docket_party_names[:4] if selected_case_docket_party_names else [] %}
+                      {% set attorney_preview = selected_case_docket_attorney_names[:6] if selected_case_docket_attorney_names else [] %}
+                      <article class="card pcl-case-card dashboard-main-docket-card">
+                        <header class="pcl-case-card__header">
+                          <div class="pcl-case-card__heading">
+                            <p class="pcl-case-card__number">{{ selected_client_case.case_number_full or selected_client_case.case_number or 'Case' }}</p>
+                            <h3 class="pcl-case-card__title">
+                              {{ selected_client_case.case_title or selected_client_case.short_title or 'No case title available.' }}
+                            </h3>
+                          </div>
+                          <div class="pcl-case-card__status">
+                            <div class="small">
+                              <strong>{{ case_status }}</strong>
+                              {% if closed_date %}<span> · {{ closed_date.strftime('%Y-%m-%d') }}</span>{% endif %}
+                            </div>
+                            <div class="small">
+                              <span>
+                                Docket
+                                {% if selected_case_docket_entries or selected_case_docket_lines %}loaded{% else %}not loaded{% endif %}
+                              </span>
+                              {% if selected_case_docket_entry_count is not none %}
+                                <span> · {{ selected_case_docket_entry_count }} entries</span>
+                              {% endif %}
+                            </div>
+                            {% if selected_case_docket_fetched_at %}
+                              <div class="small">Updated {{ selected_case_docket_fetched_at }}</div>
+                            {% endif %}
+                          </div>
+                        </header>
+
+                        <div class="pcl-case-rows" aria-label="Case summary">
+                          <div class="pcl-case-row">
+                            <span><strong>Filed</strong> {{ selected_client_case.date_filed.strftime('%Y-%m-%d') if selected_client_case.date_filed else '—' }}</span>
+                            <span><strong>Court</strong> {{ selected_client_case.court_id or '—' }}</span>
+                            <span><strong>Type</strong> {{ selected_client_case.case_type or '—' }}</span>
+                            <span><strong>Judge</strong> {{ primary_judge }}</span>
+                          </div>
+                          <div class="pcl-case-row">
+                            {% if party_preview %}
+                              <span class="pcl-case-row__wide">
+                                <strong>Parties</strong>
+                                {{ party_preview|join('; ') }}
+                                {% if selected_case_docket_party_names|length > party_preview|length %}
+                                  <span class="small">(+{{ selected_case_docket_party_names|length - party_preview|length }} more)</span>
+                                {% endif %}
+                              </span>
+                            {% elif selected_case_docket_party_count is not none %}
+                              <span><strong>Parties</strong> {{ selected_case_docket_party_count }}</span>
+                            {% endif %}
+                          </div>
+                          <div class="pcl-case-row">
+                            {% if attorney_preview %}
+                              <span class="pcl-case-row__wide">
+                                <strong>Counsel</strong>
+                                <span class="pcl-case-inline-list" title="{{ selected_case_docket_attorney_names|join('; ') }}">
+                                  {{ attorney_preview|join('; ') }}
+                                  {% if selected_case_docket_attorney_names|length > attorney_preview|length %}
+                                    <span class="small">(+{{ selected_case_docket_attorney_names|length - attorney_preview|length }} more)</span>
+                                  {% endif %}
+                                </span>
+                              </span>
+                            {% elif selected_case_docket_attorney_count is not none %}
+                              <span><strong>Counsel</strong> {{ selected_case_docket_attorney_count }}</span>
+                            {% endif %}
+                          </div>
+                        </div>
+
+                        {% if selected_case_docket_assigned_judges or selected_case_docket_referred_judges %}
+                          <div class="docket-summary">
+                            {% if selected_case_docket_assigned_judges %}
+                              <div class="docket-summary__item docket-summary__item--wide">
+                                <span class="docket-summary__label">Assigned Judges</span>
+                                <div class="docket-summary__value docket-summary__tags">
+                                  {% for judge in selected_case_docket_assigned_judges %}
+                                    <span class="docket-tag">{{ judge }}</span>
+                                  {% endfor %}
+                                </div>
+                              </div>
+                            {% endif %}
+                            {% if selected_case_docket_referred_judges %}
+                              <div class="docket-summary__item docket-summary__item--wide">
+                                <span class="docket-summary__label">Referred Judges</span>
+                                <div class="docket-summary__value docket-summary__tags">
+                                  {% for judge in selected_case_docket_referred_judges %}
+                                    <span class="docket-tag">{{ judge }}</span>
+                                  {% endfor %}
+                                </div>
+                              </div>
+                            {% endif %}
+                          </div>
                         {% endif %}
-                      </div>
+
+                        <section class="case-docket-preview" aria-label="Main docket entries">
+                          <p class="small">
+                            <strong>Main docket</strong>
+                            {% if selected_case_docket_entry_count is not none %}<span> · {{ selected_case_docket_entry_count }} entries</span>{% endif %}
+                          </p>
+                          {% if selected_case_docket_entries %}
+                            <div class="dashboard-docket-scroll">
+                              <ul class="case-docket-list case-docket-list--full">
+                                {% for entry in selected_case_docket_entries %}
+                                  <li class="case-docket-item">
+                                    <div class="case-docket-item__main">
+                                      <div class="dashboard-docket-entry-head">
+                                        {% if entry.document_number %}
+                                          <span class="case-docket-doc">#{{ entry.document_number }}</span>
+                                        {% endif %}
+                                        <span class="case-docket-desc dashboard-docket-entry-desc">{{ entry.description or '—' }}</span>
+                                      </div>
+                                      {% if entry.docket_text and entry.docket_text != entry.description %}
+                                        <div class="dashboard-docket-entry-text">{{ entry.docket_text }}</div>
+                                      {% endif %}
+                                    </div>
+                                    <div class="small case-docket-date">{{ entry.date_filed or '—' }}</div>
+                                  </li>
+                                {% endfor %}
+                              </ul>
+                            </div>
+                          {% elif selected_case_docket_lines %}
+                            <div class="dashboard-docket-scroll">
+                              <ul class="case-docket-list case-docket-list--full">
+                                {% for line in selected_case_docket_lines %}
+                                  <li class="case-docket-item">
+                                    <div class="case-docket-item__main">
+                                      <span class="case-docket-desc dashboard-docket-entry-desc">{{ line }}</span>
+                                    </div>
+                                  </li>
+                                {% endfor %}
+                              </ul>
+                            </div>
+                          {% else %}
+                            <p class="small">No docket text is available for this case yet.</p>
+                          {% endif %}
+
+                          {% if selected_case_docket_text %}
+                            <details class="case-docket-details dashboard-raw-docket-details">
+                              <summary class="pcl-detail-summary">Show raw docket text</summary>
+                              <pre class="dashboard-docket-text">{{ selected_case_docket_text }}</pre>
+                            </details>
+                          {% endif %}
+                        </section>
+                      </article>
                     {% elif case_view == 'references' %}
                       <div class="dashboard-references-panel" style="margin-top: 12px;">
                         <form method="get" action="{{ url_for('dashboard') }}" class="dashboard-client-search-form">

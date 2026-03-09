@@ -6326,8 +6326,38 @@ def create_app() -> Flask:
                         )
 
             selected_case_docket_text = ""
-            selected_case_docket_entry_count = None
+            selected_case_docket_lines: List[str] = []
+            selected_case_docket_entries: List[Dict[str, str]] = []
+            selected_case_docket_entry_count: Optional[int] = None
             selected_case_docket_fetched_at = None
+            selected_case_docket_party_names: List[str] = []
+            selected_case_docket_attorney_names: List[str] = []
+            selected_case_docket_party_count: Optional[int] = None
+            selected_case_docket_attorney_count: Optional[int] = None
+            selected_case_docket_assigned_judges: List[str] = []
+            selected_case_docket_referred_judges: List[str] = []
+            selected_case_docket_judges: List[str] = []
+
+            def _normalize_list_labels(value: Any) -> List[str]:
+                if value is None:
+                    return []
+                if isinstance(value, str):
+                    tokens = [item.strip() for item in re.split(r"[|;\n]+", value) if item.strip()]
+                elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+                    tokens = [str(item).strip() for item in value if str(item).strip()]
+                else:
+                    token = str(value).strip()
+                    tokens = [token] if token else []
+                deduped: List[str] = []
+                seen: Set[str] = set()
+                for token in tokens:
+                    key = token.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(token)
+                return deduped
+
             if selected_client_case:
                 field_rows = (
                     conn.execute(
@@ -6344,6 +6374,12 @@ def create_app() -> Flask:
                                     "docket_entry_count",
                                     "docket_fetched_at",
                                     "docket_entries",
+                                    "docket_header_fields",
+                                    "docket_party_names",
+                                    "docket_attorney_names",
+                                    "docket_parties",
+                                    "docket_attorneys",
+                                    "docket_judges",
                                 ]
                             )
                         )
@@ -6352,37 +6388,181 @@ def create_app() -> Flask:
                     .all()
                 )
                 field_map = {str(row["field_name"]): row for row in field_rows}
-                selected_case_docket_text = str(
-                    (field_map.get("docket_text") or {}).get("field_value_text") or ""
-                ).strip()
-                selected_case_docket_entry_count = (
-                    (field_map.get("docket_entry_count") or {}).get("field_value_text")
-                    if field_map.get("docket_entry_count")
-                    else None
-                )
+                docket_text_field = field_map.get("docket_text") or {}
+                docket_text_json = _coerce_json_value(docket_text_field.get("field_value_json"))
+                if isinstance(docket_text_json, Mapping):
+                    selected_case_docket_text = str(docket_text_json.get("text") or "").strip()
+                if not selected_case_docket_text:
+                    selected_case_docket_text = str(
+                        docket_text_field.get("field_value_text") or ""
+                    ).strip()
+
+                entry_count_field = field_map.get("docket_entry_count") or {}
+                entry_count_raw = entry_count_field.get("field_value_json")
+                if entry_count_raw in (None, ""):
+                    entry_count_raw = entry_count_field.get("field_value_text")
+                if entry_count_raw not in (None, ""):
+                    try:
+                        selected_case_docket_entry_count = int(str(entry_count_raw).strip())
+                    except (TypeError, ValueError):
+                        selected_case_docket_entry_count = None
+
                 selected_case_docket_fetched_at = (
                     (field_map.get("docket_fetched_at") or {}).get("field_value_text")
                     if field_map.get("docket_fetched_at")
                     else None
                 )
-                if not selected_case_docket_text:
-                    entries_payload = (field_map.get("docket_entries") or {}).get(
-                        "field_value_json"
+                entries_payload = _coerce_json_value(
+                    (field_map.get("docket_entries") or {}).get("field_value_json")
+                )
+                entries = entries_payload if isinstance(entries_payload, list) else []
+                for entry in entries:
+                    if not isinstance(entry, Mapping):
+                        continue
+                    date_value = str(
+                        entry.get("dateFiled")
+                        or entry.get("date_filed")
+                        or entry.get("docketTextDate")
+                        or ""
+                    ).strip()
+                    doc_value = str(
+                        entry.get("documentNumber") or entry.get("document_number") or ""
+                    ).strip()
+                    desc_value = str(
+                        entry.get("description")
+                        or entry.get("documentDescription")
+                        or entry.get("document_description")
+                        or entry.get("eventText")
+                        or entry.get("entryText")
+                        or ""
+                    ).strip()
+                    docket_text_value = str(
+                        entry.get("docketText") or entry.get("docket_text") or ""
+                    ).strip()
+                    if not desc_value:
+                        desc_value = docket_text_value
+                    if not any([date_value, doc_value, desc_value, docket_text_value]):
+                        continue
+                    selected_case_docket_entries.append(
+                        {
+                            "date_filed": date_value,
+                            "document_number": doc_value,
+                            "description": desc_value,
+                            "docket_text": docket_text_value,
+                        }
                     )
-                    entries = entries_payload if isinstance(entries_payload, list) else []
+
+                if selected_case_docket_entry_count is None and selected_case_docket_entries:
+                    selected_case_docket_entry_count = len(selected_case_docket_entries)
+
+                if not selected_case_docket_text and selected_case_docket_entries:
                     lines: List[str] = []
-                    for entry in entries:
-                        if not isinstance(entry, Mapping):
-                            continue
-                        date_value = str(entry.get("date_filed") or "").strip()
-                        doc_value = str(entry.get("document_number") or "").strip()
-                        desc_value = str(entry.get("description") or "").strip()
+                    for entry in selected_case_docket_entries:
                         line = " | ".join(
-                            part for part in [date_value, doc_value, desc_value] if part
+                            part
+                            for part in [
+                                entry.get("date_filed"),
+                                entry.get("document_number"),
+                                entry.get("description"),
+                            ]
+                            if part
                         ).strip()
                         if line:
                             lines.append(line)
                     selected_case_docket_text = "\\n".join(lines)
+
+                if selected_case_docket_text:
+                    selected_case_docket_lines = [
+                        line.strip()
+                        for line in selected_case_docket_text.splitlines()
+                        if line and line.strip()
+                    ]
+
+                header_fields_payload = _coerce_json_value(
+                    (field_map.get("docket_header_fields") or {}).get("field_value_json")
+                )
+                if isinstance(header_fields_payload, Mapping):
+                    selected_case_docket_assigned_judges = _normalize_list_labels(
+                        header_fields_payload.get("assigned_to")
+                    )
+                    selected_case_docket_referred_judges = _normalize_list_labels(
+                        header_fields_payload.get("referred_to")
+                    )
+                    party_count_value = header_fields_payload.get("party_count")
+                    attorney_count_value = header_fields_payload.get("attorney_count")
+                    if party_count_value not in (None, ""):
+                        try:
+                            selected_case_docket_party_count = int(str(party_count_value))
+                        except (TypeError, ValueError):
+                            selected_case_docket_party_count = None
+                    if attorney_count_value not in (None, ""):
+                        try:
+                            selected_case_docket_attorney_count = int(
+                                str(attorney_count_value)
+                            )
+                        except (TypeError, ValueError):
+                            selected_case_docket_attorney_count = None
+
+                selected_case_docket_judges = _normalize_list_labels(
+                    _coerce_json_value(
+                        (field_map.get("docket_judges") or {}).get("field_value_json")
+                    )
+                )
+                if not selected_case_docket_judges:
+                    selected_case_docket_judges = _normalize_list_labels(
+                        selected_case_docket_assigned_judges
+                        + selected_case_docket_referred_judges
+                    )
+
+                selected_case_docket_party_names = _normalize_list_labels(
+                    _coerce_json_value(
+                        (field_map.get("docket_party_names") or {}).get("field_value_json")
+                    )
+                    or (field_map.get("docket_party_names") or {}).get("field_value_text")
+                )
+                if not selected_case_docket_party_names:
+                    parties_payload = _coerce_json_value(
+                        (field_map.get("docket_parties") or {}).get("field_value_json")
+                    )
+                    if isinstance(parties_payload, list):
+                        selected_case_docket_party_names = _normalize_list_labels(
+                            [
+                                item.get("name")
+                                for item in parties_payload
+                                if isinstance(item, Mapping)
+                                and str(item.get("name") or "").strip()
+                            ]
+                        )
+
+                selected_case_docket_attorney_names = _normalize_list_labels(
+                    _coerce_json_value(
+                        (field_map.get("docket_attorney_names") or {}).get("field_value_json")
+                    )
+                    or (field_map.get("docket_attorney_names") or {}).get("field_value_text")
+                )
+                if not selected_case_docket_attorney_names:
+                    attorneys_payload = _coerce_json_value(
+                        (field_map.get("docket_attorneys") or {}).get("field_value_json")
+                    )
+                    if isinstance(attorneys_payload, list):
+                        selected_case_docket_attorney_names = _normalize_list_labels(
+                            [
+                                item.get("name")
+                                for item in attorneys_payload
+                                if isinstance(item, Mapping)
+                                and str(item.get("name") or "").strip()
+                            ]
+                        )
+
+                if selected_case_docket_party_count is None and selected_case_docket_party_names:
+                    selected_case_docket_party_count = len(selected_case_docket_party_names)
+                if (
+                    selected_case_docket_attorney_count is None
+                    and selected_case_docket_attorney_names
+                ):
+                    selected_case_docket_attorney_count = len(
+                        selected_case_docket_attorney_names
+                    )
 
             reference_cases: List[Dict[str, Any]] = []
             reference_case_ids: Set[int] = set()
@@ -6478,8 +6658,17 @@ def create_app() -> Flask:
             selected_client_case=selected_client_case,
             selected_client_case_id=selected_client_case_id,
             selected_case_docket_text=selected_case_docket_text,
+            selected_case_docket_lines=selected_case_docket_lines,
+            selected_case_docket_entries=selected_case_docket_entries,
             selected_case_docket_entry_count=selected_case_docket_entry_count,
             selected_case_docket_fetched_at=selected_case_docket_fetched_at,
+            selected_case_docket_party_names=selected_case_docket_party_names,
+            selected_case_docket_attorney_names=selected_case_docket_attorney_names,
+            selected_case_docket_party_count=selected_case_docket_party_count,
+            selected_case_docket_attorney_count=selected_case_docket_attorney_count,
+            selected_case_docket_assigned_judges=selected_case_docket_assigned_judges,
+            selected_case_docket_referred_judges=selected_case_docket_referred_judges,
+            selected_case_docket_judges=selected_case_docket_judges,
             case_view=case_view,
             client_query=client_query,
             client_name_input=client_name_input,
