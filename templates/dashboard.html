@@ -490,8 +490,8 @@
                                 <tr>
                                   <td class="dashboard-docket-table__date">{{ entry.date_filed or '—' }}</td>
                                   <td class="dashboard-docket-table__ecf">
-                                    {% if entry.document_number %}
-                                      <span class="case-docket-doc">ECF {{ entry.document_number }}</span>
+                                    {% if entry.display_document_numbers %}
+                                      <span class="case-docket-doc">ECF {{ entry.display_document_numbers|join(', ') }}</span>
                                     {% else %}
                                       <span class="small">—</span>
                                     {% endif %}
@@ -505,22 +505,41 @@
                                     {% endif %}
                                   </td>
                                   <td class="dashboard-docket-table__links">
-                                    <div class="dashboard-docket-links">
-                                      {% if entry.file_url %}
-                                        <a class="dashboard-link-pill" href="{{ entry.file_url }}" target="_blank" rel="noopener">PDF / File</a>
-                                      {% endif %}
-                                      {% if entry.text_url %}
-                                        <a class="dashboard-link-pill" href="{{ entry.text_url }}" target="_blank" rel="noopener">Text</a>
-                                      {% endif %}
-                                      {% if not entry.file_url and not entry.text_url %}
-                                        <span class="small">No downloaded file yet</span>
-                                      {% endif %}
-                                    </div>
                                     {% if entry.source_links %}
+                                      <div class="dashboard-docket-document-list">
+                                        {% for link in entry.source_links %}
+                                          <div class="dashboard-docket-document-row">
+                                            <span class="dashboard-docket-document-label">ECF {{ link.label }}</span>
+                                            <div class="dashboard-docket-links">
+                                              {% if link.file_url %}
+                                                <a class="dashboard-link-pill" href="{{ link.file_url }}" target="_blank" rel="noopener">PDF / File</a>
+                                              {% endif %}
+                                              {% if link.text_url %}
+                                                <a class="dashboard-link-pill" href="{{ link.text_url }}" target="_blank" rel="noopener">Text</a>
+                                              {% endif %}
+                                              {% if not link.file_url and not link.text_url %}
+                                                <span class="small">No downloaded file yet</span>
+                                              {% endif %}
+                                            </div>
+                                          </div>
+                                        {% endfor %}
+                                      </div>
                                       <div class="dashboard-docket-source-links small">
                                         {% for link in entry.source_links %}
-                                          <a href="{{ link.href }}" target="_blank" rel="noopener">{{ link.label }}</a>{% if not loop.last %}<span> · </span>{% endif %}
+                                          <a href="{{ link.href }}" target="_blank" rel="noopener">Original PACER link</a>{% if not loop.last %}<span> · </span>{% endif %}
                                         {% endfor %}
+                                      </div>
+                                    {% else %}
+                                      <div class="dashboard-docket-links">
+                                        {% if entry.file_url %}
+                                          <a class="dashboard-link-pill" href="{{ entry.file_url }}" target="_blank" rel="noopener">PDF / File</a>
+                                        {% endif %}
+                                        {% if entry.text_url %}
+                                          <a class="dashboard-link-pill" href="{{ entry.text_url }}" target="_blank" rel="noopener">Text</a>
+                                        {% endif %}
+                                        {% if not entry.file_url and not entry.text_url %}
+                                          <span class="small">No downloaded file yet</span>
+                                        {% endif %}
                                       </div>
                                     {% endif %}
                                   </td>

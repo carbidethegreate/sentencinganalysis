@@ -3398,6 +3398,16 @@ def create_app() -> Flask:
         digits = re.sub(r"\D+", "", raw)
         return (compact or None, digits or None)
 
+    def _normalize_document_source_url(value: Any) -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        parts = urlsplit(raw)
+        if not parts.scheme or not parts.netloc:
+            return raw
+        normalized_path = parts.path.rstrip("/") or parts.path
+        return f"{parts.scheme.lower()}://{parts.netloc.lower()}{normalized_path}"
+
     def _latest_job_status(
         conn: Any,
         jobs_table: Any,
@@ -6855,6 +6865,7 @@ def create_app() -> Flask:
             if selected_client_case:
                 document_item_exact_lookup: Dict[str, Dict[str, Any]] = {}
                 document_item_digit_lookup: Dict[str, List[Dict[str, Any]]] = {}
+                document_item_source_lookup: Dict[str, Dict[str, Any]] = {}
                 items_table = pcl_tables.get("docket_document_items")
                 jobs_table = pcl_tables.get("docket_document_jobs")
                 if items_table is not None and jobs_table is not None:
@@ -6865,6 +6876,7 @@ def create_app() -> Flask:
                                 items_table.c.document_number,
                                 items_table.c.description,
                                 items_table.c.status,
+                                items_table.c.source_url,
                                 items_table.c.file_path,
                                 items_table.c.text_path,
                                 items_table.c.text_status,
@@ -6911,6 +6923,9 @@ def create_app() -> Flask:
                             document_item_exact_lookup[exact_key] = item
                         if digits_key:
                             document_item_digit_lookup.setdefault(digits_key, []).append(item)
+                        source_key = _normalize_document_source_url(item.get("source_url"))
+                        if source_key and source_key not in document_item_source_lookup:
+                            document_item_source_lookup[source_key] = item
 
                 field_rows = (
                     conn.execute(
@@ -7006,14 +7021,48 @@ def create_app() -> Flask:
                                 or href
                             ).strip()
                             if href:
-                                source_links.append({"href": href, "label": label or href})
+                                source_key = _normalize_document_source_url(href)
+                                linked_item = (
+                                    document_item_source_lookup.get(source_key)
+                                    if source_key
+                                    else None
+                                )
+                                source_links.append(
+                                    {
+                                        "href": href,
+                                        "label": label or href,
+                                        "file_url": (
+                                            linked_item.get("file_url")
+                                            if linked_item
+                                            else None
+                                        ),
+                                        "text_url": (
+                                            linked_item.get("text_url")
+                                            if linked_item
+                                            else None
+                                        ),
+                                        "document_item_id": (
+                                            linked_item.get("id")
+                                            if linked_item
+                                            else None
+                                        ),
+                                    }
+                                )
                     if not desc_value:
                         desc_value = docket_text_value
                     if not any([date_value, doc_value, desc_value, docket_text_value]):
                         continue
                     matched_item: Optional[Dict[str, Any]] = None
+                    for source_link in source_links:
+                        document_item_id = source_link.get("document_item_id")
+                        if document_item_id:
+                            matched_item = document_item_source_lookup.get(
+                                _normalize_document_source_url(source_link.get("href"))
+                            )
+                            if matched_item is not None:
+                                break
                     exact_key, digits_key = _document_number_lookup_keys(doc_value)
-                    if exact_key:
+                    if matched_item is None and exact_key:
                         matched_item = document_item_exact_lookup.get(exact_key)
                     if matched_item is None and digits_key:
                         digit_matches = document_item_digit_lookup.get(digits_key) or []
@@ -7028,10 +7077,24 @@ def create_app() -> Flask:
                         matched_item.get("file_url") or matched_item.get("text_url")
                     ):
                         selected_case_linked_document_count += 1
+                    display_numbers: List[str] = []
+                    seen_display_numbers: Set[str] = set()
+                    if doc_value:
+                        seen_display_numbers.add(doc_value)
+                        display_numbers.append(doc_value)
+                    for source_link in source_links:
+                        label_value = str(source_link.get("label") or "").strip()
+                        if not label_value or label_value.lower().startswith("http"):
+                            continue
+                        if label_value in seen_display_numbers:
+                            continue
+                        seen_display_numbers.add(label_value)
+                        display_numbers.append(label_value)
                     selected_case_docket_entries.append(
                         {
                             "date_filed": date_value,
                             "document_number": doc_value,
+                            "display_document_numbers": display_numbers,
                             "description": desc_value,
                             "docket_text": docket_text_value,
                             "file_url": matched_item.get("file_url") if matched_item else None,
