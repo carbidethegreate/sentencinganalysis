@@ -129,7 +129,8 @@
         </article>
       </section>
     {% elif active_tab == 'my-clients' %}
-      <section class="dashboard-section">
+      <section class="dashboard-section dashboard-section--clients">
+        <div class="dashboard-client-setup-grid">
         <article class="card dashboard-client-selector-card">
           <div class="dashboard-section-heading">
             <div>
@@ -249,6 +250,7 @@
             </div>
           {% endif %}
         </article>
+        </div>
 
         <article class="card dashboard-workspace-card">
           {% if selected_client_profile %}

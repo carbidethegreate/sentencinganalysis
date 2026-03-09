@@ -781,6 +781,11 @@ input[type="submit"].danger:disabled {
   margin-top: 14px;
 }
 
+.dashboard-section--clients {
+  display: grid;
+  gap: 14px;
+}
+
 .dashboard-work-product-panel,
 .dashboard-client-selector-card,
 .dashboard-client-search-shell,
@@ -788,6 +793,18 @@ input[type="submit"].danger:disabled {
 .dashboard-research-upload-card,
 .dashboard-research-empty-card {
   padding: 20px 22px;
+}
+
+.dashboard-client-selector-card,
+.dashboard-client-search-shell {
+  padding: 16px 18px;
+}
+
+.dashboard-client-setup-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
 }
 
 .dashboard-work-product-list {
@@ -821,6 +838,17 @@ input[type="submit"].danger:disabled {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.dashboard-client-selector-card .dashboard-section-heading,
+.dashboard-client-search-shell .dashboard-section-heading {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.dashboard-client-selector-card h2,
+.dashboard-client-search-shell h2 {
+  margin-bottom: 6px;
 }
 
 .dashboard-client-overview {
@@ -899,6 +927,19 @@ input[type="submit"].danger:disabled {
 .dashboard-research-upload-form {
   display: grid;
   gap: 10px;
+}
+
+.dashboard-client-search-form {
+  gap: 8px 12px;
+}
+
+.dashboard-client-search-form .actions {
+  margin-top: 0 !important;
+}
+
+.dashboard-client-search-form input#client_q,
+.dashboard-client-search-form input#client_name {
+  min-height: 42px;
 }
 
 .dashboard-client-search-results {
@@ -1240,6 +1281,10 @@ input[type="submit"].danger:disabled {
     flex-direction: column;
   }
 
+  .dashboard-client-setup-grid {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-client-overview {
     grid-template-columns: 1fr;
   }
@@ -1256,6 +1301,30 @@ input[type="submit"].danger:disabled {
 
   .dashboard-main-docket-card .case-docket-date {
     align-self: flex-start;
+  }
+}
+
+@media (min-width: 1040px) {
+  .dashboard-client-search-form {
+    grid-template-columns: minmax(0, 1fr) 240px;
+    align-items: end;
+  }
+
+  .dashboard-client-search-form label[for="client_q"] {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-client-search-form .actions {
+    grid-column: 1;
+  }
+
+  .dashboard-client-search-form label[for="client_name"],
+  .dashboard-client-search-form input#client_name {
+    grid-column: 2;
+  }
+
+  .dashboard-client-search-form label[for="client_name"] {
+    margin-top: 0 !important;
   }
 }
 
