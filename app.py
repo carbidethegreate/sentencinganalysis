@@ -1816,7 +1816,7 @@ def create_app() -> Flask:
         login_id, password = get_configured_pacer_credentials()
         if not login_id or not password:
             return None
-        client_code = get_configured_pacer_client_code()
+        client_code = _active_pacer_client_code()
         otp_code = get_configured_pacer_otp_for_auth()
         session_key = session.get("pacer_session_key")
         if not session_key:
@@ -1909,6 +1909,25 @@ def create_app() -> Flask:
     # -----------------
     # Helpers
     # -----------------
+
+    def _active_pacer_client_code() -> Optional[str]:
+        request_code = ""
+        if has_request_context():
+            request_code = str(session.get("pacer_client_code") or "").strip()
+        if request_code:
+            return request_code
+        return get_configured_pacer_client_code()
+
+    def _apply_pacer_client_code_cookie(client_code: Optional[str] = None) -> Optional[str]:
+        active_code = str(client_code or _active_pacer_client_code() or "").strip()
+        if not active_code:
+            return None
+        for http_client in (pcl_http_client, pcl_background_http_client):
+            try:
+                http_client.set_cookie("PacerClientCode", active_code)
+            except Exception:
+                continue
+        return active_code
 
     def load_table(table_name: str) -> Table:
         try:
@@ -10776,16 +10795,8 @@ def create_app() -> Flask:
 
         if result.can_proceed:
             _set_pacer_session(result.token)
-            if client_code:
-                # Best-effort: keep the client code cookie available for court endpoints.
-                try:
-                    pcl_http_client.set_cookie("PacerClientCode", client_code)
-                except Exception:
-                    pass
-                try:
-                    pcl_background_http_client.set_cookie("PacerClientCode", client_code)
-                except Exception:
-                    pass
+            session["pacer_client_code"] = (client_code or "").strip()
+            _apply_pacer_client_code_cookie(client_code)
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = bool(result.needs_client_code)
             session["pacer_redaction_required"] = False
@@ -10886,6 +10897,7 @@ def create_app() -> Flask:
     def admin_federal_data_dashboard_pacer_logout():
         require_csrf()
         _clear_pacer_session()
+        session.pop("pacer_client_code", None)
         session["pacer_needs_otp"] = False
         session["pacer_client_code_required"] = False
         session["pacer_redaction_required"] = False
@@ -13243,6 +13255,7 @@ def create_app() -> Flask:
         if not detail:
             abort(404)
 
+        _apply_pacer_client_code_cookie()
         include_docket_text = _parse_include_docket_text(request.form.get("include_docket_text"))
         job_id = _enqueue_docket_enrichment(case_id, include_docket_text)
         docket_output = os.environ.get("PACER_DOCKET_OUTPUT", "html")
