@@ -490,8 +490,8 @@
                                 <tr>
                                   <td class="dashboard-docket-table__date">{{ entry.date_filed or '—' }}</td>
                                   <td class="dashboard-docket-table__ecf">
-                                    {% if entry.document_number %}
-                                      <span class="case-docket-doc">ECF {{ entry.document_number }}</span>
+                                    {% if entry.ecf_number %}
+                                      <span class="case-docket-doc">ECF {{ entry.ecf_number }}</span>
                                     {% else %}
                                       <span class="small">—</span>
                                     {% endif %}
