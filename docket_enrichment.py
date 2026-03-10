@@ -951,12 +951,20 @@ def _extract_docket_payload(
     base_url: Optional[str] = None,
 ) -> tuple[str, List[Dict[str, Any]], str]:
     text = body.decode("utf-8", errors="replace")
-    if "xml" in (content_type or "").lower() or text.lstrip().startswith("<"):
+    stripped = text.lstrip()
+    if "xml" in (content_type or "").lower() or stripped.startswith("<"):
         try:
-            return _extract_docket_xml(text), _extract_docket_entries(text), "xml"
+            root = ElementTree.fromstring(text)
         except ElementTree.ParseError:
-            entries = _extract_docket_entries_from_html(text, base_url=base_url)
-            return _extract_docket_text_from_entries(entries, text), entries, "html"
+            root = None
+        if root is not None:
+            root_name = str(root.tag or "").lower()
+            if root_name == "html" or root_name.endswith("}html"):
+                entries = _extract_docket_entries_from_html(text, base_url=base_url)
+                return _extract_docket_text_from_entries(entries, text), entries, "html"
+            return _extract_docket_xml(text), _extract_docket_entries(text), "xml"
+        entries = _extract_docket_entries_from_html(text, base_url=base_url)
+        return _extract_docket_text_from_entries(entries, text), entries, "html"
     entries = _extract_docket_entries_from_html(text, base_url=base_url)
     return _extract_docket_text_from_entries(entries, text), entries, "html"
 
@@ -987,18 +995,28 @@ def _extract_docket_entries_from_html(
         ):
             continue
         cells = row.xpath("./td")
-        if len(cells) < 3:
+        if len(cells) < 2:
             continue
         date_filed = _normalize_html_text(cells[0])
         if not date_filed:
             continue
+        # CM/ECF docket tables vary by court/version:
+        # - classic: Date | # | Docket Text
+        # - with controls: Date | # | Select | Sort | Docket Text
+        # The docket description is reliably the *last* column.
         doc_cell = cells[1]
-        desc_cell = cells[2]
-        if len(cells) >= 4:
-            doc_cell = cells[2]
-            desc_cell = cells[3]
-        doc_number = _normalize_html_text(doc_cell)
+        desc_cell = cells[-1]
+        doc_number = _extract_document_number_from_cell(doc_cell)
         description = _normalize_html_text(desc_cell)
+        if not description and len(cells) > 2:
+            # Fallback: pick the richest non-date cell when the expected
+            # description column is empty due to court-specific markup.
+            candidate = max(
+                cells[1:],
+                key=lambda node: len(_normalize_html_text(node)),
+                default=desc_cell,
+            )
+            description = _normalize_html_text(candidate)
         links: List[Dict[str, str]] = []
         links.extend(_extract_links_from_cell(doc_cell, base_url=base_url))
         links.extend(_extract_links_from_cell(desc_cell, base_url=base_url))
@@ -1009,6 +1027,21 @@ def _extract_docket_entries_from_html(
             entry["documentLinks"] = links
         entries.append(entry)
     return entries
+
+
+def _extract_document_number_from_cell(cell: Any) -> str:
+    links = cell.xpath(".//a")
+    for link in links:
+        text = _normalize_html_text(link)
+        if text and re.search(r"\d", text):
+            return text
+    value = _normalize_html_text(cell)
+    if not value:
+        return ""
+    number_match = re.search(r"\b\d+\b", value)
+    if number_match:
+        return number_match.group(0)
+    return value
 
 
 def _extract_docket_text_from_entries(
