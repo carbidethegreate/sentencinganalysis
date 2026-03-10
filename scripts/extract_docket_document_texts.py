@@ -375,18 +375,36 @@ def _ocr_extract(path: Path, max_pages: int = 0, dpi: int = 240) -> Tuple[str, L
         return _norm("\n\n".join(chunks)), page_headers
 
 
-def _html_extract(path: Path) -> str:
+def _classify_html_gate(raw_html: str, extracted_text: str) -> str:
+    lowered_raw = (raw_html or "").lower()
+    lowered_text = (extracted_text or "").lower()
+    if "csologin/login.jsf" in lowered_raw:
+        return "pacer_login_redirect"
+    if "log in to pacer systems" in lowered_text or "district court login" in lowered_text:
+        return "pacer_login_page"
+    if "you do not have permission to view this document" in lowered_text:
+        return "document_permission_denied"
+    if "this document is not available" in lowered_text:
+        return "document_unavailable"
+    if not (extracted_text or "").strip():
+        return "empty_html_text"
+    return ""
+
+
+def _html_extract(path: Path) -> Tuple[str, str]:
     try:
         raw = path.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        return ""
+        return "", "html_read_failed"
     try:
         tree = lxml_html.fromstring(raw)
     except Exception:
-        return _norm(raw)
+        text = _norm(raw)
+        return text, _classify_html_gate(raw, text)
     for bad in tree.xpath("//script|//style|//noscript|//head"):
         bad.drop_tree()
-    return _norm(tree.text_content())
+    text = _norm(tree.text_content())
+    return text, _classify_html_gate(raw, text)
 
 
 def _token_set(text: str) -> set[str]:
@@ -972,7 +990,9 @@ def process_one(
             }
 
         if html:
-            text = _html_extract(source)
+            text, html_issue = _html_extract(source)
+            if html_issue:
+                raise ValueError(f"HTML extraction did not produce usable document text ({html_issue}).")
             text_path = _write_text_output(case_id, item_id, text, s3_client=s3_client)
             headers = _extract_header_fields(text, [])
             confidence = _estimate_confidence(text, text, "", headers)
