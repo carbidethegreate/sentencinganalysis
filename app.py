@@ -6984,7 +6984,7 @@ def create_app() -> Flask:
                     (field_map.get("docket_entries") or {}).get("field_value_json")
                 )
                 entries = entries_payload if isinstance(entries_payload, list) else []
-                for entry_index, entry in enumerate(entries, start=1):
+                for entry in entries:
                     if not isinstance(entry, Mapping):
                         continue
                     date_value = str(
@@ -6996,8 +6996,6 @@ def create_app() -> Flask:
                     doc_value = str(
                         entry.get("documentNumber") or entry.get("document_number") or ""
                     ).strip()
-                    entry_number_value = str(entry_index)
-                    visible_ecf_number = doc_value or entry_number_value
                     desc_value = str(
                         entry.get("description")
                         or entry.get("documentDescription")
@@ -7094,8 +7092,6 @@ def create_app() -> Flask:
                         display_numbers.append(label_value)
                     selected_case_docket_entries.append(
                         {
-                            "entry_number": entry_number_value,
-                            "ecf_number": visible_ecf_number,
                             "date_filed": date_value,
                             "document_number": doc_value,
                             "display_document_numbers": display_numbers,
