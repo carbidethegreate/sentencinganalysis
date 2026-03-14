@@ -474,52 +474,104 @@
                   <tr>
                     <td colspan="6">
                       <details>
-                        <summary>Show documents ({{ job_items | length }})</summary>
-                        <div class="table-wrap mt-12">
-                          <table>
-                            <thead>
-                              <tr>
-                                <th>Doc #</th>
-                                <th>Description</th>
-                                <th>Status</th>
-                                <th>File</th>
-                                <th>Text</th>
-                                <th>Error</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {% for item in job_items %}
+                        <summary>
+                          Show documents ({{ job_items | length }} total · {{ job.pdf_item_count or 0 }} PDFs · {{ job.text_ready_count or 0 }} texts · {{ job.html_capture_count or 0 }} HTML captures)
+                        </summary>
+                        {% if job.pdf_items %}
+                          <p class="small mt-12">Retained PDFs and real extracted text for this job.</p>
+                          <div class="table-wrap mt-12">
+                            <table>
+                              <thead>
                                 <tr>
-                                  <td>{{ item.document_number or "—" }}</td>
-                                  <td>{{ item.description or "—" }}</td>
-                                  <td>{{ item.status }}</td>
-                                  <td>
-                                    {% if item.file_url %}
-                                      <a href="{{ item.file_url }}" target="_blank" rel="noopener">Open file</a>
-                                      <div class="small pcl-mono">{{ item.file_path or "—" }}</div>
-                                    {% else %}
-                                      {{ item.file_path or "—" }}
-                                    {% endif %}
-                                  </td>
-                                  <td>
-                                    {% if item.text_url %}
-                                      <a href="{{ item.text_url }}" target="_blank" rel="noopener">Open text</a>
-                                    {% else %}
-                                      —
-                                    {% endif %}
-                                    {% if item.text_status %}
-                                      <div class="small">status: {{ item.text_status }}</div>
-                                    {% endif %}
-                                    {% if item.text_confidence is not none %}
-                                      <div class="small">confidence: {{ '%.2f'|format(item.text_confidence) }}</div>
-                                    {% endif %}
-                                  </td>
-                                  <td>{{ item.error or "—" }}</td>
+                                  <th>Doc #</th>
+                                  <th>Description</th>
+                                  <th>Status</th>
+                                  <th>PDF</th>
+                                  <th>Text</th>
+                                  <th>Error</th>
                                 </tr>
-                              {% endfor %}
-                            </tbody>
-                          </table>
-                        </div>
+                              </thead>
+                              <tbody>
+                                {% for item in job.pdf_items %}
+                                  <tr>
+                                    <td>{{ item.document_number or "—" }}</td>
+                                    <td>{{ item.description or "—" }}</td>
+                                    <td>{{ item.status }}</td>
+                                    <td>
+                                      {% if item.file_url %}
+                                        <a href="{{ item.file_url }}" target="_blank" rel="noopener">Open PDF</a>
+                                      {% else %}
+                                        —
+                                      {% endif %}
+                                      {% if item.file_path %}
+                                        <div class="small pcl-mono">{{ item.file_path }}</div>
+                                      {% endif %}
+                                    </td>
+                                    <td>
+                                      {% if item.text_url %}
+                                        <a href="{{ item.text_url }}" target="_blank" rel="noopener">Open text</a>
+                                      {% else %}
+                                        —
+                                      {% endif %}
+                                      {% if item.text_status_label %}
+                                        <div class="small">{{ item.text_status_label }}</div>
+                                      {% endif %}
+                                      {% if item.text_char_count_label %}
+                                        <div class="small">{{ item.text_char_count_label }}</div>
+                                      {% endif %}
+                                    </td>
+                                    <td>{{ item.error or "—" }}</td>
+                                  </tr>
+                                {% endfor %}
+                              </tbody>
+                            </table>
+                          </div>
+                        {% else %}
+                          <p class="small mt-12">No retained PDFs were found for this job.</p>
+                        {% endif %}
+                        {% if job.html_capture_items %}
+                          <p class="small mt-12">Invalid stored captures below are HTML pages, not pleading PDFs.</p>
+                          <div class="table-wrap mt-12">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Doc #</th>
+                                  <th>Description</th>
+                                  <th>Status</th>
+                                  <th>Stored file</th>
+                                  <th>Stored text</th>
+                                  <th>Error</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {% for item in job.html_capture_items %}
+                                  <tr>
+                                    <td>{{ item.document_number or "—" }}</td>
+                                    <td>{{ item.description or "—" }}</td>
+                                    <td>{{ item.status }}</td>
+                                    <td>
+                                      No retained PDF
+                                      {% if item.file_path %}
+                                        <div class="small pcl-mono">{{ item.file_path }}</div>
+                                      {% endif %}
+                                    </td>
+                                    <td>
+                                      {% if item.text_char_count_label %}
+                                        {{ item.text_char_count_label }}
+                                      {% else %}
+                                        No usable pleading text
+                                      {% endif %}
+                                      {% if item.text_status_label %}
+                                        <div class="small">{{ item.text_status_label }}</div>
+                                      {% endif %}
+                                    </td>
+                                    <td>{{ item.error or "Stored capture is HTML" }}</td>
+                                  </tr>
+                                {% endfor %}
+                              </tbody>
+                            </table>
+                          </div>
+                        {% endif %}
                       </details>
                     </td>
                   </tr>

@@ -3427,6 +3427,41 @@ def create_app() -> Flask:
         normalized_path = parts.path.rstrip("/") or parts.path
         return f"{parts.scheme.lower()}://{parts.netloc.lower()}{normalized_path}"
 
+    def _document_item_is_pdf(item: Mapping[str, Any]) -> bool:
+        file_path = str(item.get("file_path") or "").strip().lower()
+        content_type = str(item.get("content_type") or "").strip().lower()
+        if not file_path:
+            return False
+        return file_path.endswith(".pdf") or "application/pdf" in content_type
+
+    def _format_confidence_percentage(value: Any) -> Optional[str]:
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return None
+        confidence = max(0.0, min(1.0, confidence))
+        percent = round(confidence * 100.0, 1)
+        if abs(percent - round(percent)) < 0.05:
+            return f"{int(round(percent))}%"
+        return f"{percent:.1f}%"
+
+    def _document_text_status_label(status: Any, confidence: Any) -> Optional[str]:
+        normalized = str(status or "").strip().lower()
+        if not normalized:
+            return None
+        confidence_label = _format_confidence_percentage(confidence)
+        if normalized == "completed":
+            if confidence_label:
+                return f"Text ready · {confidence_label} confidence"
+            return "Text ready"
+        if normalized == "failed":
+            return "Text extraction failed"
+        if normalized == "processing":
+            return "Text extracting"
+        if normalized in {"queued", "retry"}:
+            return "Text queued"
+        return f"Text {normalized}"
+
     def _latest_job_status(
         conn: Any,
         jobs_table: Any,
@@ -6858,6 +6893,8 @@ def create_app() -> Flask:
             selected_case_docket_judges: List[str] = []
             selected_case_document_count = 0
             selected_case_document_file_count = 0
+            selected_case_document_pdf_count = 0
+            selected_case_document_html_count = 0
             selected_case_document_text_count = 0
             selected_case_linked_document_count = 0
 
@@ -6897,6 +6934,7 @@ def create_app() -> Flask:
                                 items_table.c.status,
                                 items_table.c.source_url,
                                 items_table.c.file_path,
+                                items_table.c.content_type,
                                 items_table.c.text_path,
                                 items_table.c.text_status,
                                 items_table.c.text_confidence,
@@ -6919,21 +6957,43 @@ def create_app() -> Flask:
                     selected_case_document_file_count = sum(
                         1 for row in document_item_rows if row.get("file_path")
                     )
+                    selected_case_document_pdf_count = sum(
+                        1 for row in document_item_rows if _document_item_is_pdf(row)
+                    )
+                    selected_case_document_html_count = sum(
+                        1
+                        for row in document_item_rows
+                        if row.get("file_path") and not _document_item_is_pdf(row)
+                    )
                     selected_case_document_text_count = sum(
                         1 for row in document_item_rows if row.get("text_path")
                     )
                     for row in document_item_rows:
                         item = dict(row)
                         item_id = int(item["id"])
-                        item["file_url"] = (
+                        item["stored_file_url"] = (
                             url_for("dashboard_document_item_file", item_id=item_id)
                             if item.get("file_path")
                             else None
+                        )
+                        item["is_pdf_file"] = _document_item_is_pdf(item)
+                        item["has_non_pdf_file"] = bool(
+                            item.get("stored_file_url") and not item["is_pdf_file"]
+                        )
+                        item["file_url"] = (
+                            item["stored_file_url"] if item["is_pdf_file"] else None
                         )
                         item["text_url"] = (
                             url_for("dashboard_document_item_text", item_id=item_id)
                             if item.get("text_path")
                             else None
+                        )
+                        item["text_confidence_label"] = _format_confidence_percentage(
+                            item.get("text_confidence")
+                        )
+                        item["text_status_label"] = _document_text_status_label(
+                            item.get("text_status"),
+                            item.get("text_confidence"),
                         )
                         exact_key, digits_key = _document_number_lookup_keys(
                             item.get("document_number")
@@ -7055,8 +7115,28 @@ def create_app() -> Flask:
                                             if linked_item
                                             else None
                                         ),
+                                        "has_non_pdf_file": (
+                                            bool(linked_item.get("has_non_pdf_file"))
+                                            if linked_item
+                                            else False
+                                        ),
                                         "text_url": (
                                             linked_item.get("text_url")
+                                            if linked_item
+                                            else None
+                                        ),
+                                        "text_status": (
+                                            linked_item.get("text_status")
+                                            if linked_item
+                                            else None
+                                        ),
+                                        "text_status_label": (
+                                            linked_item.get("text_status_label")
+                                            if linked_item
+                                            else None
+                                        ),
+                                        "text_confidence_label": (
+                                            linked_item.get("text_confidence_label")
                                             if linked_item
                                             else None
                                         ),
@@ -7096,6 +7176,38 @@ def create_app() -> Flask:
                         matched_item.get("file_url") or matched_item.get("text_url")
                     ):
                         selected_case_linked_document_count += 1
+                    entry_pdf_url = matched_item.get("file_url") if matched_item else None
+                    entry_text_url = matched_item.get("text_url") if matched_item else None
+                    entry_text_status = matched_item.get("text_status") if matched_item else None
+                    entry_text_status_label = (
+                        matched_item.get("text_status_label") if matched_item else None
+                    )
+                    entry_text_confidence_label = (
+                        matched_item.get("text_confidence_label") if matched_item else None
+                    )
+                    entry_has_non_pdf_file = bool(
+                        matched_item.get("has_non_pdf_file") if matched_item else False
+                    )
+                    if not entry_pdf_url:
+                        for source_link in source_links:
+                            if source_link.get("file_url"):
+                                entry_pdf_url = str(source_link.get("file_url"))
+                                break
+                    if not entry_text_url:
+                        for source_link in source_links:
+                            if source_link.get("text_url"):
+                                entry_text_url = str(source_link.get("text_url"))
+                                entry_text_status = source_link.get("text_status")
+                                entry_text_status_label = source_link.get("text_status_label")
+                                entry_text_confidence_label = source_link.get(
+                                    "text_confidence_label"
+                                )
+                                break
+                    if not entry_has_non_pdf_file:
+                        entry_has_non_pdf_file = any(
+                            bool(source_link.get("has_non_pdf_file"))
+                            for source_link in source_links
+                        )
                     display_numbers: List[str] = []
                     seen_display_numbers: Set[str] = set()
                     if doc_value:
@@ -7116,10 +7228,19 @@ def create_app() -> Flask:
                             "display_document_numbers": display_numbers,
                             "description": desc_value,
                             "docket_text": docket_text_value,
+                            "pdf_url": entry_pdf_url,
                             "file_url": matched_item.get("file_url") if matched_item else None,
-                            "text_url": matched_item.get("text_url") if matched_item else None,
-                            "text_status": matched_item.get("text_status") if matched_item else None,
+                            "text_url": entry_text_url,
+                            "text_status": entry_text_status,
+                            "text_status_label": entry_text_status_label,
                             "text_confidence": matched_item.get("text_confidence") if matched_item else None,
+                            "text_confidence_label": entry_text_confidence_label,
+                            "has_non_pdf_file": entry_has_non_pdf_file,
+                            "non_pdf_warning": (
+                                "Stored capture is HTML, not the downloaded pleading PDF."
+                                if entry_has_non_pdf_file and not entry_pdf_url
+                                else None
+                            ),
                             "document_item_id": matched_item.get("id") if matched_item else None,
                             "source_links": source_links,
                         }
@@ -7389,6 +7510,8 @@ def create_app() -> Flask:
             selected_case_docket_judges=selected_case_docket_judges,
             selected_case_document_count=selected_case_document_count,
             selected_case_document_file_count=selected_case_document_file_count,
+            selected_case_document_pdf_count=selected_case_document_pdf_count,
+            selected_case_document_html_count=selected_case_document_html_count,
             selected_case_document_text_count=selected_case_document_text_count,
             selected_case_linked_document_count=selected_case_linked_document_count,
             case_view=case_view,
@@ -13441,19 +13564,63 @@ def create_app() -> Flask:
         detail["data_json_parsed"] = parsed_payload
         detail["harvested_info"] = harvested_info
         for job in detail.get("document_jobs") or []:
+            pdf_items: List[Dict[str, Any]] = []
+            html_capture_items: List[Dict[str, Any]] = []
+            other_items: List[Dict[str, Any]] = []
             for item in job.get("items") or []:
-                if item.get("file_path"):
+                item["is_pdf_file"] = _document_item_is_pdf(item)
+                item["has_non_pdf_file"] = bool(
+                    item.get("file_path") and not item["is_pdf_file"]
+                )
+                item["text_confidence_label"] = _format_confidence_percentage(
+                    item.get("text_confidence")
+                )
+                item["text_status_label"] = _document_text_status_label(
+                    item.get("text_status"),
+                    item.get("text_confidence"),
+                )
+                try:
+                    text_char_count = int(item.get("text_char_count") or 0)
+                except (TypeError, ValueError):
+                    text_char_count = 0
+                item["text_char_count_value"] = text_char_count
+                item["text_char_count_label"] = (
+                    f"{text_char_count:,} chars" if text_char_count > 0 else None
+                )
+                item["has_real_text"] = bool(
+                    item["is_pdf_file"] and item.get("text_path") and text_char_count > 0
+                )
+                if item["has_non_pdf_file"]:
+                    item["text_status_label"] = (
+                        "Stored HTML capture text only"
+                        if text_char_count > 0
+                        else "No usable pleading text"
+                    )
+                    item["text_char_count_label"] = None
+                if item["is_pdf_file"] and item.get("file_path"):
                     item["file_url"] = url_for(
                         "admin_pcl_document_item_file", item_id=int(item["id"])
                     )
                 else:
                     item["file_url"] = None
-                if item.get("text_path"):
+                if item["has_real_text"]:
                     item["text_url"] = url_for(
                         "admin_pcl_document_item_text", item_id=int(item["id"])
                     )
                 else:
                     item["text_url"] = None
+                if item["is_pdf_file"]:
+                    pdf_items.append(item)
+                elif item["has_non_pdf_file"]:
+                    html_capture_items.append(item)
+                else:
+                    other_items.append(item)
+            job["pdf_items"] = pdf_items
+            job["html_capture_items"] = html_capture_items
+            job["other_items"] = other_items
+            job["pdf_item_count"] = len(pdf_items)
+            job["text_ready_count"] = sum(1 for item in pdf_items if item["has_real_text"])
+            job["html_capture_count"] = len(html_capture_items)
         return render_template(
             "admin_pcl_case_detail.html",
             active_page="federal_data_dashboard",
