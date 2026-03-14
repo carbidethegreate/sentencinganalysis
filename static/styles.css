@@ -4108,6 +4108,60 @@ input[type="submit"].danger:disabled {
   color: var(--muted);
 }
 
+.pcl-doc-status-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pcl-doc-status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  line-height: 1.2;
+}
+
+.pcl-doc-status-pill--pdf {
+  background: rgba(31, 118, 78, 0.14);
+  border-color: rgba(31, 118, 78, 0.28);
+  color: #1f764e;
+}
+
+.pcl-doc-status-pill--text {
+  background: rgba(27, 88, 165, 0.14);
+  border-color: rgba(27, 88, 165, 0.28);
+  color: #1b58a5;
+}
+
+.pcl-doc-status-pill--html {
+  background: rgba(163, 84, 28, 0.14);
+  border-color: rgba(163, 84, 28, 0.28);
+  color: #8d4b1b;
+}
+
+.pcl-doc-status-pill--none {
+  background: rgba(108, 102, 98, 0.1);
+  border-color: rgba(108, 102, 98, 0.2);
+  color: #6c6662;
+}
+
+.pcl-doc-status-actions {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pcl-doc-action {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .pcl-detail-list {
   margin: 0;
   display: flex;

@@ -155,6 +155,9 @@
         {% endif %}
       {% endfor %}
     {% endif %}
+    {% if case_detail.annotated_docket_entries %}
+      {% set docket.entries = case_detail.annotated_docket_entries %}
+    {% endif %}
     {% set docket_html_raw = docket.html.text if docket.html and docket.html.text %}
     {% set docket_html_text = docket_html_raw or docket.html_preview %}
     {% set docket_is_html = docket_html_text %}
@@ -367,6 +370,7 @@
                   <th>Date filed</th>
                   <th>ECF #</th>
                   <th>Description</th>
+                  <th>Stored</th>
                   <th>Links</th>
                 </tr>
               </thead>
@@ -376,6 +380,36 @@
                     <td>{{ entry.dateFiled or "—" }}</td>
                     <td>{{ entry.documentNumber or "—" }}</td>
                     <td>{{ entry.description or "—" }}</td>
+                    <td>
+                      <div class="pcl-doc-status-pills">
+                        {% if entry.stored_pdf_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--pdf">
+                            PDF{% if entry.stored_pdf_count > 1 %} × {{ entry.stored_pdf_count }}{% endif %}
+                          </span>
+                        {% endif %}
+                        {% if entry.stored_text_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--text">
+                            Text{% if entry.stored_text_count > 1 %} × {{ entry.stored_text_count }}{% endif %}
+                          </span>
+                        {% endif %}
+                        {% if entry.stored_html_capture_count and not entry.stored_pdf_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--html">
+                            HTML only{% if entry.stored_html_capture_count > 1 %} × {{ entry.stored_html_capture_count }}{% endif %}
+                          </span>
+                        {% endif %}
+                        {% if not entry.stored_pdf_count and not entry.stored_text_count and not entry.stored_html_capture_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--none">No stored file</span>
+                        {% endif %}
+                      </div>
+                      <div class="pcl-doc-status-actions">
+                        {% if entry.stored_pdf_url %}
+                          <a class="pcl-doc-action" href="{{ entry.stored_pdf_url }}" target="_blank" rel="noopener">Open PDF</a>
+                        {% endif %}
+                        {% if entry.stored_text_url %}
+                          <a class="pcl-doc-action" href="{{ entry.stored_text_url }}" target="_blank" rel="noopener">Open text</a>
+                        {% endif %}
+                      </div>
+                    </td>
                     <td>
                       {% if entry.documentLinks %}
                         {% for link in entry.documentLinks %}

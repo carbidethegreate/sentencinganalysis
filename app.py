@@ -13646,6 +13646,116 @@ def create_app() -> Flask:
             1 for item in detail["document_pdf_items"] if item.get("has_real_text")
         )
         detail["document_html_capture_count"] = len(detail["document_html_capture_items"])
+        all_document_items: List[Dict[str, Any]] = []
+        document_item_exact_lookup: Dict[str, Dict[str, Any]] = {}
+        document_item_digit_lookup: Dict[str, List[Dict[str, Any]]] = {}
+        document_item_source_lookup: Dict[str, Dict[str, Any]] = {}
+        for job in detail.get("document_jobs") or []:
+            for item in job.get("items") or []:
+                all_document_items.append(item)
+                exact_key, digits_key = _document_number_lookup_keys(item.get("document_number"))
+                if exact_key and exact_key not in document_item_exact_lookup:
+                    document_item_exact_lookup[exact_key] = item
+                if digits_key:
+                    document_item_digit_lookup.setdefault(digits_key, []).append(item)
+                source_key = _normalize_document_source_url(item.get("source_url"))
+                if source_key and source_key not in document_item_source_lookup:
+                    document_item_source_lookup[source_key] = item
+        raw_docket_entries: List[Dict[str, Any]] = []
+        for field in detail.get("case_fields") or []:
+            if field.get("field_name") != "docket_entries":
+                continue
+            value = _coerce_json_value(field.get("field_value_json"))
+            if isinstance(value, list):
+                raw_docket_entries = value
+            elif isinstance(value, dict):
+                raw_docket_entries = [value]
+            break
+        annotated_docket_entries: List[Dict[str, Any]] = []
+        for entry in raw_docket_entries:
+            if not isinstance(entry, Mapping):
+                continue
+            date_value = str(
+                entry.get("dateFiled")
+                or entry.get("date_filed")
+                or entry.get("docketTextDate")
+                or ""
+            ).strip()
+            doc_value = str(
+                entry.get("documentNumber") or entry.get("document_number") or ""
+            ).strip()
+            desc_value = str(
+                entry.get("description")
+                or entry.get("documentDescription")
+                or entry.get("document_description")
+                or entry.get("eventText")
+                or entry.get("entryText")
+                or ""
+            ).strip()
+            raw_links = entry.get("documentLinks") or entry.get("document_links") or []
+            source_links: List[Dict[str, Any]] = []
+            matched_items_by_id: Dict[int, Dict[str, Any]] = {}
+            if isinstance(raw_links, list):
+                for raw_link in raw_links:
+                    if not isinstance(raw_link, Mapping):
+                        continue
+                    href = str(raw_link.get("href") or "").strip()
+                    label = str(
+                        raw_link.get("label")
+                        or raw_link.get("text")
+                        or raw_link.get("title")
+                        or href
+                    ).strip()
+                    linked_item = None
+                    if href:
+                        source_key = _normalize_document_source_url(href)
+                        linked_item = (
+                            document_item_source_lookup.get(source_key) if source_key else None
+                        )
+                        if linked_item and linked_item.get("id") is not None:
+                            matched_items_by_id[int(linked_item["id"])] = linked_item
+                    source_links.append(
+                        {
+                            "href": href,
+                            "label": label or href,
+                            "document_item_id": (
+                                int(linked_item["id"]) if linked_item and linked_item.get("id") is not None else None
+                            ),
+                        }
+                    )
+            exact_key, digits_key = _document_number_lookup_keys(doc_value)
+            if exact_key:
+                linked_item = document_item_exact_lookup.get(exact_key)
+                if linked_item and linked_item.get("id") is not None:
+                    matched_items_by_id[int(linked_item["id"])] = linked_item
+            if digits_key:
+                for linked_item in document_item_digit_lookup.get(digits_key) or []:
+                    if linked_item.get("id") is not None:
+                        matched_items_by_id[int(linked_item["id"])] = linked_item
+            matched_items = sorted(
+                matched_items_by_id.values(),
+                key=lambda item: _document_item_sort_key(item),
+            )
+            pdf_items = [item for item in matched_items if item.get("is_pdf_file")]
+            text_items = [item for item in pdf_items if item.get("has_real_text")]
+            html_items = [item for item in matched_items if item.get("has_non_pdf_file")]
+            annotated_docket_entries.append(
+                {
+                    "dateFiled": date_value,
+                    "documentNumber": doc_value,
+                    "description": desc_value,
+                    "documentLinks": source_links,
+                    "stored_pdf_count": len(pdf_items),
+                    "stored_text_count": len(text_items),
+                    "stored_html_capture_count": len(html_items),
+                    "stored_pdf_url": pdf_items[0].get("file_url") if pdf_items else None,
+                    "stored_text_url": text_items[0].get("text_url") if text_items else None,
+                    "stored_pdf_items": pdf_items,
+                    "stored_text_items": text_items,
+                    "stored_html_items": html_items,
+                }
+            )
+        detail["annotated_docket_entries"] = annotated_docket_entries
         return render_template(
             "admin_pcl_case_detail.html",
             active_page="federal_data_dashboard",
