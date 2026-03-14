@@ -1108,11 +1108,21 @@ input[type="submit"].danger:disabled {
   min-width: 200px;
 }
 
+.dashboard-docket-ecf-link {
+  text-decoration: none;
+}
+
 .dashboard-docket-links {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.dashboard-docket-doc-meta {
+  margin-top: 6px;
+  display: grid;
+  gap: 4px;
 }
 
 .dashboard-docket-document-list {
@@ -1162,6 +1172,12 @@ input[type="submit"].danger:disabled {
 
 .dashboard-docket-source-links a {
   color: var(--muted);
+}
+
+.dashboard-docket-text-status {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 .dashboard-main-docket-card .case-docket-item {
@@ -4067,6 +4083,29 @@ input[type="submit"].danger:disabled {
 
 .pcl-detail-card h3 {
   margin: 0;
+}
+
+.pcl-documents-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.pcl-documents-summary__item {
+  border: 1px solid rgba(140, 132, 128, 0.25);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pcl-documents-summary__label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
 }
 
 .pcl-detail-list {

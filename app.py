@@ -13563,6 +13563,8 @@ def create_app() -> Flask:
         detail["case_fields_preview"] = case_fields_preview
         detail["data_json_parsed"] = parsed_payload
         detail["harvested_info"] = harvested_info
+        all_pdf_items: List[Dict[str, Any]] = []
+        all_html_capture_items: List[Dict[str, Any]] = []
         for job in detail.get("document_jobs") or []:
             pdf_items: List[Dict[str, Any]] = []
             html_capture_items: List[Dict[str, Any]] = []
@@ -13615,12 +13617,35 @@ def create_app() -> Flask:
                     html_capture_items.append(item)
                 else:
                     other_items.append(item)
+            all_pdf_items.extend(pdf_items)
+            all_html_capture_items.extend(html_capture_items)
             job["pdf_items"] = pdf_items
             job["html_capture_items"] = html_capture_items
             job["other_items"] = other_items
             job["pdf_item_count"] = len(pdf_items)
             job["text_ready_count"] = sum(1 for item in pdf_items if item["has_real_text"])
             job["html_capture_count"] = len(html_capture_items)
+        def _document_item_sort_key(item: Mapping[str, Any]) -> Tuple[int, int]:
+            raw_doc = str(item.get("document_number") or "").strip()
+            digits = re.sub(r"\D+", "", raw_doc)
+            if digits:
+                try:
+                    return (int(digits), int(item.get("id") or 0))
+                except (TypeError, ValueError):
+                    return (int(digits), 0)
+            try:
+                return (10**9, int(item.get("id") or 0))
+            except (TypeError, ValueError):
+                return (10**9, 0)
+        detail["document_pdf_items"] = sorted(all_pdf_items, key=_document_item_sort_key)
+        detail["document_html_capture_items"] = sorted(
+            all_html_capture_items, key=_document_item_sort_key
+        )
+        detail["document_pdf_count"] = len(detail["document_pdf_items"])
+        detail["document_text_ready_count"] = sum(
+            1 for item in detail["document_pdf_items"] if item.get("has_real_text")
+        )
+        detail["document_html_capture_count"] = len(detail["document_html_capture_items"])
         return render_template(
             "admin_pcl_case_detail.html",
             active_page="federal_data_dashboard",

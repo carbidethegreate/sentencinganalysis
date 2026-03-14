@@ -441,145 +441,140 @@
           Download now
         </button>
       </form>
-      {% if case_detail.document_jobs %}
-        <div class="table-wrap mt-16">
+      <div class="pcl-documents-summary mt-12">
+        <div class="pcl-documents-summary__item">
+          <span class="pcl-documents-summary__label">Retained PDFs</span>
+          <strong>{{ case_detail.document_pdf_count or 0 }}</strong>
+        </div>
+        <div class="pcl-documents-summary__item">
+          <span class="pcl-documents-summary__label">Real text files</span>
+          <strong>{{ case_detail.document_text_ready_count or 0 }}</strong>
+        </div>
+        <div class="pcl-documents-summary__item">
+          <span class="pcl-documents-summary__label">Bad HTML captures</span>
+          <strong>{{ case_detail.document_html_capture_count or 0 }}</strong>
+        </div>
+      </div>
+      {% if case_detail.document_pdf_items %}
+        <h4 class="mt-16">Retained PDFs</h4>
+        <p class="small">These links open actual stored PDFs and real extracted text for this case.</p>
+        <div class="table-wrap mt-12">
           <table>
             <thead>
               <tr>
-                <th>Job</th>
+                <th>Doc #</th>
+                <th>Description</th>
+                <th>PDF</th>
+                <th>Text</th>
                 <th>Status</th>
-                <th>Total</th>
-                <th>Downloaded</th>
-                <th>Last error</th>
-                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {% for job in case_detail.document_jobs %}
-                {% set job_items = job.get('items', []) %}
+              {% for item in case_detail.document_pdf_items %}
                 <tr>
-                  <td>#{{ job.id }}</td>
-                  <td>{{ job.status }}</td>
-                  <td>{{ job.documents_total or "—" }}</td>
-                  <td>{{ job.documents_downloaded or "—" }}</td>
-                  <td>{{ job.last_error or "—" }}</td>
+                  <td>{{ item.document_number or "—" }}</td>
+                  <td>{{ item.description or "—" }}</td>
                   <td>
-                    <form method="post" action="{{ url_for('admin_run_document_job', job_id=job.id) }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                      <button class="secondary" type="submit">Run job</button>
-                    </form>
+                    {% if item.file_url %}
+                      <a href="{{ item.file_url }}" target="_blank" rel="noopener">Open PDF</a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if item.text_url %}
+                      <a href="{{ item.text_url }}" target="_blank" rel="noopener">Open text</a>
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if item.text_status_label %}
+                      <div class="small">{{ item.text_status_label }}</div>
+                    {% endif %}
+                    {% if item.text_char_count_label %}
+                      <div class="small">{{ item.text_char_count_label }}</div>
+                    {% endif %}
+                    <div class="small pcl-mono">item {{ item.id }}</div>
                   </td>
                 </tr>
-                {% if job_items %}
-                  <tr>
-                    <td colspan="6">
-                      <details>
-                        <summary>
-                          Show documents ({{ job_items | length }} total · {{ job.pdf_item_count or 0 }} PDFs · {{ job.text_ready_count or 0 }} texts · {{ job.html_capture_count or 0 }} HTML captures)
-                        </summary>
-                        {% if job.pdf_items %}
-                          <p class="small mt-12">Retained PDFs and real extracted text for this job.</p>
-                          <div class="table-wrap mt-12">
-                            <table>
-                              <thead>
-                                <tr>
-                                  <th>Doc #</th>
-                                  <th>Description</th>
-                                  <th>Status</th>
-                                  <th>PDF</th>
-                                  <th>Text</th>
-                                  <th>Error</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {% for item in job.pdf_items %}
-                                  <tr>
-                                    <td>{{ item.document_number or "—" }}</td>
-                                    <td>{{ item.description or "—" }}</td>
-                                    <td>{{ item.status }}</td>
-                                    <td>
-                                      {% if item.file_url %}
-                                        <a href="{{ item.file_url }}" target="_blank" rel="noopener">Open PDF</a>
-                                      {% else %}
-                                        —
-                                      {% endif %}
-                                      {% if item.file_path %}
-                                        <div class="small pcl-mono">{{ item.file_path }}</div>
-                                      {% endif %}
-                                    </td>
-                                    <td>
-                                      {% if item.text_url %}
-                                        <a href="{{ item.text_url }}" target="_blank" rel="noopener">Open text</a>
-                                      {% else %}
-                                        —
-                                      {% endif %}
-                                      {% if item.text_status_label %}
-                                        <div class="small">{{ item.text_status_label }}</div>
-                                      {% endif %}
-                                      {% if item.text_char_count_label %}
-                                        <div class="small">{{ item.text_char_count_label }}</div>
-                                      {% endif %}
-                                    </td>
-                                    <td>{{ item.error or "—" }}</td>
-                                  </tr>
-                                {% endfor %}
-                              </tbody>
-                            </table>
-                          </div>
-                        {% else %}
-                          <p class="small mt-12">No retained PDFs were found for this job.</p>
-                        {% endif %}
-                        {% if job.html_capture_items %}
-                          <p class="small mt-12">Invalid stored captures below are HTML pages, not pleading PDFs.</p>
-                          <div class="table-wrap mt-12">
-                            <table>
-                              <thead>
-                                <tr>
-                                  <th>Doc #</th>
-                                  <th>Description</th>
-                                  <th>Status</th>
-                                  <th>Stored file</th>
-                                  <th>Stored text</th>
-                                  <th>Error</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {% for item in job.html_capture_items %}
-                                  <tr>
-                                    <td>{{ item.document_number or "—" }}</td>
-                                    <td>{{ item.description or "—" }}</td>
-                                    <td>{{ item.status }}</td>
-                                    <td>
-                                      No retained PDF
-                                      {% if item.file_path %}
-                                        <div class="small pcl-mono">{{ item.file_path }}</div>
-                                      {% endif %}
-                                    </td>
-                                    <td>
-                                      {% if item.text_char_count_label %}
-                                        {{ item.text_char_count_label }}
-                                      {% else %}
-                                        No usable pleading text
-                                      {% endif %}
-                                      {% if item.text_status_label %}
-                                        <div class="small">{{ item.text_status_label }}</div>
-                                      {% endif %}
-                                    </td>
-                                    <td>{{ item.error or "Stored capture is HTML" }}</td>
-                                  </tr>
-                                {% endfor %}
-                              </tbody>
-                            </table>
-                          </div>
-                        {% endif %}
-                      </details>
-                    </td>
-                  </tr>
-                {% endif %}
               {% endfor %}
             </tbody>
           </table>
         </div>
+      {% else %}
+        <p class="small mt-16">No retained PDFs are currently stored for this case.</p>
+      {% endif %}
+      {% if case_detail.document_html_capture_items %}
+        <details class="pcl-detail-card mt-16">
+          <summary class="pcl-detail-summary">Show invalid HTML captures ({{ case_detail.document_html_capture_count or 0 }})</summary>
+          <p class="small">These are stored PACER HTML pages, not pleading PDFs.</p>
+          <div class="table-wrap mt-12">
+            <table>
+              <thead>
+                <tr>
+                  <th>Doc #</th>
+                  <th>Description</th>
+                  <th>Stored file</th>
+                  <th>Stored text</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in case_detail.document_html_capture_items %}
+                  <tr>
+                    <td>{{ item.document_number or "—" }}</td>
+                    <td>{{ item.description or "—" }}</td>
+                    <td>
+                      No retained PDF
+                      {% if item.file_path %}
+                        <div class="small pcl-mono">{{ item.file_path }}</div>
+                      {% endif %}
+                    </td>
+                    <td>{{ item.text_status_label or "No usable pleading text" }}</td>
+                    <td><div class="small pcl-mono">item {{ item.id }}</div></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% endif %}
+      {% if case_detail.document_jobs %}
+        <details class="pcl-detail-card mt-16">
+          <summary class="pcl-detail-summary">Show document job log</summary>
+          <div class="table-wrap mt-12">
+            <table>
+              <thead>
+                <tr>
+                  <th>Job</th>
+                  <th>Status</th>
+                  <th>Total</th>
+                  <th>Downloaded</th>
+                  <th>Last error</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for job in case_detail.document_jobs %}
+                  <tr>
+                    <td>#{{ job.id }}</td>
+                    <td>{{ job.status }}</td>
+                    <td>{{ job.documents_total or "—" }}</td>
+                    <td>{{ job.documents_downloaded or "—" }}</td>
+                    <td>{{ job.last_error or "—" }}</td>
+                    <td>
+                      <form method="post" action="{{ url_for('admin_run_document_job', job_id=job.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button class="secondary" type="submit">Run job</button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
       {% endif %}
     </article>
 
