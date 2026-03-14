@@ -4139,9 +4139,27 @@ input[type="submit"].danger:disabled {
 }
 
 .pcl-doc-status-pill--html {
-  background: rgba(163, 84, 28, 0.14);
-  border-color: rgba(163, 84, 28, 0.28);
-  color: #8d4b1b;
+  background: rgba(181, 60, 44, 0.14);
+  border-color: rgba(181, 60, 44, 0.32);
+  color: #9d3327;
+}
+
+.pcl-doc-status-pill--queued {
+  background: rgba(168, 114, 18, 0.16);
+  border-color: rgba(168, 114, 18, 0.32);
+  color: #8c5d10;
+}
+
+.pcl-doc-status-pill--processing {
+  background: rgba(185, 129, 25, 0.16);
+  border-color: rgba(185, 129, 25, 0.34);
+  color: #8f6210;
+}
+
+.pcl-doc-status-pill--failed {
+  background: rgba(124, 47, 39, 0.14);
+  border-color: rgba(124, 47, 39, 0.28);
+  color: #7c2f27;
 }
 
 .pcl-doc-status-pill--none {
@@ -4160,6 +4178,10 @@ input[type="submit"].danger:disabled {
 .pcl-doc-action {
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.pcl-doc-status-actions .small {
+  color: var(--muted);
 }
 
 .pcl-detail-list {

@@ -3462,6 +3462,31 @@ def create_app() -> Flask:
             return "Text queued"
         return f"Text {normalized}"
 
+    def _compact_document_error(value: Any, *, limit: int = 160) -> Optional[str]:
+        message = str(value or "").strip()
+        if not message:
+            return None
+        message = message.splitlines()[0].strip()
+        if len(message) > limit:
+            return message[: limit - 1].rstrip() + "…"
+        return message
+
+    def _document_download_status(item: Mapping[str, Any]) -> Tuple[str, str]:
+        normalized = str(item.get("status") or "").strip().lower()
+        if _document_item_is_pdf(item):
+            return ("pdf", "Retained PDF")
+        if normalized in {"queued", "retry"}:
+            return ("queued", "Download queued")
+        if normalized in {"processing", "running"}:
+            return ("processing", "Downloading")
+        if item.get("file_path"):
+            return ("no_pdf", "No PDF retained")
+        if normalized in {"failed", "error"} or item.get("error"):
+            return ("failed", "Download failed")
+        if normalized == "completed":
+            return ("missing", "No retained file")
+        return ("missing", "No retained file")
+
     def _latest_job_status(
         conn: Any,
         jobs_table: Any,
@@ -13564,16 +13589,26 @@ def create_app() -> Flask:
         detail["data_json_parsed"] = parsed_payload
         detail["harvested_info"] = harvested_info
         all_pdf_items: List[Dict[str, Any]] = []
-        all_html_capture_items: List[Dict[str, Any]] = []
+        all_no_pdf_items: List[Dict[str, Any]] = []
+        all_queued_items: List[Dict[str, Any]] = []
+        all_processing_items: List[Dict[str, Any]] = []
+        all_failed_items: List[Dict[str, Any]] = []
         for job in detail.get("document_jobs") or []:
             pdf_items: List[Dict[str, Any]] = []
-            html_capture_items: List[Dict[str, Any]] = []
+            no_pdf_items: List[Dict[str, Any]] = []
+            queued_items: List[Dict[str, Any]] = []
+            processing_items: List[Dict[str, Any]] = []
+            failed_items: List[Dict[str, Any]] = []
             other_items: List[Dict[str, Any]] = []
             for item in job.get("items") or []:
                 item["is_pdf_file"] = _document_item_is_pdf(item)
                 item["has_non_pdf_file"] = bool(
                     item.get("file_path") and not item["is_pdf_file"]
                 )
+                item["download_status_key"], item["download_status_label"] = (
+                    _document_download_status(item)
+                )
+                item["download_error_label"] = _compact_document_error(item.get("error"))
                 item["text_confidence_label"] = _format_confidence_percentage(
                     item.get("text_confidence")
                 )
@@ -13599,6 +13634,26 @@ def create_app() -> Flask:
                         else "No usable pleading text"
                     )
                     item["text_char_count_label"] = None
+                    item["download_detail_label"] = (
+                        "Stored PACER HTML capture only; no pleading PDF was retained."
+                    )
+                elif item["download_status_key"] == "queued":
+                    item["download_detail_label"] = (
+                        "Waiting for the document worker to fetch the PDF."
+                    )
+                elif item["download_status_key"] == "processing":
+                    item["download_detail_label"] = (
+                        "The worker is actively trying to download the PDF."
+                    )
+                elif item["download_status_key"] == "failed":
+                    item["download_detail_label"] = (
+                        item["download_error_label"]
+                        or "Download failed before a PDF could be retained."
+                    )
+                elif item["download_status_key"] == "missing":
+                    item["download_detail_label"] = "No retained file is available."
+                else:
+                    item["download_detail_label"] = None
                 if item["is_pdf_file"] and item.get("file_path"):
                     item["file_url"] = url_for(
                         "admin_pcl_document_item_file", item_id=int(item["id"])
@@ -13611,20 +13666,38 @@ def create_app() -> Flask:
                     )
                 else:
                     item["text_url"] = None
-                if item["is_pdf_file"]:
+                if item["download_status_key"] == "pdf":
                     pdf_items.append(item)
-                elif item["has_non_pdf_file"]:
-                    html_capture_items.append(item)
+                elif item["download_status_key"] == "no_pdf":
+                    no_pdf_items.append(item)
+                elif item["download_status_key"] == "queued":
+                    queued_items.append(item)
+                elif item["download_status_key"] == "processing":
+                    processing_items.append(item)
+                elif item["download_status_key"] == "failed":
+                    failed_items.append(item)
                 else:
                     other_items.append(item)
             all_pdf_items.extend(pdf_items)
-            all_html_capture_items.extend(html_capture_items)
+            all_no_pdf_items.extend(no_pdf_items)
+            all_queued_items.extend(queued_items)
+            all_processing_items.extend(processing_items)
+            all_failed_items.extend(failed_items)
             job["pdf_items"] = pdf_items
-            job["html_capture_items"] = html_capture_items
+            job["no_pdf_items"] = no_pdf_items
+            job["html_capture_items"] = no_pdf_items
+            job["queued_items"] = queued_items
+            job["processing_items"] = processing_items
+            job["failed_items"] = failed_items
             job["other_items"] = other_items
             job["pdf_item_count"] = len(pdf_items)
             job["text_ready_count"] = sum(1 for item in pdf_items if item["has_real_text"])
-            job["html_capture_count"] = len(html_capture_items)
+            job["no_pdf_count"] = len(no_pdf_items)
+            job["html_capture_count"] = len(no_pdf_items)
+            job["queued_item_count"] = len(queued_items)
+            job["processing_item_count"] = len(processing_items)
+            job["pending_item_count"] = len(queued_items) + len(processing_items)
+            job["failed_item_count"] = len(failed_items)
         def _document_item_sort_key(item: Mapping[str, Any]) -> Tuple[int, int]:
             raw_doc = str(item.get("document_number") or "").strip()
             digits = re.sub(r"\D+", "", raw_doc)
@@ -13638,14 +13711,32 @@ def create_app() -> Flask:
             except (TypeError, ValueError):
                 return (10**9, 0)
         detail["document_pdf_items"] = sorted(all_pdf_items, key=_document_item_sort_key)
-        detail["document_html_capture_items"] = sorted(
-            all_html_capture_items, key=_document_item_sort_key
+        detail["document_no_pdf_items"] = sorted(
+            all_no_pdf_items, key=_document_item_sort_key
+        )
+        detail["document_html_capture_items"] = detail["document_no_pdf_items"]
+        detail["document_queued_items"] = sorted(
+            all_queued_items, key=_document_item_sort_key
+        )
+        detail["document_processing_items"] = sorted(
+            all_processing_items, key=_document_item_sort_key
+        )
+        detail["document_pending_items"] = sorted(
+            [*all_processing_items, *all_queued_items], key=_document_item_sort_key
+        )
+        detail["document_failed_items"] = sorted(
+            all_failed_items, key=_document_item_sort_key
         )
         detail["document_pdf_count"] = len(detail["document_pdf_items"])
         detail["document_text_ready_count"] = sum(
             1 for item in detail["document_pdf_items"] if item.get("has_real_text")
         )
-        detail["document_html_capture_count"] = len(detail["document_html_capture_items"])
+        detail["document_no_pdf_count"] = len(detail["document_no_pdf_items"])
+        detail["document_html_capture_count"] = len(detail["document_no_pdf_items"])
+        detail["document_queued_count"] = len(detail["document_queued_items"])
+        detail["document_processing_count"] = len(detail["document_processing_items"])
+        detail["document_pending_count"] = len(detail["document_pending_items"])
+        detail["document_failed_count"] = len(detail["document_failed_items"])
         all_document_items: List[Dict[str, Any]] = []
         document_item_exact_lookup: Dict[str, Dict[str, Any]] = {}
         document_item_digit_lookup: Dict[str, List[Dict[str, Any]]] = {}
@@ -13736,9 +13827,22 @@ def create_app() -> Flask:
                 matched_items_by_id.values(),
                 key=lambda item: _document_item_sort_key(item),
             )
-            pdf_items = [item for item in matched_items if item.get("is_pdf_file")]
+            pdf_items = [item for item in matched_items if item.get("download_status_key") == "pdf"]
             text_items = [item for item in pdf_items if item.get("has_real_text")]
-            html_items = [item for item in matched_items if item.get("has_non_pdf_file")]
+            no_pdf_items = [
+                item for item in matched_items if item.get("download_status_key") == "no_pdf"
+            ]
+            queued_items = [
+                item for item in matched_items if item.get("download_status_key") == "queued"
+            ]
+            processing_items = [
+                item
+                for item in matched_items
+                if item.get("download_status_key") == "processing"
+            ]
+            failed_items = [
+                item for item in matched_items if item.get("download_status_key") == "failed"
+            ]
             annotated_docket_entries.append(
                 {
                     "dateFiled": date_value,
@@ -13747,12 +13851,21 @@ def create_app() -> Flask:
                     "documentLinks": source_links,
                     "stored_pdf_count": len(pdf_items),
                     "stored_text_count": len(text_items),
-                    "stored_html_capture_count": len(html_items),
+                    "stored_no_pdf_count": len(no_pdf_items),
+                    "stored_html_capture_count": len(no_pdf_items),
+                    "stored_queued_count": len(queued_items),
+                    "stored_processing_count": len(processing_items),
+                    "stored_pending_count": len(queued_items) + len(processing_items),
+                    "stored_failed_count": len(failed_items),
                     "stored_pdf_url": pdf_items[0].get("file_url") if pdf_items else None,
                     "stored_text_url": text_items[0].get("text_url") if text_items else None,
                     "stored_pdf_items": pdf_items,
                     "stored_text_items": text_items,
-                    "stored_html_items": html_items,
+                    "stored_no_pdf_items": no_pdf_items,
+                    "stored_html_items": no_pdf_items,
+                    "stored_queued_items": queued_items,
+                    "stored_processing_items": processing_items,
+                    "stored_failed_items": failed_items,
                 }
             )
         detail["annotated_docket_entries"] = annotated_docket_entries

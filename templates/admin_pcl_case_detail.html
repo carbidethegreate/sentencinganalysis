@@ -370,7 +370,7 @@
                   <th>Date filed</th>
                   <th>ECF #</th>
                   <th>Description</th>
-                  <th>Stored</th>
+                  <th>Retained copy</th>
                   <th>Links</th>
                 </tr>
               </thead>
@@ -392,21 +392,48 @@
                             Text{% if entry.stored_text_count > 1 %} × {{ entry.stored_text_count }}{% endif %}
                           </span>
                         {% endif %}
-                        {% if entry.stored_html_capture_count and not entry.stored_pdf_count %}
-                          <span class="pcl-doc-status-pill pcl-doc-status-pill--html">
-                            HTML only{% if entry.stored_html_capture_count > 1 %} × {{ entry.stored_html_capture_count }}{% endif %}
+                        {% if entry.stored_processing_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--processing">
+                            Downloading{% if entry.stored_processing_count > 1 %} × {{ entry.stored_processing_count }}{% endif %}
                           </span>
                         {% endif %}
-                        {% if not entry.stored_pdf_count and not entry.stored_text_count and not entry.stored_html_capture_count %}
+                        {% if entry.stored_queued_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--queued">
+                            Queued{% if entry.stored_queued_count > 1 %} × {{ entry.stored_queued_count }}{% endif %}
+                          </span>
+                        {% endif %}
+                        {% if entry.stored_no_pdf_count and not entry.stored_pdf_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--html">
+                            No PDF retained{% if entry.stored_no_pdf_count > 1 %} × {{ entry.stored_no_pdf_count }}{% endif %}
+                          </span>
+                        {% endif %}
+                        {% if entry.stored_failed_count %}
+                          <span class="pcl-doc-status-pill pcl-doc-status-pill--failed">
+                            Failed{% if entry.stored_failed_count > 1 %} × {{ entry.stored_failed_count }}{% endif %}
+                          </span>
+                        {% endif %}
+                        {% if not entry.stored_pdf_count and not entry.stored_text_count and not entry.stored_no_pdf_count and not entry.stored_pending_count and not entry.stored_failed_count %}
                           <span class="pcl-doc-status-pill pcl-doc-status-pill--none">No stored file</span>
                         {% endif %}
                       </div>
                       <div class="pcl-doc-status-actions">
-                        {% if entry.stored_pdf_url %}
-                          <a class="pcl-doc-action" href="{{ entry.stored_pdf_url }}" target="_blank" rel="noopener">Open PDF</a>
+                        {% if entry.stored_pdf_items %}
+                          {% for item in entry.stored_pdf_items %}
+                            {% if item.file_url %}
+                              <a class="pcl-doc-action" href="{{ item.file_url }}" target="_blank" rel="noopener">
+                                Open PDF{% if entry.stored_pdf_items|length > 1 %} {{ loop.index }}{% endif %}
+                              </a>
+                            {% endif %}
+                          {% endfor %}
                         {% endif %}
-                        {% if entry.stored_text_url %}
-                          <a class="pcl-doc-action" href="{{ entry.stored_text_url }}" target="_blank" rel="noopener">Open text</a>
+                        {% if entry.stored_text_items %}
+                          {% for item in entry.stored_text_items %}
+                            {% if item.text_url %}
+                              <a class="pcl-doc-action" href="{{ item.text_url }}" target="_blank" rel="noopener">
+                                Open text{% if entry.stored_text_items|length > 1 %} {{ loop.index }}{% endif %}
+                              </a>
+                            {% endif %}
+                          {% endfor %}
                         {% endif %}
                       </div>
                     </td>
@@ -477,7 +504,7 @@
       </form>
       <div class="pcl-documents-summary mt-12">
         <div class="pcl-documents-summary__item">
-          <span class="pcl-documents-summary__label">Retained PDFs</span>
+          <span class="pcl-documents-summary__label">Actual retained PDFs</span>
           <strong>{{ case_detail.document_pdf_count or 0 }}</strong>
         </div>
         <div class="pcl-documents-summary__item">
@@ -485,12 +512,20 @@
           <strong>{{ case_detail.document_text_ready_count or 0 }}</strong>
         </div>
         <div class="pcl-documents-summary__item">
-          <span class="pcl-documents-summary__label">Bad HTML captures</span>
-          <strong>{{ case_detail.document_html_capture_count or 0 }}</strong>
+          <span class="pcl-documents-summary__label">Queued or downloading</span>
+          <strong>{{ case_detail.document_pending_count or 0 }}</strong>
+        </div>
+        <div class="pcl-documents-summary__item">
+          <span class="pcl-documents-summary__label">No PDF retained</span>
+          <strong>{{ case_detail.document_no_pdf_count or 0 }}</strong>
+        </div>
+        <div class="pcl-documents-summary__item">
+          <span class="pcl-documents-summary__label">Failed with no file</span>
+          <strong>{{ case_detail.document_failed_count or 0 }}</strong>
         </div>
       </div>
       {% if case_detail.document_pdf_items %}
-        <h4 class="mt-16">Retained PDFs</h4>
+        <h4 class="mt-16">Actual retained PDFs</h4>
         <p class="small">These links open actual stored PDFs and real extracted text for this case.</p>
         <div class="table-wrap mt-12">
           <table>
@@ -539,23 +574,54 @@
       {% else %}
         <p class="small mt-16">No retained PDFs are currently stored for this case.</p>
       {% endif %}
-      {% if case_detail.document_html_capture_items %}
-        <details class="pcl-detail-card mt-16">
-          <summary class="pcl-detail-summary">Show invalid HTML captures ({{ case_detail.document_html_capture_count or 0 }})</summary>
-          <p class="small">These are stored PACER HTML pages, not pleading PDFs.</p>
+      {% if case_detail.document_pending_items %}
+        <details class="pcl-detail-card mt-16" open>
+          <summary class="pcl-detail-summary">Show queued or in-progress downloads ({{ case_detail.document_pending_count or 0 }})</summary>
+          <p class="small">These rows are still waiting on the worker or actively downloading. They do not have an openable PDF yet.</p>
           <div class="table-wrap mt-12">
             <table>
               <thead>
                 <tr>
                   <th>Doc #</th>
                   <th>Description</th>
-                  <th>Stored file</th>
-                  <th>Stored text</th>
                   <th>Status</th>
+                  <th>Details</th>
                 </tr>
               </thead>
               <tbody>
-                {% for item in case_detail.document_html_capture_items %}
+                {% for item in case_detail.document_pending_items %}
+                  <tr>
+                    <td>{{ item.document_number or "—" }}</td>
+                    <td>{{ item.description or "—" }}</td>
+                    <td>{{ item.download_status_label }}</td>
+                    <td>
+                      <div class="small">{{ item.download_detail_label or "Awaiting a retained PDF." }}</div>
+                      <div class="small pcl-mono">item {{ item.id }}</div>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% endif %}
+      {% if case_detail.document_no_pdf_items %}
+        <details class="pcl-detail-card mt-16">
+          <summary class="pcl-detail-summary">Show rows with no retained PDF ({{ case_detail.document_no_pdf_count or 0 }})</summary>
+          <p class="small">These rows do not have an actual pleading PDF. Older runs stored PACER HTML/login/unavailable pages instead.</p>
+          <div class="table-wrap mt-12">
+            <table>
+              <thead>
+                <tr>
+                  <th>Doc #</th>
+                  <th>Description</th>
+                  <th>Retained result</th>
+                  <th>Text</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in case_detail.document_no_pdf_items %}
                   <tr>
                     <td>{{ item.document_number or "—" }}</td>
                     <td>{{ item.description or "—" }}</td>
@@ -566,7 +632,41 @@
                       {% endif %}
                     </td>
                     <td>{{ item.text_status_label or "No usable pleading text" }}</td>
-                    <td><div class="small pcl-mono">item {{ item.id }}</div></td>
+                    <td>
+                      <div class="small">{{ item.download_detail_label or "No retained PDF." }}</div>
+                      <div class="small pcl-mono">item {{ item.id }}</div>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% endif %}
+      {% if case_detail.document_failed_items %}
+        <details class="pcl-detail-card mt-16">
+          <summary class="pcl-detail-summary">Show failed downloads ({{ case_detail.document_failed_count or 0 }})</summary>
+          <p class="small">These rows failed before any file was retained.</p>
+          <div class="table-wrap mt-12">
+            <table>
+              <thead>
+                <tr>
+                  <th>Doc #</th>
+                  <th>Description</th>
+                  <th>Status</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in case_detail.document_failed_items %}
+                  <tr>
+                    <td>{{ item.document_number or "—" }}</td>
+                    <td>{{ item.description or "—" }}</td>
+                    <td>{{ item.download_status_label }}</td>
+                    <td>
+                      <div class="small">{{ item.download_detail_label or "Download failed before a file was retained." }}</div>
+                      <div class="small pcl-mono">item {{ item.id }}</div>
+                    </td>
                   </tr>
                 {% endfor %}
               </tbody>
