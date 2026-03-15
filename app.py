@@ -1783,6 +1783,7 @@ def create_app() -> Flask:
         pacer_token_backend = InMemoryTokenBackend()
     pacer_token_store = PacerTokenStore(pacer_token_backend, session_accessor=lambda: session)
     service_session_key = os.environ.get("PACER_SERVICE_SESSION_KEY", "service")
+    service_client_code_session_key = f"{service_session_key}__client_code"
     service_session: Dict[str, Any] = {"pacer_session_key": service_session_key}
     pacer_service_token_store = PacerTokenStore(
         pacer_token_backend, session_accessor=lambda: service_session
@@ -1798,6 +1799,42 @@ def create_app() -> Flask:
     app.config["PACER_ENV_CONFIG"] = pacer_env_config.as_dict()
     app.config["PACER_ENV_MISMATCH"] = pacer_env_config.mismatch
     app.config["PACER_ENV_MISMATCH_REASON"] = pacer_env_config.mismatch_reason
+
+    def _load_service_pacer_client_code() -> Optional[str]:
+        try:
+            record = pacer_token_backend.get_token(service_client_code_session_key)
+        except Exception:
+            return None
+        if not record:
+            return None
+        if record.environment and record.environment != pacer_auth_env:
+            return None
+        value = str(record.token or "").strip()
+        return value or None
+
+    def _save_service_pacer_client_code(client_code: Optional[str]) -> Optional[str]:
+        value = str(client_code or "").strip()
+        if not value:
+            return None
+        try:
+            pacer_token_backend.save_token(
+                service_client_code_session_key,
+                PacerTokenRecord(
+                    token=value,
+                    obtained_at=datetime.utcnow(),
+                    environment=pacer_auth_env,
+                ),
+            )
+        except Exception:
+            return None
+        return value
+
+    def _clear_service_pacer_client_code() -> None:
+        try:
+            pacer_token_backend.clear_token(service_client_code_session_key)
+        except Exception:
+            return
+
     def _save_pacer_token(token: str) -> None:
         pacer_token_store.save_token(
             token, obtained_at=datetime.utcnow(), environment=pacer_auth_env
@@ -1847,7 +1884,7 @@ def create_app() -> Flask:
         login_id, password = get_configured_pacer_credentials()
         if not login_id or not password:
             return None
-        client_code = get_configured_pacer_client_code()
+        client_code = _load_service_pacer_client_code() or get_configured_pacer_client_code()
         otp_code = get_configured_pacer_otp_for_auth()
         pacer_service_token_store.initialize_session(service_session_key)
         try:
@@ -1893,7 +1930,7 @@ def create_app() -> Flask:
         env_mismatch_reason=pacer_env_config.mismatch_reason if pacer_env_config.mismatch else None,
         token_refresher=_refresh_pacer_token_background,
     )
-    configured_client_code = get_configured_pacer_client_code()
+    configured_client_code = _load_service_pacer_client_code() or get_configured_pacer_client_code()
     if configured_client_code:
         # Court-facing endpoints expect client code as a cookie when supplied.
         pcl_http_client.set_cookie("PacerClientCode", configured_client_code)
@@ -1916,12 +1953,13 @@ def create_app() -> Flask:
             request_code = str(session.get("pacer_client_code") or "").strip()
         if request_code:
             return request_code
-        return get_configured_pacer_client_code()
+        return _load_service_pacer_client_code() or get_configured_pacer_client_code()
 
     def _apply_pacer_client_code_cookie(client_code: Optional[str] = None) -> Optional[str]:
         active_code = str(client_code or _active_pacer_client_code() or "").strip()
         if not active_code:
             return None
+        _save_service_pacer_client_code(active_code)
         for http_client in (pcl_http_client, pcl_background_http_client):
             try:
                 http_client.set_cookie("PacerClientCode", active_code)
@@ -10944,6 +10982,7 @@ def create_app() -> Flask:
         if result.can_proceed:
             _set_pacer_session(result.token)
             session["pacer_client_code"] = (client_code or "").strip()
+            _save_service_pacer_client_code(client_code)
             _apply_pacer_client_code_cookie(client_code)
             session["pacer_needs_otp"] = False
             session["pacer_client_code_required"] = bool(result.needs_client_code)
@@ -11046,6 +11085,7 @@ def create_app() -> Flask:
         require_csrf()
         _clear_pacer_session()
         session.pop("pacer_client_code", None)
+        _clear_service_pacer_client_code()
         session["pacer_needs_otp"] = False
         session["pacer_client_code_required"] = False
         session["pacer_redaction_required"] = False
