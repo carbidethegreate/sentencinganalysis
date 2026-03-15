@@ -57,7 +57,9 @@ class DocketDocumentWorker:
         if not job:
             return 0
         if job["status"] not in {"queued", "running"}:
-            return 0
+            summary = self._job_counts(job_id)
+            if int(summary["queued"]) <= 0:
+                return 0
         job = self._mark_running(job)
         processed = 0
         items = self._load_items(job["id"], max_docs=max_docs)
@@ -132,7 +134,7 @@ class DocketDocumentWorker:
     def _mark_running(self, job: Dict[str, Any]) -> Dict[str, Any]:
         job_table = self._tables["docket_document_jobs"]
         now = datetime.utcnow()
-        updates = {"status": "running", "last_error": None}
+        updates = {"status": "running", "finished_at": None, "last_error": None}
         if not job.get("started_at"):
             updates["started_at"] = now
         with self._engine.begin() as conn:

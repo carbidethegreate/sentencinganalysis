@@ -1,7 +1,7 @@
 import os
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import insert, select
 
@@ -127,6 +127,31 @@ class DocketDocumentWorkerTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         self.assertIsNotNone(job["finished_at"])
         self.assertEqual(job["documents_downloaded"], 3)
+
+    def test_run_job_resumes_completed_job_when_queued_items_remain(self):
+        job_id = self._insert_job_with_items(2)
+        jobs = self.tables["docket_document_jobs"]
+        with self.engine.begin() as conn:
+            conn.execute(
+                jobs.update().where(jobs.c.id == job_id).values(
+                    status="completed",
+                    finished_at=datetime(2024, 1, 1, 0, 0, 0),
+                )
+            )
+        worker = DocketDocumentWorker(
+            self.engine,
+            self.tables,
+            http_client=_FakeHttpClient(),
+            documents_dir=self.documents_dir,
+        )
+
+        processed = worker.run_job(job_id, max_docs=5)
+        job = self._load_job(job_id)
+
+        self.assertEqual(processed, 2)
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["documents_downloaded"], 2)
+        self.assertIsNotNone(job["finished_at"])
 
 
 if __name__ == "__main__":
