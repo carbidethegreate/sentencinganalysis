@@ -13963,8 +13963,28 @@ def create_app() -> Flask:
             logger=app.logger,
             documents_dir=documents_dir,
         )
-        processed = worker.run_job(job_id, max_docs=50)
-        flash(f"Downloaded {processed} document(s) for job {job_id}.", "success")
+        max_docs = 50
+        max_batches = max(1, int(os.environ.get("PACER_DOCUMENT_DOWNLOAD_WEB_BATCHES", "3")))
+        max_seconds = max(
+            10.0,
+            float(os.environ.get("PACER_DOCUMENT_DOWNLOAD_WEB_MAX_SECONDS", "45")),
+        )
+        result = worker.run_job_batches(
+            job_id,
+            max_docs=max_docs,
+            max_batches=max_batches,
+            max_seconds=max_seconds,
+        )
+        processed = int(result["processed"])
+        queued_remaining = int(result["queued_remaining"])
+        if queued_remaining:
+            flash(
+                f"Downloaded {processed} document(s) for job {job_id}. "
+                f"{queued_remaining} item(s) are still queued; run the job again to keep going.",
+                "success",
+            )
+        else:
+            flash(f"Downloaded {processed} document(s) for job {job_id}.", "success")
         return redirect(f"{url_for('admin_pcl_case_detail', case_id=case_id)}#docket-documents")
 
     @app.post("/admin/docket-documents/run/<int:job_id>")
@@ -13980,8 +14000,28 @@ def create_app() -> Flask:
             logger=app.logger,
             documents_dir=documents_dir,
         )
-        processed = worker.run_job(job_id, max_docs=50)
-        flash(f"Ran document job {job_id}. Downloaded {processed} document(s).", "success")
+        max_docs = 50
+        max_batches = max(1, int(os.environ.get("PACER_DOCUMENT_DOWNLOAD_WEB_BATCHES", "3")))
+        max_seconds = max(
+            10.0,
+            float(os.environ.get("PACER_DOCUMENT_DOWNLOAD_WEB_MAX_SECONDS", "45")),
+        )
+        result = worker.run_job_batches(
+            job_id,
+            max_docs=max_docs,
+            max_batches=max_batches,
+            max_seconds=max_seconds,
+        )
+        processed = int(result["processed"])
+        queued_remaining = int(result["queued_remaining"])
+        if queued_remaining:
+            flash(
+                f"Ran document job {job_id}. Downloaded {processed} document(s); "
+                f"{queued_remaining} item(s) are still queued.",
+                "success",
+            )
+        else:
+            flash(f"Ran document job {job_id}. Downloaded {processed} document(s).", "success")
         return redirect(request.referrer or url_for("admin_docket_enrichment_dashboard"))
 
     @app.post("/admin/pcl/cases/<int:case_id>/docket-clear")

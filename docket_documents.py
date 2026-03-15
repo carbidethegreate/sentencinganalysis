@@ -46,6 +46,9 @@ class DocketDocumentWorker:
         self._http_client = http_client
         self._logger = logger
         self._documents_dir = documents_dir or os.path.join(os.getcwd(), "pacer_documents")
+        self._local_backup_dir = (
+            os.environ.get("PACER_DOCUMENTS_LOCAL_BACKUP_DIR") or ""
+        ).strip() or None
         self._s3_bucket = os.environ.get("PACER_DOCUMENTS_S3_BUCKET")
         self._s3_prefix = (os.environ.get("PACER_DOCUMENTS_S3_PREFIX") or "").strip().strip("/")
 
@@ -68,6 +71,37 @@ class DocketDocumentWorker:
             processed += 1
         self._finalize_job(job)
         return processed
+
+    def run_job_batches(
+        self,
+        job_id: int,
+        *,
+        max_docs: int = 50,
+        max_batches: int = 1,
+        max_seconds: Optional[float] = None,
+    ) -> Dict[str, int | str]:
+        started = time.monotonic()
+        total_processed = 0
+        batches_run = 0
+        while batches_run < max(1, max_batches):
+            processed = self.run_job(job_id, max_docs=max_docs)
+            total_processed += processed
+            batches_run += 1
+            summary = self._job_counts(job_id)
+            if summary["queued"] <= 0 or processed <= 0:
+                break
+            if max_seconds is not None and (time.monotonic() - started) >= max_seconds:
+                break
+        final_summary = self._job_counts(job_id)
+        return {
+            "processed": total_processed,
+            "batches": batches_run,
+            "queued_remaining": final_summary["queued"],
+            "downloaded": final_summary["downloaded"],
+            "failed": final_summary["failed"],
+            "status": str(final_summary["status"] or ""),
+            "total": final_summary["total"],
+        }
 
     def _load_job(self, job_id: int) -> Optional[Dict[str, Any]]:
         job_table = self._tables["docket_document_jobs"]
@@ -98,7 +132,9 @@ class DocketDocumentWorker:
     def _mark_running(self, job: Dict[str, Any]) -> Dict[str, Any]:
         job_table = self._tables["docket_document_jobs"]
         now = datetime.utcnow()
-        updates = {"status": "running", "started_at": now, "last_error": None}
+        updates = {"status": "running", "last_error": None}
+        if not job.get("started_at"):
+            updates["started_at"] = now
         with self._engine.begin() as conn:
             conn.execute(
                 update(job_table).where(job_table.c.id == job["id"]).values(**updates)
@@ -175,6 +211,12 @@ class DocketDocumentWorker:
                 if response is None:
                     raise ValueError(" | ".join(target_errors) if target_errors else "Document request failed.")
                 content_type = response.headers.get("Content-Type", "")
+                gate_reason = _classify_non_document_response(content_type, response.body)
+                if gate_reason:
+                    raise ValueError(
+                        "Downloaded PACER HTML instead of the actual pleading "
+                        f"({gate_reason})."
+                    )
                 filename = _build_filename(
                     job["case_id"],
                     item.get("document_number"),
@@ -215,40 +257,26 @@ class DocketDocumentWorker:
                     raise ValueError(last_error) from exc
 
     def _store_document(self, case_id: int, filename: str, data: bytes) -> str:
+        local_path = _write_local(self._documents_dir, case_id, filename, data)
+        if self._local_backup_dir and not _same_local_directory(
+            self._local_backup_dir,
+            self._documents_dir,
+        ):
+            _write_local(self._local_backup_dir, case_id, filename, data)
         if self._s3_bucket:
             return _write_s3(self._s3_bucket, self._s3_prefix, case_id, filename, data)
-        return _write_local(self._documents_dir, case_id, filename, data)
+        return local_path
 
     def _finalize_job(self, job: Dict[str, Any]) -> None:
+        summary = self._job_counts(job["id"])
         items_table = self._tables["docket_document_items"]
         job_table = self._tables["docket_document_jobs"]
         with self._engine.begin() as conn:
-            total = int(
-                conn.execute(
-                    select(func.count()).select_from(items_table).where(
-                        items_table.c.job_id == job["id"]
-                    )
-                ).scalar()
-                or 0
-            )
-            downloaded = int(
-                conn.execute(
-                    select(func.count()).select_from(items_table).where(
-                        (items_table.c.job_id == job["id"])
-                        & (items_table.c.status == "downloaded")
-                    )
-                ).scalar()
-                or 0
-            )
-            failed = int(
-                conn.execute(
-                    select(func.count()).select_from(items_table).where(
-                        (items_table.c.job_id == job["id"])
-                        & (items_table.c.status == "failed")
-                    )
-                ).scalar()
-                or 0
-            )
+            total = int(summary["total"])
+            downloaded = int(summary["downloaded"])
+            failed = int(summary["failed"])
+            queued = int(summary["queued"])
+            processing = int(summary["processing"])
             last_error = None
             if failed:
                 last_error = conn.execute(
@@ -261,11 +289,19 @@ class DocketDocumentWorker:
                     .limit(1)
                 ).scalar()
             now = datetime.utcnow()
-            status = "completed_with_errors" if failed else "completed"
+            if queued:
+                status = "queued"
+                finished_at = None
+            elif processing:
+                status = "running"
+                finished_at = None
+            else:
+                status = "completed_with_errors" if failed else "completed"
+                finished_at = now
             updates = {
                 "documents_total": total,
                 "documents_downloaded": downloaded,
-                "finished_at": now,
+                "finished_at": finished_at,
                 "status": status,
                 "last_error": last_error,
                 "updated_at": now,
@@ -273,6 +309,69 @@ class DocketDocumentWorker:
             conn.execute(
                 update(job_table).where(job_table.c.id == job["id"]).values(**updates)
             )
+
+    def _job_counts(self, job_id: int) -> Dict[str, int | str]:
+        items_table = self._tables["docket_document_items"]
+        job_table = self._tables["docket_document_jobs"]
+        with self._engine.begin() as conn:
+            total = int(
+                conn.execute(
+                    select(func.count()).select_from(items_table).where(
+                        items_table.c.job_id == job_id
+                    )
+                ).scalar()
+                or 0
+            )
+            downloaded = int(
+                conn.execute(
+                    select(func.count()).select_from(items_table).where(
+                        (items_table.c.job_id == job_id)
+                        & (items_table.c.status == "downloaded")
+                    )
+                ).scalar()
+                or 0
+            )
+            failed = int(
+                conn.execute(
+                    select(func.count()).select_from(items_table).where(
+                        (items_table.c.job_id == job_id)
+                        & (items_table.c.status == "failed")
+                    )
+                ).scalar()
+                or 0
+            )
+            queued = int(
+                conn.execute(
+                    select(func.count()).select_from(items_table).where(
+                        (items_table.c.job_id == job_id)
+                        & (items_table.c.status == "queued")
+                    )
+                ).scalar()
+                or 0
+            )
+            processing = int(
+                conn.execute(
+                    select(func.count()).select_from(items_table).where(
+                        (items_table.c.job_id == job_id)
+                        & (items_table.c.status.in_(["processing", "running"]))
+                    )
+                ).scalar()
+                or 0
+            )
+            status = (
+                conn.execute(
+                    select(job_table.c.status).where(job_table.c.id == job_id).limit(1)
+                ).scalar()
+                or ""
+            )
+        return {
+            "total": total,
+            "downloaded": downloaded,
+            "failed": failed,
+            "queued": queued,
+            "processing": processing,
+            "status": str(status or ""),
+        }
 
 
 def _build_filename(
@@ -401,6 +500,18 @@ def _decode_html_bytes(body: bytes) -> str:
     return (body or b"").decode("utf-8", errors="replace")
 
 
+def _normalize_visible_html_text(raw_html: str) -> str:
+    if not raw_html:
+        return ""
+    try:
+        tree = lxml_html.fromstring(raw_html)
+    except Exception:
+        return re.sub(r"\s+", " ", raw_html).strip()
+    for bad in tree.xpath("//script|//style|//noscript|//head"):
+        bad.drop_tree()
+    return re.sub(r"\s+", " ", tree.text_content() or "").strip()
+
+
 def _extract_hidden_inputs(tree: Any) -> Dict[str, str]:
     values: Dict[str, str] = {}
     for node in tree.xpath("//form//input[@name]"):
@@ -480,6 +591,36 @@ def _extract_multidoc_url(html_text: str, base_url: str) -> str:
     if not value:
         return ""
     return urljoin(base_url, value)
+
+
+def _classify_non_document_response(content_type: str, body: bytes) -> str:
+    if not _is_html_response(content_type, body):
+        return ""
+    raw_html = _decode_html_bytes(body)
+    visible_text = _normalize_visible_html_text(raw_html)
+    lowered_raw = raw_html.lower()
+    lowered_text = visible_text.lower()
+
+    if "csologin/login.jsf" in lowered_raw:
+        return "pacer_login_redirect"
+    if "log in to pacer systems" in lowered_text or "district court login" in lowered_text:
+        return "pacer_login_page"
+    if "you do not have permission to view this document" in lowered_text:
+        return "document_permission_denied"
+    if "this document is not available" in lowered_text:
+        return "document_unavailable"
+    if (
+        "public access to court electronic records" in lowered_text
+        and "pacer" in lowered_text
+    ):
+        return "pacer_home_page"
+    if (
+        "query reports utilities" in lowered_text
+        and "log out" in lowered_text
+        and "document unavailable" in lowered_text
+    ):
+        return "cmecf_unavailable_page"
+    return ""
 
 
 def _resolve_document_response(
@@ -609,6 +750,12 @@ def _write_local(documents_dir: str, case_id: int, filename: str, data: bytes) -
     with open(target_path, "wb") as handle:
         handle.write(data)
     return target_path
+
+
+def _same_local_directory(left: str, right: str) -> bool:
+    left_value = os.path.abspath(os.path.expanduser(left or ""))
+    right_value = os.path.abspath(os.path.expanduser(right or ""))
+    return bool(left_value) and left_value == right_value
 
 
 def _write_s3(bucket: str, prefix: str, case_id: int, filename: str, data: bytes) -> str:
