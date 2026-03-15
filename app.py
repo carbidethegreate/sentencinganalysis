@@ -13940,6 +13940,7 @@ def create_app() -> Flask:
         detail = get_case_detail(engine, pcl_tables, case_id)
         if not detail:
             abort(404)
+        _apply_pacer_client_code_cookie()
         allowed_numbers = _parse_document_numbers(request.form.get("document_numbers"))
         items = _extract_document_links_from_case_fields(
             detail.get("case_fields") or [],
@@ -13970,6 +13971,7 @@ def create_app() -> Flask:
     @admin_required
     def admin_run_document_job(job_id: int):
         require_csrf()
+        _apply_pacer_client_code_cookie()
         documents_dir = os.environ.get("PACER_DOCUMENTS_DIR")
         worker = DocketDocumentWorker(
             engine,
