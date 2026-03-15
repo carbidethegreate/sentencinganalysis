@@ -8591,6 +8591,8 @@ def create_app() -> Flask:
         configured_user, configured_pass = get_configured_pacer_credentials()
         pacer_server_creds_available = bool(configured_user and configured_pass)
         pacer_authenticated = bool(pacer_session)
+        pacer_browser_client_code_present = bool(str(session.get("pacer_client_code") or "").strip())
+        pacer_service_client_code_present = bool(_load_service_pacer_client_code())
         pacer_search_disabled = bool(session.get("pacer_search_disabled"))
         pacer_search_enabled = bool(pacer_authenticated and _pacer_search_enabled())
         env_config = app.config.get("PACER_ENV_CONFIG") or {}
@@ -8609,6 +8611,8 @@ def create_app() -> Flask:
             active_page="federal_data_dashboard",
             active_subnav="get_pacer_data",
             pacer_authenticated=pacer_authenticated,
+            pacer_browser_client_code_present=pacer_browser_client_code_present,
+            pacer_service_client_code_present=pacer_service_client_code_present,
             pacer_search_enabled=pacer_search_enabled,
             pacer_search_disabled=pacer_search_disabled,
             pacer_search_disabled_reason=session.get("pacer_search_disabled_reason"),
@@ -8633,6 +8637,23 @@ def create_app() -> Flask:
             saved_searches=_load_pacer_saved_searches(),
             search_run_history=_load_pacer_search_runs(),
         )
+
+    @app.post("/admin/federal-data-dashboard/pacer-capture-client-code")
+    @admin_required
+    def admin_federal_data_dashboard_pacer_capture_client_code():
+        require_csrf()
+        active_code = _apply_pacer_client_code_cookie()
+        if active_code:
+            flash(
+                "PACER client code captured from this browser session for one-time server use.",
+                "success",
+            )
+        else:
+            flash(
+                "No PACER client code was found in this browser session. Re-authorize PACER with a client code first.",
+                "error",
+            )
+        return redirect(url_for("admin_federal_data_dashboard_get_pacer_data"))
 
     @app.post("/admin/pacer/saved-searches")
     @admin_required

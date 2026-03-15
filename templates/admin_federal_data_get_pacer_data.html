@@ -37,6 +37,27 @@
       <div class="card pacer-status-card">
         <div class="pacer-status-card__header">
           <div>
+            <p class="pacer-eyebrow">One-time action</p>
+            <h2 class="pacer-status-card__title">Click Here For One-Time Use</h2>
+            <p class="small pacer-status-card__lead">
+              Use this once after PACER is already authorized in this browser. It captures the current PACER client code for one-time server-side document downloads.
+            </p>
+            <p class="small pacer-status-card__meta">
+              Browser session has client code: {{ 'Yes' if pacer_browser_client_code_present else 'No' }} ·
+              Server has one-time client code: {{ 'Yes' if pacer_service_client_code_present else 'No' }}
+            </p>
+          </div>
+          <form method="post" action="{{ url_for('admin_federal_data_dashboard_pacer_capture_client_code') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="primary" type="submit">Click Here For One-Time Use</button>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+    {% if pacer_authenticated %}
+      <div class="card pacer-status-card">
+        <div class="pacer-status-card__header">
+          <div>
             <p class="pacer-eyebrow">PACER access</p>
             <h2 class="pacer-status-card__title">Session active</h2>
             <p class="small pacer-status-card__lead">
