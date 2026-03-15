@@ -6,7 +6,8 @@ from datetime import date, datetime
 from sqlalchemy import insert, select
 
 from app import create_app
-from docket_documents import DocketDocumentWorker
+from docket_documents import DocketDocumentWorker, _classify_non_document_response
+from scripts.extract_docket_document_texts import _classify_html_gate
 
 
 class _FakeResponse:
@@ -152,6 +153,30 @@ class DocketDocumentWorkerTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         self.assertEqual(job["documents_downloaded"], 2)
         self.assertIsNotNone(job["finished_at"])
+
+    def test_classify_non_document_response_marks_transcript_restriction(self):
+        html = b"""
+        <html><body>
+        You do not have access to this transcript.
+        It may be viewed at the public terminal or purchased from the court reporter.
+        </body></html>
+        """
+
+        result = _classify_non_document_response("text/html", html)
+
+        self.assertEqual(result, "transcript_restricted")
+
+    def test_classify_html_gate_marks_transcript_restriction(self):
+        html = """
+        <html><body>
+        You do not have access to this transcript.
+        It may be viewed at the public terminal or purchased from the court reporter.
+        </body></html>
+        """
+
+        result = _classify_html_gate(html, html)
+
+        self.assertEqual(result, "transcript_restricted")
 
 
 if __name__ == "__main__":

@@ -607,6 +607,15 @@ def _classify_non_document_response(content_type: str, body: bytes) -> str:
         return "pacer_login_redirect"
     if "log in to pacer systems" in lowered_text or "district court login" in lowered_text:
         return "pacer_login_page"
+    if (
+        "you do not have access to this transcript" in lowered_text
+        or (
+            "transcript" in lowered_text
+            and "court reporter" in lowered_text
+            and "public terminal" in lowered_text
+        )
+    ):
+        return "transcript_restricted"
     if "you do not have permission to view this document" in lowered_text:
         return "document_permission_denied"
     if "this document is not available" in lowered_text:

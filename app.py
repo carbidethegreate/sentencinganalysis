@@ -3509,6 +3509,40 @@ def create_app() -> Flask:
             return message[: limit - 1].rstrip() + "…"
         return message
 
+    def _document_error_code(item: Mapping[str, Any]) -> str:
+        message = str(item.get("error") or "").strip().lower()
+        if not message:
+            return ""
+        for code in (
+            "transcript_restricted",
+            "document_permission_denied",
+            "document_unavailable",
+            "pacer_login_redirect",
+            "pacer_login_page",
+            "pacer_home_page",
+            "cmecf_unavailable_page",
+        ):
+            if code in message:
+                return code
+        return ""
+
+    def _non_pdf_detail_label(item: Mapping[str, Any]) -> str:
+        error_code = _document_error_code(item)
+        if error_code == "transcript_restricted":
+            return (
+                "PACER returned a transcript restriction page; the transcript must be "
+                "viewed at a court terminal or obtained from the court reporter."
+            )
+        if error_code == "document_permission_denied":
+            return "PACER denied access to this link; no pleading PDF was retained."
+        if error_code == "document_unavailable":
+            return "PACER reported this document is unavailable; no PDF was retained."
+        if error_code in {"pacer_login_redirect", "pacer_login_page", "pacer_home_page"}:
+            return "PACER login or landing page was captured instead of the pleading PDF."
+        if error_code == "cmecf_unavailable_page":
+            return "CM/ECF reported the document was unavailable; no PDF was retained."
+        return "Stored PACER HTML capture only; no pleading PDF was retained."
+
     def _document_download_status(item: Mapping[str, Any]) -> Tuple[str, str]:
         normalized = str(item.get("status") or "").strip().lower()
         if _document_item_is_pdf(item):
@@ -3518,8 +3552,14 @@ def create_app() -> Flask:
         if normalized in {"processing", "running"}:
             return ("processing", "Downloading")
         if item.get("file_path"):
+            error_code = _document_error_code(item)
+            if error_code == "transcript_restricted":
+                return ("no_pdf", "Transcript restricted")
             return ("no_pdf", "No PDF retained")
         if normalized in {"failed", "error"} or item.get("error"):
+            error_code = _document_error_code(item)
+            if error_code == "transcript_restricted":
+                return ("failed", "Transcript restricted")
             return ("failed", "Download failed")
         if normalized == "completed":
             return ("missing", "No retained file")
@@ -13689,15 +13729,17 @@ def create_app() -> Flask:
                     item["is_pdf_file"] and item.get("text_path") and text_char_count > 0
                 )
                 if item["has_non_pdf_file"]:
-                    item["text_status_label"] = (
-                        "Stored HTML capture text only"
-                        if text_char_count > 0
-                        else "No usable pleading text"
-                    )
+                    error_code = _document_error_code(item)
+                    if error_code == "transcript_restricted":
+                        item["text_status_label"] = "Transcript restriction notice only"
+                    else:
+                        item["text_status_label"] = (
+                            "Stored HTML capture text only"
+                            if text_char_count > 0
+                            else "No usable pleading text"
+                        )
                     item["text_char_count_label"] = None
-                    item["download_detail_label"] = (
-                        "Stored PACER HTML capture only; no pleading PDF was retained."
-                    )
+                    item["download_detail_label"] = _non_pdf_detail_label(item)
                 elif item["download_status_key"] == "queued":
                     item["download_detail_label"] = (
                         "Waiting for the document worker to fetch the PDF."
